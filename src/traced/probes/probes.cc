@@ -17,10 +17,14 @@
 #include "perfetto/base/logging.h"
 #include "perfetto/traced/traced.h"
 
+#include "ftrace_producer.h"
+
 namespace perfetto {
 
-int ProbesMain(int argc, char** argv) {
-  PERFETTO_LOG("Probes");
+int __attribute__((visibility("default"))) ProbesMain(int argc, char** argv) {
+  PERFETTO_LOG("Starting %s service", argv[0]);
+  FtraceProducer producer;
+  producer.Run();
   return 0;
 }
 

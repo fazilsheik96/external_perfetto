@@ -32,9 +32,8 @@
 #include <string>
 #include <type_traits>
 #include <vector>
-#include "perfetto/base/build_config.h"
 
-#include "include/perfetto/tracing/core/data_source_config.h"
+#include "perfetto/tracing/core/data_source_config.h"
 
 // Forward declarations for protobuf types.
 namespace perfetto {
@@ -43,6 +42,7 @@ class TraceConfig;
 class TraceConfig_BufferConfig;
 class TraceConfig_DataSource;
 class DataSourceConfig;
+class DataSourceConfig_FtraceConfig;
 }  // namespace protos
 }  // namespace perfetto
 
@@ -53,10 +53,12 @@ class TraceConfig {
   class BufferConfig {
    public:
     enum OptimizeFor {
-      ONE_SHOT_READ = 0,
+      DEFAULT = 0,
+      ONE_SHOT_READ = 1,
     };
     enum FillPolicy {
-      RING_BUFFER = 0,
+      UNSPECIFIED = 0,
+      RING_BUFFER = 1,
     };
     BufferConfig();
     ~BufferConfig();
