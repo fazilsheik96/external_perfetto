@@ -86,7 +86,6 @@ void ProbesProducer::CreateDataSourceInstance(
     DataSourceInstanceID id,
     const DataSourceConfig& source_config) {
   instances_[id] = source_config.name();
-  // PERFETTO_LOG("DataSourceInstanceID: %llu", id);
   if (source_config.name() == kFtraceSourceName) {
     CreateFtraceDataSourceInstance(id, source_config);
   } else if (source_config.name() == kProcessStatsSourceName) {
@@ -131,15 +130,15 @@ void ProbesProducer::CreateFtraceDataSourceInstance(
   auto delegate =
       std::unique_ptr<SinkDelegate>(new SinkDelegate(std::move(trace_writer)));
   auto sink = ftrace_->CreateSink(std::move(proto_config), delegate.get());
-  PERFETTO_CHECK(sink);
+  if (!sink) {
+    PERFETTO_ELOG("Failed to start tracing (maybe someone else is using it?)");
+    return;
+  }
   delegate->sink(std::move(sink));
   delegates_.emplace(id, std::move(delegate));
-  // Building on Android, watchdogs_.emplace(id, 2* source_config.duration_ms())
-  // does not compile. Presumably, this is due to some detail in its libc++.
   if (source_config.trace_duration_ms() != 0)
-    watchdogs_.emplace(
-        std::piecewise_construct, std::forward_as_tuple(id),
-        std::forward_as_tuple(2 * source_config.trace_duration_ms()));
+    watchdogs_.emplace(id, base::Watchdog::GetInstance()->CreateFatalTimer(
+                               5000 + 2 * source_config.trace_duration_ms()));
 }
 
 void ProbesProducer::CreateProcessStatsDataSourceInstance(
