@@ -21,7 +21,6 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>  // For strerror.
-#include <unistd.h>
 
 #if defined(NDEBUG)
 #define PERFETTO_DCHECK_IS_ON() 0
@@ -34,6 +33,10 @@
 
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID)
 #include <android/log.h>
+#endif
+
+#if !PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+#include <unistd.h>
 #endif
 
 namespace perfetto {
@@ -56,19 +59,27 @@ constexpr const char* Basename(const char* str) {
   return BasenameRecursive(StrEnd(str), str, StrEnd(str));
 }
 
-enum LogLev { kLogDebug = 0, kLogInfo, kLogImportant, kLogError };
-constexpr const char* kLogFmt[] = {"\x1b[2m", "\x1b[39m", "\x1b[32m\x1b[1m",
-                                   "\x1b[31m"};
-
 #define PERFETTO_LOG_LINE__(x) #x
 #define PERFETTO_LOG_LINE_(x) PERFETTO_LOG_LINE__(x)
 #define PERFETTO_LOG_LINE PERFETTO_LOG_LINE_(__LINE__)
+
+enum LogLev { kLogDebug = 0, kLogInfo, kLogImportant, kLogError };
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN) || PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+// The escape sequences don't work in a Windows command prompt.
+#define PERFETTO_XLOG_STDERR(level, fmt, ...)                              \
+  fprintf(stderr, "%-24.24s " fmt "\n",                                    \
+          ::perfetto::base::Basename(__FILE__ "(" PERFETTO_LOG_LINE "):"), \
+          ##__VA_ARGS__)
+#else
+constexpr const char* kLogFmt[] = {"\x1b[2m", "\x1b[39m", "\x1b[32m\x1b[1m",
+                                   "\x1b[31m"};
 
 #define PERFETTO_XLOG_STDERR(level, fmt, ...)                         \
   fprintf(stderr, "\x1b[90m%-24.24s\x1b[0m %s" fmt "\x1b[0m\n",       \
           ::perfetto::base::Basename(__FILE__ ":" PERFETTO_LOG_LINE), \
           ::perfetto::base::kLogFmt[::perfetto::base::LogLev::level], \
           ##__VA_ARGS__)
+#endif
 
 // Let android log to both stderr and logcat. When part of the Android tree
 // stderr points to /dev/null so logcat is the only way to get some logging.
@@ -96,7 +107,7 @@ constexpr const char* kLogFmt[] = {"\x1b[2m", "\x1b[39m", "\x1b[32m\x1b[1m",
 #define PERFETTO_ELOG(fmt, ...) PERFETTO_XLOG(kLogError, fmt, ##__VA_ARGS__)
 #define PERFETTO_FATAL(fmt, ...)       \
   do {                                 \
-    PERFETTO_ELOG(fmt, ##__VA_ARGS__); \
+    PERFETTO_PLOG(fmt, ##__VA_ARGS__); \
     PERFETTO_IMMEDIATE_CRASH();        \
   } while (0)
 

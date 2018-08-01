@@ -43,12 +43,12 @@ class TestHelper : public Consumer {
   FakeProducer* ConnectFakeProducer();
   void ConnectConsumer();
   void StartTracing(const TraceConfig& config);
-  void ReadData();
+  void ReadData(uint32_t read_count = 0);
 
   void WaitForConsumerConnect();
   void WaitForProducerEnabled();
   void WaitForTracingDisabled();
-  void WaitForReadData();
+  void WaitForReadData(uint32_t read_count = 0);
 
   std::function<void()> WrapTask(const std::function<void()>& function);
 
@@ -67,7 +67,7 @@ class TestHelper : public Consumer {
 
   TaskRunnerThread service_thread_;
   TaskRunnerThread producer_thread_;
-  std::unique_ptr<Service::ConsumerEndpoint> endpoint_;  // Keep last.
+  std::unique_ptr<TracingService::ConsumerEndpoint> endpoint_;  // Keep last.
 };
 
 }  // namespace perfetto

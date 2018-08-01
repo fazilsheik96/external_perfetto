@@ -14,3 +14,6 @@
 *.swp
 /out*
 TAGS
+/node_modules/
+/compile_commands.json
+.vscode

@@ -28,11 +28,14 @@ source_set("probes") {
 
 source_set("probes_src") {
   public_deps = [
-    "../../ftrace_reader",
+    "ftrace",
   ]
   deps = [
     "../../../gn:default_deps",
+    "../../../include/perfetto/traced",
+    "../../../protos/perfetto/trace/ps:zero",
     "../../base",
+    "../../tracing:ipc",
     "../../tracing:tracing",
     "filesystem",
   ]

@@ -14,6 +14,13 @@
 
 import("gn/perfetto.gni")
 
+# For use_libfuzzer.
+if (!build_with_chromium) {
+  import("//gn/standalone/sanitizers/vars.gni")
+} else {
+  import("//build/config/sanitizers/sanitizers.gni")
+}
+
 declare_args() {
   # Only for local development. When true the binaries (perfetto, traced, ...)
   # are monolithic and don't use a common shared library. This is mainly to
@@ -48,6 +55,30 @@ group("all") {
     if (is_linux || is_android) {
       deps += [ "tools/skippy" ]
     }
+    if (is_linux) {
+      deps += [ "tools:pipestats" ]
+    }
+    if (use_libfuzzer) {
+      deps += [ ":fuzzers" ]
+    }
+  }
+}
+
+# TODO(primiano): temporary workaround to:
+# 1) Prevent that the UI gets build automatically when doing ninja -C out/xx .
+# 2) Avoid breaking the chrome build, that right now depends on "all".
+group("default") {
+  testonly = true  # allow to build also test targets
+  deps = [
+    ":all",
+  ]
+}
+
+if (build_standalone) {
+  group("ui") {
+    deps = [
+      "ui",
+    ]
   }
 }
 
@@ -60,16 +91,20 @@ executable("perfetto_unittests") {
     "src/protozero:unittests",
     "src/tracing:unittests",
   ]
+
   if (!build_with_chromium) {
     deps += [
-      "src/ftrace_reader:unittests",
       "src/ipc:unittests",
       "src/perfetto_cmd:unittests",
       "src/traced/probes:unittests",
       "src/traced/probes/filesystem:unittests",
+      "src/traced/probes/ftrace:unittests",
       "tools/ftrace_proto_gen:unittests",
       "tools/sanitizers_unittests",
     ]
+  }
+  if (build_standalone) {
+    deps += [ "src/trace_processor:unittests" ]
   }
 }
 
@@ -78,7 +113,7 @@ if (!build_with_chromium) {
     testonly = true
     deps = [
       "gn:default_deps",
-      "src/ftrace_reader:ftrace_reader_benchmarks",
+      "src/traced/probes/ftrace:benchmarks",
       "src/tracing:tracing_benchmarks",
       "test:benchmark_main",
       "test:end_to_end_benchmarks",
@@ -90,11 +125,14 @@ if (!build_with_chromium) {
     deps = [
       "gn:default_deps",
       "gn:gtest_main",
-      "src/ftrace_reader:ftrace_reader_integrationtests",
+      "src/traced/probes/ftrace:integrationtests",
       "test:end_to_end_integrationtests",
     ]
     if (build_with_android) {
       cflags = [ "-DPERFETTO_BUILD_WITH_ANDROID" ]
+    }
+    if (build_standalone) {
+      deps += [ "src/trace_processor:integrationtests" ]
     }
   }
 
@@ -119,6 +157,7 @@ if (!build_with_chromium) {
     deps = [
       ":libtraced_shared",
       "gn:default_deps",
+      "include/perfetto/traced",
     ]
     sources = [
       "src/traced/service/main.cc",
@@ -131,6 +170,7 @@ if (!build_with_chromium) {
     deps = [
       ":libtraced_shared",
       "gn:default_deps",
+      "include/perfetto/traced",
     ]
     sources = [
       "src/traced/probes/main.cc",
@@ -177,6 +217,14 @@ if (!build_with_chromium) {
         "protos/perfetto/trace:lite",
       ]
     }
+  } else {
+    # The library which eases processing of Perfetto traces by exposing reading
+    # friendly APIs.
+    static_library("trace_processor") {
+      deps = [
+        "src/trace_processor:lib",
+      ]
+    }
   }
 }
 
@@ -190,6 +238,19 @@ if (build_with_chromium) {
     configs += [ "//build/config/compiler:no_chromium_code" ]
     public_deps = [
       "include/perfetto/tracing/core",
+      "protos/perfetto/trace:zero",
+      "protos/perfetto/trace/chrome:zero",
+    ]
+  }
+}
+
+if (use_libfuzzer && !build_with_chromium) {
+  group("fuzzers") {
+    testonly = true
+    deps = [
+      "src/ipc:buffered_frame_deserializer_fuzzer",
+      "src/traced/probes/ftrace:cpu_reader_fuzzer",
+      "test:end_to_end_shared_memory_fuzzer",
     ]
   }
 }

@@ -56,8 +56,10 @@ ClientImpl::~ClientImpl() {
 void ClientImpl::BindService(base::WeakPtr<ServiceProxy> service_proxy) {
   if (!service_proxy)
     return;
-  if (!sock_->is_connected())
-    return queued_bindings_.emplace_back(service_proxy);
+  if (!sock_->is_connected()) {
+    queued_bindings_.emplace_back(service_proxy);
+    return;
+  }
   RequestID request_id = ++last_request_id_;
   Frame frame;
   frame.set_request_id(request_id);
@@ -245,8 +247,7 @@ void ClientImpl::OnInvokeMethodReply(QueuedRequest req,
     return;
   std::unique_ptr<ProtoMessage> decoded_reply;
   if (reply.success()) {
-    // TODO(fmayer): this could be optimized, stop doing method name string
-    // lookups.
+    // If this becomes a hotspot, optimize by maintaining a dedicated hashtable.
     for (const auto& method : service_proxy->GetDescriptor().methods) {
       if (req.method_name == method.name) {
         decoded_reply = method.reply_proto_decoder(reply.reply_proto());

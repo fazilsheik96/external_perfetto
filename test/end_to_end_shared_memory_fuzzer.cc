@@ -21,9 +21,7 @@
 #include "perfetto/base/logging.h"
 #include "perfetto/base/task_runner.h"
 #include "perfetto/base/utils.h"
-#include "perfetto/ipc/host.h"
 #include "perfetto/trace/test_event.pbzero.h"
-#include "perfetto/traced/traced.h"
 #include "perfetto/tracing/core/data_source_config.h"
 #include "perfetto/tracing/core/data_source_descriptor.h"
 #include "perfetto/tracing/core/producer.h"
@@ -104,7 +102,7 @@ class FakeProducer : public Producer {
   const std::string name_;
   const uint8_t* data_;
   const size_t size_;
-  std::unique_ptr<Service::ProducerEndpoint> endpoint_;
+  std::unique_ptr<TracingService::ProducerEndpoint> endpoint_;
   std::function<void()> on_produced_and_committed_;
 };
 

@@ -31,6 +31,10 @@
 #include <mach/thread_act.h>
 #endif
 
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+#include <emscripten/emscripten.h>
+#endif
+
 namespace perfetto {
 namespace base {
 
@@ -42,25 +46,14 @@ inline TimeNanos FromPosixTimespec(const struct timespec& ts) {
   return TimeNanos(ts.tv_sec * 1000000000LL + ts.tv_nsec);
 }
 
-#if !PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX)
+void SleepMicroseconds(unsigned interval_us);
 
-constexpr clockid_t kWallTimeClockSource = CLOCK_MONOTONIC;
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
 
-inline TimeNanos GetTimeInternalNs(clockid_t clk_id) {
-  struct timespec ts = {};
-  PERFETTO_CHECK(clock_gettime(clk_id, &ts) == 0);
-  return FromPosixTimespec(ts);
-}
+TimeNanos GetWallTimeNs();
+TimeNanos GetThreadCPUTimeNs();
 
-inline TimeNanos GetWallTimeNs() {
-  return GetTimeInternalNs(kWallTimeClockSource);
-}
-
-inline TimeNanos GetThreadCPUTimeNs() {
-  return GetTimeInternalNs(CLOCK_THREAD_CPUTIME_ID);
-}
-
-#else  // !PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX)
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX)
 
 inline TimeNanos GetWallTimeNs() {
   auto init_time_factor = []() -> uint64_t {
@@ -92,7 +85,35 @@ inline TimeNanos GetThreadCPUTimeNs() {
                    info.system_time.microseconds * 1000LL);
 }
 
-#endif  // !PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX)
+#elif PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+
+inline TimeNanos GetWallTimeNs() {
+  return TimeNanos(static_cast<uint64_t>(emscripten_get_now()) * 1000000);
+}
+
+inline TimeNanos GetThreadCPUTimeNs() {
+  return TimeNanos(0);
+}
+
+#else
+
+constexpr clockid_t kWallTimeClockSource = CLOCK_MONOTONIC;
+
+inline TimeNanos GetTimeInternalNs(clockid_t clk_id) {
+  struct timespec ts = {};
+  PERFETTO_CHECK(clock_gettime(clk_id, &ts) == 0);
+  return FromPosixTimespec(ts);
+}
+
+inline TimeNanos GetWallTimeNs() {
+  return GetTimeInternalNs(kWallTimeClockSource);
+}
+
+inline TimeNanos GetThreadCPUTimeNs() {
+  return GetTimeInternalNs(CLOCK_THREAD_CPUTIME_ID);
+}
+
+#endif
 
 inline TimeMillis GetWallTimeMs() {
   return std::chrono::duration_cast<TimeMillis>(GetWallTimeNs());

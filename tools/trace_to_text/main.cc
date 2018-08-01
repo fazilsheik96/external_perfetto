@@ -40,6 +40,7 @@
 #include <google/protobuf/util/message_differencer.h>
 
 #include "perfetto/base/logging.h"
+#include "perfetto/trace/ftrace/ftrace_stats.pb.h"
 #include "perfetto/trace/trace.pb.h"
 #include "perfetto/trace/trace_packet.pb.h"
 #include "tools/trace_to_text/ftrace_event_formatter.h"
@@ -88,6 +89,9 @@ using protos::PrintFtraceEvent;
 using protos::ProcessTree;
 using protos::Trace;
 using protos::TracePacket;
+using protos::FtraceStats;
+using protos::FtraceStats_Phase_START_OF_TRACE;
+using protos::FtraceStats_Phase_END_OF_TRACE;
 using Entry = protos::InodeFileMap::Entry;
 using Process = protos::ProcessTree::Process;
 
@@ -259,6 +263,67 @@ void PrintFtraceTrack(std::ostream* output,
   *output << "\n\n";
 }
 
+void PrintFtraceStats(std::ostream* output,
+                      uint64_t overwrite_count,
+                      std::map<FtraceEvent::EventCase, uint64_t> event_counts,
+                      const FtraceStats& before_stats,
+                      const FtraceStats& after_stats,
+                      bool compact_output) {
+  if (!compact_output)
+    *output << "--------------------Ftrace Stats-------------------\n";
+
+  char line[2048];
+  if (compact_output) {
+    sprintf(line, "ftrace_overwrite_count,%" PRIu64 "\n", overwrite_count);
+  } else {
+    sprintf(line, "Events overwritten: %" PRIu64 "\n", overwrite_count);
+  }
+  *output << std::string(line);
+
+  DiskSourceTree dst;
+  dst.MapPath("perfetto", "protos/perfetto");
+  MFE mfe;
+  Importer importer(&dst, &mfe);
+  const FileDescriptor* parsed_file =
+      importer.Import("perfetto/trace/ftrace/ftrace_event.proto");
+
+  DynamicMessageFactory dmf;
+  const Descriptor* ftrace_descriptor = parsed_file->message_type(0);
+  for (const auto& event_to_count : event_counts) {
+    const std::string& event_name =
+        ftrace_descriptor->FindFieldByNumber(event_to_count.first)->name();
+    uint64_t count = event_to_count.second;
+    if (compact_output) {
+      sprintf(line, "%s,%" PRIu64 "\n", event_name.c_str(), count);
+    } else {
+      sprintf(line, "%s count: %" PRIu64 "\n", event_name.c_str(), count);
+    }
+    *output << std::string(line);
+  }
+
+  uint64_t before_total_overrun = 0;
+  uint64_t after_total_overrun = 0;
+  for (const auto& cpu_stats : before_stats.cpu_stats()) {
+    before_total_overrun += cpu_stats.overrun();
+  }
+  for (const auto& cpu_stats : after_stats.cpu_stats()) {
+    after_total_overrun += cpu_stats.overrun();
+  }
+
+  if (compact_output) {
+    sprintf(line, "total_overrun,%" PRIu64 "\n",
+            after_total_overrun - before_total_overrun);
+  } else {
+    sprintf(line, "total_overrun: %" PRIu64 " (= %" PRIu64 " - %" PRIu64 ")\n",
+            after_total_overrun - before_total_overrun, after_total_overrun,
+            before_total_overrun);
+  }
+  *output << std::string(line);
+
+  if (!compact_output)
+    *output << "\n";
+}
+
 void PrintInodeStats(std::ostream* output,
                      const std::set<uint64_t>& ftrace_inodes,
                      const uint64_t& ftrace_inode_count,
@@ -376,7 +441,7 @@ void PrintProcessStats(std::ostream* output,
             "tids_with_pinfo,%zu\ntids,%zu\ntids_with_pinfo_percentage,%zu\n",
             intersect.size(), tids_in_events.size(), thread_id_process_info);
   } else {
-    sprintf(matching, "Thread ids with process info: %zu/%zu -> %zu %%\n\n",
+    sprintf(matching, "Thread ids with process info: %zu/%zu -> %zu %%\n",
             intersect.size(), tids_in_events.size(), thread_id_process_info);
   }
   *output << std::string(matching);
@@ -385,11 +450,42 @@ void PrintProcessStats(std::ostream* output,
     *output << "\n";
 }
 
+void PrintTraceStats(std::ostream* output,
+                     const protos::TraceStats& stats,
+                     bool compact_output) {
+  if (compact_output)
+    return;
+  *output << "--------------------Trace Stats-------------------\n";
+  size_t buf_num = 0;
+  for (const auto& buf : stats.buffer_stats()) {
+    *output << "Buffer " << buf_num++ << "\n"
+            << "  bytes_written: " << buf.bytes_written() << "\n"
+            << "  chunks_written: " << buf.chunks_written() << "\n"
+            << "  chunks_overwritten: " << buf.chunks_overwritten() << "\n"
+            << "  write_wrap_count: " << buf.write_wrap_count() << "\n"
+            << "  patches_succeeded: " << buf.patches_succeeded() << "\n"
+            << "  patches_failed: " << buf.patches_failed() << "\n"
+            << "  readaheads_succeeded: " << buf.readaheads_succeeded() << "\n"
+            << "  readaheads_failed: " << buf.readaheads_failed() << "\n"
+            << "  abi_violations: " << buf.abi_violations() << "\n";
+  }
+  *output << "producers_connected: " << stats.producers_connected() << "\n"
+          << "producers_seen: " << stats.producers_seen() << "\n"
+          << "data_sources_reg: " << stats.data_sources_registered() << "\n"
+          << "data_sources_seen: " << stats.data_sources_seen() << "\n"
+          << "tracing_sessions: " << stats.tracing_sessions() << "\n"
+          << "total_buffers: " << stats.total_buffers() << "\n";
+}
+
 int TraceToSummary(std::istream* input,
                    std::ostream* output,
                    bool compact_output) {
-  uint64_t start = std::numeric_limits<uint64_t>::max();
-  uint64_t end = 0;
+  uint64_t ftrace_start = std::numeric_limits<uint64_t>::max();
+  uint64_t ftrace_end = 0;
+  uint64_t boottime_start = std::numeric_limits<uint64_t>::max();
+  uint64_t boottime_end = 0;
+  uint64_t ftrace_overwrites = 0;
+  std::map<FtraceEvent::EventCase, uint64_t> ftrace_event_counts;
   std::multiset<uint64_t> ftrace_timestamps;
   std::set<pid_t> tids_in_tree;
   std::set<pid_t> tids_in_events;
@@ -397,12 +493,18 @@ int TraceToSummary(std::istream* input,
   uint64_t ftrace_inode_count = 0;
   std::set<uint64_t> resolved_map_inodes;
   std::set<uint64_t> resolved_scan_inodes;
+  protos::TraceStats last_stats;
+
+  FtraceStats before_stats;
+  FtraceStats after_stats;
 
   ForEachPacketInTrace(
-      input, [&start, &end, &ftrace_timestamps, &tids_in_tree, &tids_in_events,
-              &ftrace_inodes, &ftrace_inode_count, &resolved_map_inodes,
-              &resolved_scan_inodes](const protos::TracePacket& packet) {
-
+      input,
+      [&ftrace_start, &ftrace_end, &ftrace_overwrites, &ftrace_event_counts,
+       &before_stats, &after_stats, &ftrace_timestamps, &tids_in_tree,
+       &tids_in_events, &ftrace_inodes, &ftrace_inode_count,
+       &resolved_map_inodes, &resolved_scan_inodes, &last_stats,
+       &boottime_start, &boottime_end](const protos::TracePacket& packet) {
         if (packet.has_process_tree()) {
           const ProcessTree& tree = packet.process_tree();
           for (Process process : tree.processes()) {
@@ -426,12 +528,43 @@ int TraceToSummary(std::istream* input,
               resolved_map_inodes.insert(entry.inode_number());
         }
 
+        if (packet.has_trace_stats())
+          last_stats = packet.trace_stats();
+
+        if (packet.has_ftrace_stats()) {
+          const auto& ftrace_stats = packet.ftrace_stats();
+          if (ftrace_stats.phase() == FtraceStats_Phase_START_OF_TRACE) {
+            before_stats = ftrace_stats;
+            // TODO(hjd): Check not yet set.
+          } else if (ftrace_stats.phase() == FtraceStats_Phase_END_OF_TRACE) {
+            after_stats = ftrace_stats;
+            // TODO(hjd): Check not yet set.
+          } else {
+            // TODO(hjd): Error here.
+          }
+        }
+
+        if (packet.has_clock_snapshot()) {
+          for (const auto& clock : packet.clock_snapshot().clocks()) {
+            if (clock.type() == protos::ClockSnapshot_Clock_Type_MONOTONIC) {
+              boottime_start =
+                  std::min<uint64_t>(boottime_start, clock.timestamp());
+              boottime_end =
+                  std::max<uint64_t>(boottime_end, clock.timestamp());
+            }
+          }
+        }
+
         if (!packet.has_ftrace_events())
           return;
 
         const FtraceEventBundle& bundle = packet.ftrace_events();
+        ftrace_overwrites += bundle.overwrite_count();
+
         uint64_t inode_number = 0;
         for (const FtraceEvent& event : bundle.event()) {
+          ftrace_event_counts[event.event_case()] += 1;
+
           if (ParseInode(event, &inode_number)) {
             ftrace_inodes.insert(inode_number);
             ftrace_inode_count++;
@@ -440,8 +573,8 @@ int TraceToSummary(std::istream* input,
             tids_in_events.insert(static_cast<int>(event.pid()));
           }
           if (event.timestamp()) {
-            start = std::min<uint64_t>(start, event.timestamp());
-            end = std::max<uint64_t>(end, event.timestamp());
+            ftrace_start = std::min<uint64_t>(ftrace_start, event.timestamp());
+            ftrace_end = std::max<uint64_t>(ftrace_end, event.timestamp());
             ftrace_timestamps.insert(event.timestamp());
           }
         }
@@ -450,19 +583,30 @@ int TraceToSummary(std::istream* input,
   fprintf(stderr, "\n");
 
   char line[2048];
-  uint64_t duration = (end - start) / (1000 * 1000);
+  uint64_t ftrace_duration = (ftrace_end - ftrace_start) / (1000 * 1000);
   if (compact_output) {
-    sprintf(line, "duration,%" PRIu64 "\n", duration);
+    sprintf(line, "ftrace duration,%" PRIu64 "\n", ftrace_duration);
   } else {
-    sprintf(line, "Duration: %" PRIu64 "ms\n", duration);
+    sprintf(line, "Ftrace duration: %" PRIu64 "ms\n", ftrace_duration);
+  }
+  *output << std::string(line);
+
+  uint64_t boottime_duration = (boottime_end - boottime_start) / (1000 * 1000);
+  if (compact_output) {
+    sprintf(line, "boottime duration,%" PRIu64 "\n", boottime_duration);
+  } else {
+    sprintf(line, "Boottime duration: %" PRIu64 "ms\n", boottime_duration);
   }
   *output << std::string(line);
 
   if (!compact_output)
-    PrintFtraceTrack(output, start, end, ftrace_timestamps);
+    PrintFtraceTrack(output, ftrace_start, ftrace_end, ftrace_timestamps);
+  PrintFtraceStats(output, ftrace_overwrites, ftrace_event_counts, before_stats,
+                   after_stats, compact_output);
   PrintProcessStats(output, tids_in_tree, tids_in_events, compact_output);
   PrintInodeStats(output, ftrace_inodes, ftrace_inode_count,
                   resolved_map_inodes, resolved_scan_inodes, compact_output);
+  PrintTraceStats(output, last_stats, compact_output);
 
   return 0;
 }
@@ -496,9 +640,10 @@ int main(int argc, char** argv) {
                                      /*wrap_in_json=*/false);
   if (format == "text")
     return perfetto::TraceToText(&std::cin, &std::cout);
+
   if (format == "summary")
     return perfetto::TraceToSummary(&std::cin, &std::cout,
-                                    /* compact_output */ true);
+                                    /* compact_output */ false);
   if (format == "short_summary")
     return perfetto::TraceToSummary(&std::cin, &std::cout,
                                     /* compact_output */ true);

@@ -13,4 +13,6 @@ linux/
 linux64/
 mac/
 ndk/
+nodejs/
 protobuf/
+sqlite/
