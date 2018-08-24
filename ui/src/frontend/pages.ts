@@ -14,15 +14,24 @@
 
 import * as m from 'mithril';
 
-const Nav = {
+import {globals} from './globals';
+import {Sidebar} from './sidebar';
+import {Topbar} from './topbar';
+
+function renderPermalink(): m.Children {
+  if (!globals.state.permalink.requestId) return null;
+  const hash = globals.state.permalink.hash;
+  const url = `${self.location.origin}#!/?s=${hash}`;
+  return m(
+      '.alert-permalink',
+      hash ? ['Permalink: ', m(`a[href=${url}]`, url)] : 'Uploading...');
+}
+
+const Alerts: m.Component = {
   view() {
-    return m(
-        'ul',
-        {style: {height: '100px', margin: '0', padding: '20px'}},
-        m('li', m('a[href=/]', {oncreate: m.route.link}, 'Home')),
-        m('li', m('a[href=/viewer]', {oncreate: m.route.link}, 'Viewer')), );
-  }
-} as m.Component;
+    return m('.alerts', renderPermalink());
+  },
+};
 
 /**
  * Wrap component with common UI elements (nav bar etc).
@@ -31,8 +40,10 @@ export function createPage(component: m.Component): m.Component {
   return {
     view() {
       return [
-        m(Nav),
+        m(Sidebar),
+        m(Topbar),
         m(component),
+        m(Alerts),
       ];
     },
   };

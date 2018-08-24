@@ -13,6 +13,7 @@
 // limitations under the License.
 
 import {IRawQueryArgs, RawQueryResult, TraceProcessor} from '../common/protos';
+import {TimeSpan} from '../common/time';
 
 /**
  * Abstract interface of a trace proccessor.
@@ -33,5 +34,40 @@ export abstract class Engine {
    */
   rawQuery(args: IRawQueryArgs): Promise<RawQueryResult> {
     return this.traceProcessor.rawQuery(args);
+  }
+
+  async rawQueryOneRow(sqlQuery: string): Promise<number[]> {
+    const result = await this.rawQuery({sqlQuery});
+    const res: number[] = [];
+    result.columns.map(c => res.push(+c.longValues![0]));
+    return res;
+  }
+
+  // TODO(hjd): Maybe we should cache result? But then Engine must be
+  // streaming aware.
+  async getNumberOfCpus(): Promise<number> {
+    const result = await this.rawQuery({
+      sqlQuery: 'select count(distinct(cpu)) as cpuCount from sched;',
+    });
+    return +result.columns[0].longValues![0];
+  }
+
+  // TODO: This should live in code that's more specific to chrome, instead of
+  // in engine.
+  async getNumberOfProcesses(): Promise<number> {
+    const result = await this.rawQuery({
+      sqlQuery: 'select count(distinct(upid)) from thread;',
+    });
+    return +result.columns[0].longValues![0];
+  }
+
+  async getTraceTimeBounds(): Promise<TimeSpan> {
+    const maxQuery = 'select max(ts) from (select max(ts) as ts from sched ' +
+        'union all select max(ts) as ts from slices)';
+    const minQuery = 'select min(ts) from (select min(ts) as ts from sched ' +
+        'union all select min(ts) as ts from slices)';
+    const start = (await this.rawQueryOneRow(minQuery))[0];
+    const end = (await this.rawQueryOneRow(maxQuery))[0];
+    return new TimeSpan(start / 1e9, end / 1e9);
   }
 }

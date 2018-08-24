@@ -12,4 +12,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-console.log('Hello from the worker!');
+import '../tracks/all_controller';
+
+import {Remote} from '../base/remote';
+
+import {AppController} from './app_controller';
+import {globals} from './globals';
+
+function main(port: MessagePort) {
+  let receivedFrontendPort = false;
+  port.onmessage = ({data}) => {
+    if (!receivedFrontendPort) {
+      const frontendPort = data as MessagePort;
+      const frontend = new Remote(frontendPort);
+      globals.initialize(new AppController(), frontend);
+      receivedFrontendPort = true;
+    } else {
+      globals.dispatch(data);
+    }
+  };
+}
+
+main(self as {} as MessagePort);

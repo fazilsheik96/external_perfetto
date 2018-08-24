@@ -12,10 +12,102 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {Global} from '../base/global';
-import {State} from '../common/state';
+import {assertExists} from '../base/logging';
+import {Action} from '../common/actions';
+import {createEmptyState, State} from '../common/state';
+
+import {FrontendLocalState} from './frontend_local_state';
+import {RafScheduler} from './raf_scheduler';
+
+type Dispatch = (action: Action) => void;
+type TrackDataStore = Map<string, {}>;
+type QueryResultsStore = Map<string, {}>;
+
+export interface QuantizedLoad {
+  startSec: number;
+  endSec: number;
+  load: number;
+}
+type OverviewStore = Map<string, QuantizedLoad[]>;
+
+export interface ThreadDesc {
+  utid: number;
+  tid: number;
+  threadName: string;
+  pid: number;
+  procName: string;
+}
+type ThreadMap = Map<number, ThreadDesc>;
 
 /**
- * Global accessor for the state in the frontend.
+ * Global accessors for state/dispatch in the frontend.
  */
-export const gState = new Global<State>();
+class Globals {
+  private _dispatch?: Dispatch = undefined;
+  private _state?: State = undefined;
+  private _trackDataStore?: TrackDataStore = undefined;
+  private _queryResults?: QueryResultsStore = undefined;
+  private _frontendLocalState?: FrontendLocalState = undefined;
+  private _rafScheduler?: RafScheduler = undefined;
+  private _overviewStore?: OverviewStore = undefined;
+  private _threadMap?: ThreadMap = undefined;
+
+  initialize(dispatch?: Dispatch) {
+    this._dispatch = dispatch;
+    this._state = createEmptyState();
+    this._trackDataStore = new Map<string, {}>();
+    this._queryResults = new Map<string, {}>();
+    this._frontendLocalState = new FrontendLocalState();
+    this._rafScheduler = new RafScheduler();
+    this._overviewStore = new Map<string, QuantizedLoad[]>();
+    this._threadMap = new Map<number, ThreadDesc>();
+  }
+
+  get state(): State {
+    return assertExists(this._state);
+  }
+
+  set state(state: State) {
+    this._state = assertExists(state);
+  }
+
+  get dispatch(): Dispatch {
+    return assertExists(this._dispatch);
+  }
+
+  get overviewStore(): OverviewStore {
+    return assertExists(this._overviewStore);
+  }
+
+  get trackDataStore(): TrackDataStore {
+    return assertExists(this._trackDataStore);
+  }
+
+  get queryResults(): QueryResultsStore {
+    return assertExists(this._queryResults);
+  }
+
+  get frontendLocalState() {
+    return assertExists(this._frontendLocalState);
+  }
+
+  get rafScheduler() {
+    return assertExists(this._rafScheduler);
+  }
+
+  get threads() {
+    return assertExists(this._threadMap);
+  }
+
+  resetForTesting() {
+    this._dispatch = undefined;
+    this._state = undefined;
+    this._trackDataStore = undefined;
+    this._queryResults = undefined;
+    this._frontendLocalState = undefined;
+    this._rafScheduler = undefined;
+    this._overviewStore = undefined;
+  }
+}
+
+export const globals = new Globals();

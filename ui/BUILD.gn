@@ -26,11 +26,12 @@ nodejs_bin = rebase_path("$nodejs_root/bin", root_build_dir)
 # +----------------------------------------------------------------------------+
 group("ui") {
   deps = [
+    ":assets_dist",
     ":controller_bundle_dist",
-    ":css_dist",
     ":engine_bundle_dist",
     ":frontend_bundle_dist",
     ":index_dist",
+    ":scss",
     ":test_scripts",
     ":wasm_dist",
   ]
@@ -45,6 +46,7 @@ template("node_bin") {
                            [
                              "inputs",
                              "outputs",
+                             "depfile",
                            ])
     deps = [
       ":node_modules",
@@ -207,45 +209,67 @@ node_bin("protos_to_ts") {
 # | TypeScript: transpiles all *.ts into .js                                   |
 # +----------------------------------------------------------------------------+
 
-# Builds all .ts sources in the repo that are reachable from |sources|.
+# Builds all .ts sources in the repo under |src|.
 node_bin("transpile_all_ts") {
-  sources = [
-    "src/controller/index.ts",
-    "src/engine/index.ts",
-    "src/frontend/index.ts",
-  ]
   deps = [
     ":dist_symlink",
     ":protos_to_ts",
     ":wasm_gen",
   ]
-  inputs = sources + [ "tsconfig.json" ]
+  inputs = [
+    "tsconfig.json",
+  ]
   outputs = [
     "$target_out_dir/frontend/index.js",
     "$target_out_dir/engine/index.js",
     "$target_out_dir/controller/index.js",
   ]
 
-  # Find all *.ts files and pass them as input triggers. This does NOT affect
-  # which files will get built. This defines only the set of files that, when
-  # changes, will re-trigger this rule in ninja. The files that get transpiled
-  # are the transitive dependencies of |sources|.
-  all_ts_files = exec_script("../gn/standalone/glob.py",
-                             [
-                               "--root=" + rebase_path(".", root_build_dir),
-                               "--filter=*.ts",
-                               "--exclude=node_modules",
-                               "--exclude=dist",
-                             ],
-                             "list lines",
-                             [ "." ])
-  inputs += all_ts_files
+  depfile = root_out_dir + "/tsc.d"
+  exec_script("../gn/standalone/glob.py",
+              [
+                "--root=" + rebase_path(".", root_build_dir),
+                "--filter=*.ts",
+                "--exclude=node_modules",
+                "--exclude=dist",
+                "--deps=obj/ui/frontend/index.js",
+                "--output=" + rebase_path(depfile),
+              ],
+              "")
+
   node_cmd = "tsc"
   args = [
     "--project",
     rebase_path(".", root_build_dir),
     "--outDir",
     rebase_path(target_out_dir, root_build_dir),
+  ]
+}
+
+# +----------------------------------------------------------------------------+
+# | Build css.                                                                 |
+# +----------------------------------------------------------------------------+
+
+# Build css.
+node_bin("scss") {
+  deps = [
+    ":dist_symlink",
+  ]
+  main_css = "src/assets/perfetto.scss"
+  inputs = [
+    main_css,
+    "src/assets/sidebar.scss",
+    "src/assets/topbar.scss",
+  ]
+  outputs = [
+    "$ui_dir/perfetto.css",
+  ]
+
+  node_cmd = "node-sass"
+  args = [
+    "--quiet",
+    rebase_path(main_css, root_build_dir),
+    rebase_path(outputs[0], root_build_dir),
   ]
 }
 
@@ -261,12 +285,17 @@ copy("index_dist") {
   ]
 }
 
-copy("css_dist") {
+copy("assets_dist") {
   sources = [
-    "perfetto.css",
+    "src/assets/flamegraph.svg",
+    "src/assets/logo-3d.png",
+    "src/assets/logo.png",
+    "src/assets/perfetto.scss",
+    "src/assets/sidebar.scss",
+    "src/assets/topbar.scss",
   ]
   outputs = [
-    "$ui_dir/perfetto.css",
+    "$ui_dir/assets/{{source_file_part}}",
   ]
 }
 
