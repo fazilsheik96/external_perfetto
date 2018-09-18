@@ -14,23 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_TRACE_PARSER_H_
-#define SRC_TRACE_PROCESSOR_TRACE_PARSER_H_
+#ifndef SRC_TRACE_PROCESSOR_BASIC_TYPES_H_
+#define SRC_TRACE_PROCESSOR_BASIC_TYPES_H_
+
+#include <memory>
 
 namespace perfetto {
 namespace trace_processor {
 
-// Base interface for trace parsers (JsonTraceParser, ProtoTraceParser).
-class TraceParser {
- public:
-  virtual ~TraceParser();
-
-  // Parses the next chunk of trace from the BlobReader. Returns true
-  // if there are more chunks which can be read and false otherwise.
-  virtual bool ParseNextChunk() = 0;
-};
+enum class OptimizationMode { kMaxBandwidth = 0, kMinLatency };
 
 }  // namespace trace_processor
 }  // namespace perfetto
 
-#endif  // SRC_TRACE_PROCESSOR_TRACE_PARSER_H_
+#endif  // SRC_TRACE_PROCESSOR_BASIC_TYPES_H_

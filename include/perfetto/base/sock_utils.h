@@ -14,24 +14,26 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_BLOB_READER_H_
-#define SRC_TRACE_PROCESSOR_BLOB_READER_H_
+#ifndef INCLUDE_PERFETTO_BASE_SOCK_UTILS_H_
+#define INCLUDE_PERFETTO_BASE_SOCK_UTILS_H_
 
-#include <stdint.h>
+#include "perfetto/base/scoped_file.h"
 
 namespace perfetto {
-namespace trace_processor {
+namespace base {
 
-// Abstraction of reading of a data source in a chunked (i.e. blob) format.
-class BlobReader {
- public:
-  virtual ~BlobReader();
+ssize_t Send(int fd,
+             const void* msg,
+             size_t len,
+             const int* send_fds,
+             size_t num_fds);
 
-  // Reads |len| bytes at |offset| into |dst|.
-  virtual uint32_t Read(uint64_t offset, uint32_t len, uint8_t* dst) = 0;
-};
-
-}  // namespace trace_processor
+ssize_t Receive(int fd,
+                void* msg,
+                size_t len,
+                base::ScopedFile* fd_vec,
+                size_t max_files);
+}  // namespace base
 }  // namespace perfetto
 
-#endif  // SRC_TRACE_PROCESSOR_BLOB_READER_H_
+#endif  // INCLUDE_PERFETTO_BASE_SOCK_UTILS_H_

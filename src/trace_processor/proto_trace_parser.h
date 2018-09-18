@@ -20,50 +20,53 @@
 #include <stdint.h>
 #include <memory>
 
-#include "src/trace_processor/trace_parser.h"
+#include "perfetto/base/string_view.h"
+#include "src/trace_processor/trace_blob_view.h"
+#include "src/trace_processor/trace_storage.h"
 
 namespace perfetto {
 namespace trace_processor {
 
-class BlobReader;
 class TraceProcessorContext;
 
-// Reads a protobuf trace in chunks and parses it into a form which is
-// efficient to query.
-class ProtoTraceParser : public TraceParser {
+struct SystraceTracePoint {
+  char phase;
+  uint32_t pid;
+
+  // For phase = 'B' and phase = 'C' only.
+  base::StringView name;
+
+  // For phase = 'C' only.
+  int64_t value;
+};
+
+inline bool operator==(const SystraceTracePoint& x,
+                       const SystraceTracePoint& y) {
+  return std::tie(x.phase, x.pid, x.name, x.value) ==
+         std::tie(y.phase, y.pid, y.name, y.value);
+}
+
+bool ParseSystraceTracePoint(base::StringView, SystraceTracePoint* out);
+
+class ProtoTraceParser {
  public:
-  // |reader| is the abstract method of getting chunks of size |chunk_size_b|
-  // from a trace file with these chunks parsed into |trace|.
-  ProtoTraceParser(BlobReader*, TraceProcessorContext*);
-  ~ProtoTraceParser() override;
+  explicit ProtoTraceParser(TraceProcessorContext*);
+  virtual ~ProtoTraceParser();
 
-  // TraceParser implementation.
-
-  // Parses the next chunk of TracePackets from the BlobReader. Returns true
-  // if there are more chunks which can be read and false otherwise.
-  bool ParseNextChunk() override;
-
-  void set_chunk_size_for_testing(uint32_t n) { chunk_size_ = n; }
+  // virtual for testing.
+  virtual void ParseTracePacket(TraceBlobView);
+  virtual void ParseFtracePacket(uint32_t cpu,
+                                 uint64_t timestamp,
+                                 TraceBlobView);
+  void ParseProcessTree(TraceBlobView);
+  void ParseSchedSwitch(uint32_t cpu, uint64_t timestamp, TraceBlobView);
+  void ParseCpuFreq(uint64_t timestamp, TraceBlobView);
+  void ParsePrint(uint32_t cpu, uint64_t timestamp, TraceBlobView);
+  void ParseThread(TraceBlobView);
+  void ParseProcess(TraceBlobView);
 
  private:
-  static constexpr uint32_t kTraceChunkSize = 16 * 1024 * 1024;  // 16 MB
-
-  void ParsePacket(const uint8_t* data, size_t length);
-  void ParseFtraceEventBundle(const uint8_t* data, size_t length);
-  void ParseFtraceEvent(uint32_t cpu, const uint8_t* data, size_t length);
-  void ParseSchedSwitch(uint32_t cpu,
-                        uint64_t timestamp,
-                        const uint8_t* data,
-                        size_t length);
-  void ParseProcessTree(const uint8_t* data, size_t length);
-  void ParseProcess(const uint8_t* data, size_t length);
-  void ParseThread(const uint8_t* data, size_t length);
-
-  BlobReader* const reader_;
   TraceProcessorContext* context_;
-  uint32_t chunk_size_ = kTraceChunkSize;
-  uint64_t offset_ = 0;
-  std::unique_ptr<uint8_t[]> buffer_;
 };
 
 }  // namespace trace_processor
