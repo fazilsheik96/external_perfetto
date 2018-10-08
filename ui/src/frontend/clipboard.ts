@@ -12,22 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export type Call = [string, any[], Dingus];
-
-export interface Dingus { calls: Call[]; }
-
-export type DingusAttrs<T> = {
-  [P in keyof T]: Dingus & DingusAttrs<T[P]>& MaybeCallable<T[P]>;
-};
-
-type F = (...args: any[]) => any;
-
-type Callable<T extends F> = {
-  (...args: any[]):
-      Dingus&DingusAttrs<ReturnType<T>>&MaybeCallable<ReturnType<T>>;
-};
-
-type MaybeCallable<T> = T extends F ? Callable<T>: {};
-
-export function dingus<T>(name?: string): Dingus&DingusAttrs<T>&
-    MaybeCallable<T>;
+export async function copyToClipboard(text: string): Promise<void> {
+  try {
+    // TODO(hjd): Fix typescript type for navigator.
+    // tslint:disable-next-line no-any
+    await(navigator as any).clipboard.writeText(text);
+  } catch (err) {
+    console.error(`Failed to copy "${text}" to clipboard: ${err}`);
+  }
+}

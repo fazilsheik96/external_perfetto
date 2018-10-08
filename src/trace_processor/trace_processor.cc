@@ -19,6 +19,7 @@
 #include <sqlite3.h>
 #include <functional>
 
+#include "perfetto/base/time.h"
 #include "src/trace_processor/counters_table.h"
 #include "src/trace_processor/json_trace_parser.h"
 #include "src/trace_processor/process_table.h"
@@ -29,10 +30,12 @@
 #include "src/trace_processor/sched_tracker.h"
 #include "src/trace_processor/slice_table.h"
 #include "src/trace_processor/slice_tracker.h"
+#include "src/trace_processor/span_operator_table.h"
 #include "src/trace_processor/string_table.h"
 #include "src/trace_processor/table.h"
 #include "src/trace_processor/thread_table.h"
 #include "src/trace_processor/trace_sorter.h"
+#include "src/trace_processor/window_operator_table.h"
 
 #include "perfetto/trace_processor/raw_query.pb.h"
 
@@ -44,13 +47,13 @@ TraceProcessor::TraceProcessor(const Config& cfg) {
   PERFETTO_CHECK(sqlite3_open(":memory:", &db) == SQLITE_OK);
   db_.reset(std::move(db));
 
+  context_.storage.reset(new TraceStorage());
   context_.slice_tracker.reset(new SliceTracker(&context_));
   context_.sched_tracker.reset(new SchedTracker(&context_));
   context_.proto_parser.reset(new ProtoTraceParser(&context_));
   context_.process_tracker.reset(new ProcessTracker(&context_));
   context_.sorter.reset(
       new TraceSorter(&context_, cfg.optimization_mode, cfg.window_size_ns));
-  context_.storage.reset(new TraceStorage());
 
   ProcessTable::RegisterTable(*db_, context_.storage.get());
   SchedSliceTable::RegisterTable(*db_, context_.storage.get());
@@ -58,6 +61,8 @@ TraceProcessor::TraceProcessor(const Config& cfg) {
   StringTable::RegisterTable(*db_, context_.storage.get());
   ThreadTable::RegisterTable(*db_, context_.storage.get());
   CountersTable::RegisterTable(*db_, context_.storage.get());
+  SpanOperatorTable::RegisterTable(*db_, context_.storage.get());
+  WindowOperatorTable::RegisterTable(*db_, context_.storage.get());
 }
 
 TraceProcessor::~TraceProcessor() = default;
@@ -97,6 +102,8 @@ void TraceProcessor::ExecuteQuery(
     std::function<void(const protos::RawQueryResult&)> callback) {
   protos::RawQueryResult proto;
   query_interrupted_.store(false, std::memory_order_relaxed);
+
+  base::TimeNanos t_start = base::GetWallTimeNs();
 
   const auto& sql = args.sql_query();
   sqlite3_stmt* raw_stmt;
@@ -171,6 +178,8 @@ void TraceProcessor::ExecuteQuery(
     query_interrupted_ = false;
   }
 
+  base::TimeNanos t_end = base::GetWallTimeNs();
+  proto.set_execution_time_ns(static_cast<uint64_t>((t_end - t_start).count()));
   callback(proto);
 }
 

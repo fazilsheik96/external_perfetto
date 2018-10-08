@@ -33,16 +33,19 @@ class CountersTable : public Table {
     kName = 1,
     kValue = 2,
     kDuration = 3,
-    kRef = 4,
-    kRefType = 5,
+    kValueDelta = 4,
+    kRef = 5,
+    kRefType = 6,
   };
 
   static void RegisterTable(sqlite3* db, const TraceStorage* storage);
 
-  CountersTable(const TraceStorage*);
+  CountersTable(sqlite3*, const TraceStorage*);
 
   // Table implementation.
-  std::unique_ptr<Table::Cursor> CreateCursor() override;
+  Table::Schema CreateSchema(int argc, const char* const* argv) override;
+  std::unique_ptr<Table::Cursor> CreateCursor(const QueryConstraints&,
+                                              sqlite3_value**) override;
   int BestIndex(const QueryConstraints&, BestIndexInfo*) override;
 
  private:
@@ -51,16 +54,13 @@ class CountersTable : public Table {
     Cursor(const TraceStorage*);
 
     // Implementation of Table::Cursor.
-    int Filter(const QueryConstraints&, sqlite3_value**) override;
     int Next() override;
     int Eof() override;
     int Column(sqlite3_context*, int N) override;
 
    private:
-    bool filter_by_cpu_ = false;
-    uint32_t current_cpu_ = 0;
-    size_t index_in_cpu_ = 0;
-    uint32_t filter_cpu_ = 0;
+    size_t num_rows_;
+    size_t row_ = 0;
 
     const TraceStorage* const storage_;
   };
