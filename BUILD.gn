@@ -62,6 +62,7 @@ group("all") {
     if (!build_with_android) {
       deps += [
         ":trace_processor",
+        "src/tracing:consumer_api_test",
         "tools/trace_to_text",
       ]
     }
@@ -163,16 +164,17 @@ if (!build_with_chromium) {
   }
 
   if (monolithic_binaries) {
-    libtraced_shared_target_type = "source_set"
+    libperfetto_target_type = "source_set"
   } else {
-    libtraced_shared_target_type = "shared_library"
+    libperfetto_target_type = "shared_library"
   }
 
-  target(libtraced_shared_target_type, "libtraced_shared") {
+  target(libperfetto_target_type, "libperfetto") {
     deps = [
       "gn:default_deps",
       "src/traced/probes",
       "src/traced/service",
+      "src/tracing:api",
     ]
   }
 
@@ -181,7 +183,7 @@ if (!build_with_chromium) {
   # log buffers.
   executable("traced") {
     deps = [
-      ":libtraced_shared",
+      ":libperfetto",
       "gn:default_deps",
       "include/perfetto/traced",
     ]
@@ -194,7 +196,7 @@ if (!build_with_chromium) {
   # Registers as a Producer on the traced daemon.
   executable("traced_probes") {
     deps = [
-      ":libtraced_shared",
+      ":libperfetto",
       "gn:default_deps",
       "include/perfetto/traced",
     ]
@@ -269,6 +271,28 @@ if (!build_with_chromium) {
       "src/ipc:buffered_frame_deserializer_fuzzer",
       "src/traced/probes/ftrace:cpu_reader_fuzzer",
       "test:end_to_end_shared_memory_fuzzer",
+    ]
+  }
+}
+
+if (!build_with_chromium) {
+  # TODO(fmayer): Investigate shared library for common pieces.
+  shared_library("heapprofd_client") {
+    deps = [
+      "src/profiling/memory:malloc_hooks",
+    ]
+  }
+
+  executable("heapprofd") {
+    deps = [
+      "gn:default_deps",
+      "src/base",
+      "src/base:unix_socket",
+      "src/profiling/memory:daemon",
+      "src/profiling/memory:wire_protocol",
+    ]
+    sources = [
+      "src/profiling/memory/main.cc",
     ]
   }
 }

@@ -12,4 +12,15 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-export const CPU_COUNTER_TRACK_KIND = 'CpuCounterTrack';
+export const PROCESS_SUMMARY_TRACK = 'ProcessSummaryTrack';
+
+// TODO(dproy): Consider deduping with CPU summary data.
+export interface Data {
+  start: number;
+  end: number;
+  resolution: number;
+  bucketSizeSeconds: number;
+  utilizations: Float64Array;
+}
+
+export interface Config { upid: number; }
