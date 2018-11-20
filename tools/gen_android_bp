@@ -64,7 +64,7 @@ target_host_only = [
 ]
 
 # Arguments for the GN output directory.
-gn_args = 'target_os="android" target_cpu="arm" is_debug=false build_with_android=true'
+gn_args = 'target_os="android" target_cpu="arm" is_debug=false perfetto_build_with_android=true'
 
 # All module names are prefixed with this string to avoid collisions.
 module_prefix = 'perfetto_'
@@ -396,6 +396,7 @@ def make_genrules_for_action(blueprint, desc, target_name):
     parser.add_argument('--plugin')
     parser.add_argument('--plugin_out')
     parser.add_argument('--descriptor_set_out')
+    parser.add_argument('--include_imports', action='store_true')
     parser.add_argument('protos', nargs=argparse.REMAINDER)
     args = parser.parse_args(args[1:])
 

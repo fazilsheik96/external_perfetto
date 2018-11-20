@@ -46,7 +46,7 @@
 #include "src/profiling/memory/wire_protocol.h"
 
 namespace perfetto {
-
+namespace profiling {
 namespace {
 
 size_t kMaxFrames = 1000;
@@ -82,26 +82,6 @@ std::unique_ptr<unwindstack::Regs> CreateFromRawData(unwindstack::ArchEnum arch,
 }
 
 }  // namespace
-
-size_t RegSize(unwindstack::ArchEnum arch) {
-  switch (arch) {
-    case unwindstack::ARCH_X86:
-      return unwindstack::X86_REG_LAST * sizeof(uint32_t);
-    case unwindstack::ARCH_X86_64:
-      return unwindstack::X86_64_REG_LAST * sizeof(uint64_t);
-    case unwindstack::ARCH_ARM:
-      return unwindstack::ARM_REG_LAST * sizeof(uint32_t);
-    case unwindstack::ARCH_ARM64:
-      return unwindstack::ARM64_REG_LAST * sizeof(uint64_t);
-    case unwindstack::ARCH_MIPS:
-      return unwindstack::MIPS_REG_LAST * sizeof(uint32_t);
-    case unwindstack::ARCH_MIPS64:
-      return unwindstack::MIPS64_REG_LAST * sizeof(uint64_t);
-    case unwindstack::ARCH_UNKNOWN:
-      PERFETTO_DFATAL("Invalid architecture");
-      return 0;
-  }
-}
 
 StackMemory::StackMemory(int mem_fd, uint64_t sp, uint8_t* stack, size_t size)
     : mem_fd_(mem_fd), sp_(sp), stack_end_(sp + size), stack_(stack) {}
@@ -155,12 +135,12 @@ void FileDescriptorMaps::Reset() {
   maps_.clear();
 }
 
-bool DoUnwind(WireMessage* msg, ProcessMetadata* metadata, AllocRecord* out) {
+bool DoUnwind(WireMessage* msg, UnwindingMetadata* metadata, AllocRecord* out) {
   AllocMetadata* alloc_metadata = msg->alloc_header;
   std::unique_ptr<unwindstack::Regs> regs(
       CreateFromRawData(alloc_metadata->arch, alloc_metadata->register_data));
   if (regs == nullptr) {
-    PERFETTO_ELOG("regs");
+    PERFETTO_DLOG("regs");
     return false;
   }
   out->alloc_metadata = *alloc_metadata;
@@ -195,7 +175,7 @@ bool HandleUnwindingRecord(UnwindingRecord* rec, BookkeepingRecord* out) {
                           &msg))
     return false;
   if (msg.record_type == RecordType::Malloc) {
-    std::shared_ptr<ProcessMetadata> metadata = rec->metadata.lock();
+    std::shared_ptr<UnwindingMetadata> metadata = rec->metadata.lock();
     if (!metadata) {
       // Process has already gone away.
       return false;
@@ -221,14 +201,17 @@ bool HandleUnwindingRecord(UnwindingRecord* rec, BookkeepingRecord* out) {
   }
 }
 
-__attribute__((noreturn)) void UnwindingMainLoop(
-    BoundedQueue<UnwindingRecord>* input_queue,
-    BoundedQueue<BookkeepingRecord>* output_queue) {
+void UnwindingMainLoop(BoundedQueue<UnwindingRecord>* input_queue,
+                       BoundedQueue<BookkeepingRecord>* output_queue) {
   for (;;) {
-    UnwindingRecord rec = input_queue->Get();
+    UnwindingRecord rec;
+    if (!input_queue->Get(&rec))
+      return;
     BookkeepingRecord out;
     if (HandleUnwindingRecord(&rec, &out))
       output_queue->Add(std::move(out));
   }
 }
+
+}  // namespace profiling
 }  // namespace perfetto

@@ -28,6 +28,7 @@ function fakeTrack(state: State, id: string): TrackState {
     engineId: '1',
     kind: 'SOME_TRACK_KIND',
     name: 'A track',
+    trackGroup: SCROLLING_TRACK_GROUP,
     config: {},
   };
   state.tracks[id] = track;
@@ -114,8 +115,9 @@ test('reorder tracks', () => {
 
   const twice = produce(once, draft => {
     StateActions.moveTrack(draft, {
-      trackId: `${firstTrackId}`,
-      direction: 'down',
+      srcId: `${firstTrackId}`,
+      op: 'after',
+      dstId: `${secondTrackId}`,
     });
   });
 
@@ -133,8 +135,9 @@ test('reorder pinned to scrolling', () => {
 
   const after = produce(state, draft => {
     StateActions.moveTrack(draft, {
-      trackId: 'b',
-      direction: 'down',
+      srcId: 'b',
+      op: 'before',
+      dstId: 'c',
     });
   });
 
@@ -152,8 +155,9 @@ test('reorder scrolling to pinned', () => {
 
   const after = produce(state, draft => {
     StateActions.moveTrack(draft, {
-      trackId: 'b',
-      direction: 'up',
+      srcId: 'b',
+      op: 'after',
+      dstId: 'a',
     });
   });
 
@@ -171,8 +175,9 @@ test('reorder clamp bottom', () => {
 
   const after = produce(state, draft => {
     StateActions.moveTrack(draft, {
-      trackId: 'a',
-      direction: 'up',
+      srcId: 'a',
+      op: 'before',
+      dstId: 'a',
     });
   });
   expect(after).toEqual(state);
@@ -188,8 +193,9 @@ test('reorder clamp top', () => {
 
   const after = produce(state, draft => {
     StateActions.moveTrack(draft, {
-      trackId: 'c',
-      direction: 'down',
+      srcId: 'c',
+      op: 'after',
+      dstId: 'c',
     });
   });
   expect(after).toEqual(state);
@@ -230,16 +236,21 @@ test('unpin', () => {
 });
 
 test('open trace', () => {
-  const after = produce(createEmptyState(), draft => {
+  const state = createEmptyState();
+  state.nextId = 100;
+  const recordConfig = state.recordConfig;
+  const after = produce(state, draft => {
     StateActions.openTraceFromUrl(draft, {
       url: 'https://example.com/bar',
     });
   });
 
   const engineKeys = Object.keys(after.engines);
+  expect(after.nextId).toBe(101);
   expect(engineKeys.length).toBe(1);
   expect(after.engines[engineKeys[0]].source).toBe('https://example.com/bar');
   expect(after.route).toBe('/viewer');
+  expect(after.recordConfig).toBe(recordConfig);
 });
 
 test('open second trace from file', () => {
@@ -265,9 +276,8 @@ test('open second trace from file', () => {
   });
 
   const engineKeys = Object.keys(thrice.engines);
-  expect(engineKeys.length).toBe(2);
-  expect(thrice.engines[engineKeys[0]].source).toBe('https://example.com/bar');
-  expect(thrice.engines[engineKeys[1]].source).toBe('https://example.com/foo');
+  expect(engineKeys.length).toBe(1);
+  expect(thrice.engines[engineKeys[0]].source).toBe('https://example.com/foo');
   expect(thrice.pinnedTracks.length).toBe(0);
   expect(thrice.scrollingTracks.length).toBe(0);
   expect(thrice.route).toBe('/viewer');

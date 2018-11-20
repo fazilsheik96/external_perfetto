@@ -130,7 +130,7 @@ VerifyStream::~VerifyStream() {
 }
 
 FtraceEventName::FtraceEventName(const std::string& full_name) {
-  if (full_name == "removed") {
+  if (full_name.rfind("removed", 0) != std::string::npos) {
     valid_ = false;
     return;
   }
@@ -308,10 +308,10 @@ ProtoType InferProtoType(const FtraceEvent::Field& field) {
 void PrintEventFormatterMain(const std::set<std::string>& events) {
   printf(
       "\nAdd output to FormatEventText in "
-      "tools/ftrace_proto_gen/ftrace_event_formatter.cc\n");
+      "tools/trace_to_text/ftrace_event_formatter.cc\n");
   for (auto event : events) {
     printf(
-        "else if (event.has_%s()) {\nconst auto& inner = event.%s();\nline = "
+        "else if (event.has_%s()) {\nconst auto& inner = event.%s();\nreturn "
         "Format%s(inner);\n} ",
         event.c_str(), event.c_str(), ToCamelCase(event).c_str());
   }
@@ -332,7 +332,7 @@ void PrintInodeHandlerMain(const std::string& event_name,
 }
 
 void PrintEventFormatterUsingStatements(const std::set<std::string>& events) {
-  printf("\nAdd output to tools/ftrace_proto_gen/ftrace_event_formatter.cc\n");
+  printf("\nAdd output to tools/trace_to_text/ftrace_event_formatter.cc\n");
   for (auto event : events) {
     printf("using protos::%sFtraceEvent;\n", ToCamelCase(event).c_str());
   }
@@ -340,7 +340,7 @@ void PrintEventFormatterUsingStatements(const std::set<std::string>& events) {
 
 void PrintEventFormatterFunctions(const std::set<std::string>& events) {
   printf(
-      "\nAdd output to tools/ftrace_proto_gen/ftrace_event_formatter.cc and "
+      "\nAdd output to tools/trace_to_text/ftrace_event_formatter.cc and "
       "then manually go through format files to match fields\n");
   for (auto event : events) {
     printf(
@@ -360,7 +360,12 @@ bool GenerateProto(const FtraceEvent& format, Proto* proto_out) {
   for (const FtraceEvent::Field& field : format.fields) {
     std::string name = GetNameFromTypeAndName(field.type_and_name);
     // TODO(hjd): Handle dup names.
-    if (name == "" || seen.count(name))
+    // sa_handler is problematic because glib headers redefine it at the
+    // preprocessor level. It's impossible to have a variable or a function
+    // called sa_handler. On the good side, we realistically don't care about
+    // this field, it's just easier to skip it.
+    if (name == "" || seen.count(name) || name == "sa_handler" ||
+        name == "errno")
       continue;
     seen.insert(name);
     ProtoType type = InferProtoType(field);
@@ -401,6 +406,7 @@ void GenerateFtraceEventProto(const std::vector<FtraceEventName>& raw_whitelist,
   // TODO: Figure out a story for reconciling the various clocks.
   optional uint64 timestamp = 1;
 
+  // Kernel pid (do not confuse with userspace pid aka tgid)
   optional uint32 pid = 2;
 
   oneof event {

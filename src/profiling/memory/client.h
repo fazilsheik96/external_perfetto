@@ -27,6 +27,7 @@
 #include "src/profiling/memory/wire_protocol.h"
 
 namespace perfetto {
+namespace profiling {
 
 class BorrowedSocket;
 
@@ -36,8 +37,11 @@ class SocketPool {
   SocketPool(std::vector<base::ScopedFile> sockets);
 
   BorrowedSocket Borrow();
+  void Shutdown();
 
  private:
+  bool shutdown_ = false;
+
   void Return(base::ScopedFile fd);
   std::mutex mutex_;
   std::condition_variable cv_;
@@ -135,8 +139,10 @@ class Client {
                         uint64_t alloc_address,
                         void* (*unhooked_malloc)(size_t),
                         void (*unhooked_free)(void*));
+  void Shutdown();
 
   ClientConfiguration client_config_for_testing() { return client_config_; }
+  bool inited() { return inited_; }
 
  private:
   size_t ShouldSampleAlloc(uint64_t alloc_size,
@@ -144,7 +150,7 @@ class Client {
                            void (*unhooked_free)(void*));
   const char* GetStackBase();
 
-  bool inited_ = false;
+  std::atomic<bool> inited_{false};
   ClientConfiguration client_config_;
   PThreadKey pthread_key_;
   SocketPool socket_pool_;
@@ -153,6 +159,7 @@ class Client {
   std::atomic<uint64_t> sequence_number_{0};
 };
 
+}  // namespace profiling
 }  // namespace perfetto
 
 #endif  // SRC_PROFILING_MEMORY_CLIENT_H_

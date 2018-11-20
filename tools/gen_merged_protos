@@ -18,7 +18,6 @@ from __future__ import division
 from __future__ import print_function
 import os
 import re
-import subprocess
 import sys
 
 CONFIG_PROTOS = (
@@ -31,6 +30,7 @@ CONFIG_PROTOS = (
   'protos/perfetto/config/sys_stats/sys_stats_config.proto',
   'protos/perfetto/config/test_config.proto',
   'protos/perfetto/config/trace_config.proto',
+  'protos/perfetto/config/profiling/heapprofd_config.proto',
 )
 
 MERGED_CONFIG_PROTO = 'protos/perfetto/config/perfetto_config.proto'
@@ -42,6 +42,7 @@ TRACE_PROTOS = (
   'protos/perfetto/trace/ftrace/ftrace_event_bundle.proto',
   'protos/perfetto/trace/ftrace/ftrace_event.proto',
   'protos/perfetto/trace/filesystem/inode_file_map.proto',
+  'protos/perfetto/trace/ps/process_stats.proto',
   'protos/perfetto/trace/ps/process_tree.proto',
   'protos/perfetto/trace/clock_snapshot.proto',
   'protos/perfetto/trace/sys_stats/sys_stats.proto',
@@ -153,7 +154,6 @@ def merge_protos(proto_paths, output_path):
     used_type = use.group(2)
     field_number = use.group(3)
     if used_type not in types:
-      # replacement = '{}reserved {};'.format(indentation, field_number)
       replacement = '{}// removed field with id {}'.format(
           indentation, field_number)
       substitutions.append((everything, replacement))

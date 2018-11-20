@@ -43,7 +43,15 @@ using UniqueTid = uint32_t;
 // StringId is an offset into |string_pool_|.
 using StringId = size_t;
 
-enum RefType { kNoRef = 0, kUTID = 1, kCPU_ID = 2, kIrq = 3, kSoftIrq = 4 };
+enum RefType {
+  kNoRef = 0,
+  kUtid = 1,
+  kCpuId = 2,
+  kIrq = 3,
+  kSoftIrq = 4,
+  kUpid = 5,
+  kMax = kUpid + 1
+};
 
 // Stores a data inside a trace file in a columnar form. This makes it efficient
 // to read or search across a single field of the trace (e.g. all the thread
@@ -56,7 +64,9 @@ class TraceStorage {
   virtual ~TraceStorage();
 
   struct Stats {
-    uint64_t mismatched_sched_switch_tids_ = 0;
+    uint64_t mismatched_sched_switch_tids = 0;
+    uint64_t rss_stat_no_process = 0;
+    uint64_t mem_counter_no_process = 0;
   };
 
   // Information about a unique process seen in a trace.
@@ -116,14 +126,14 @@ class TraceStorage {
 
   class NestableSlices {
    public:
-    inline void AddSlice(uint64_t start_ns,
-                         uint64_t duration_ns,
-                         UniqueTid utid,
-                         StringId cat,
-                         StringId name,
-                         uint8_t depth,
-                         uint64_t stack_id,
-                         uint64_t parent_stack_id) {
+    inline size_t AddSlice(uint64_t start_ns,
+                           uint64_t duration_ns,
+                           UniqueTid utid,
+                           StringId cat,
+                           StringId name,
+                           uint8_t depth,
+                           uint64_t stack_id,
+                           uint64_t parent_stack_id) {
       start_ns_.emplace_back(start_ns);
       durations_.emplace_back(duration_ns);
       utids_.emplace_back(utid);
@@ -132,6 +142,15 @@ class TraceStorage {
       depths_.emplace_back(depth);
       stack_ids_.emplace_back(stack_id);
       parent_stack_ids_.emplace_back(parent_stack_id);
+      return slice_count() - 1;
+    }
+
+    void set_duration(size_t index, uint64_t duration_ns) {
+      durations_[index] = duration_ns;
+    }
+
+    void set_stack_id(size_t index, uint64_t stack_id) {
+      stack_ids_[index] = stack_id;
     }
 
     size_t slice_count() const { return start_ns_.size(); }
@@ -163,14 +182,12 @@ class TraceStorage {
                              uint64_t duration,
                              StringId name_id,
                              double value,
-                             double value_delta,
                              int64_t ref,
                              RefType type) {
       timestamps_.emplace_back(timestamp);
       durations_.emplace_back(duration);
       name_ids_.emplace_back(name_id);
       values_.emplace_back(value);
-      value_deltas_.emplace_back(value_delta);
       refs_.emplace_back(ref);
       types_.emplace_back(type);
       return counter_count() - 1;
@@ -178,10 +195,6 @@ class TraceStorage {
 
     void set_duration(size_t index, uint64_t duration) {
       durations_[index] = duration;
-    }
-
-    void set_value_delta(size_t index, double value_delta) {
-      value_deltas_[index] = value_delta;
     }
 
     size_t counter_count() const { return timestamps_.size(); }
@@ -194,8 +207,6 @@ class TraceStorage {
 
     const std::deque<double>& values() const { return values_; }
 
-    const std::deque<double>& value_deltas() const { return value_deltas_; }
-
     const std::deque<int64_t>& refs() const { return refs_; }
 
     const std::deque<RefType>& types() const { return types_; }
@@ -205,7 +216,61 @@ class TraceStorage {
     std::deque<uint64_t> durations_;
     std::deque<StringId> name_ids_;
     std::deque<double> values_;
-    std::deque<double> value_deltas_;
+    std::deque<int64_t> refs_;
+    std::deque<RefType> types_;
+  };
+
+  class SqlStats {
+   public:
+    static constexpr size_t kMaxLogEntries = 100;
+    void RecordQueryBegin(const std::string& query,
+                          uint64_t time_queued,
+                          uint64_t time_started);
+    void RecordQueryEnd(uint64_t time_ended);
+    size_t size() const { return queries_.size(); }
+    const std::deque<std::string>& queries() const { return queries_; }
+    const std::deque<uint64_t>& times_queued() const { return times_queued_; }
+    const std::deque<uint64_t>& times_started() const { return times_started_; }
+    const std::deque<uint64_t>& times_ended() const { return times_ended_; }
+
+   private:
+    std::deque<std::string> queries_;
+    std::deque<uint64_t> times_queued_;
+    std::deque<uint64_t> times_started_;
+    std::deque<uint64_t> times_ended_;
+  };
+
+  class Instants {
+   public:
+    inline size_t AddInstantEvent(uint64_t timestamp,
+                                  StringId name_id,
+                                  double value,
+                                  int64_t ref,
+                                  RefType type) {
+      timestamps_.emplace_back(timestamp);
+      name_ids_.emplace_back(name_id);
+      values_.emplace_back(value);
+      refs_.emplace_back(ref);
+      types_.emplace_back(type);
+      return instant_count() - 1;
+    }
+
+    size_t instant_count() const { return timestamps_.size(); }
+
+    const std::deque<uint64_t>& timestamps() const { return timestamps_; }
+
+    const std::deque<StringId>& name_ids() const { return name_ids_; }
+
+    const std::deque<double>& values() const { return values_; }
+
+    const std::deque<int64_t>& refs() const { return refs_; }
+
+    const std::deque<RefType>& types() const { return types_; }
+
+   private:
+    std::deque<uint64_t> timestamps_;
+    std::deque<StringId> name_ids_;
+    std::deque<double> values_;
     std::deque<int64_t> refs_;
     std::deque<RefType> types_;
   };
@@ -221,8 +286,6 @@ class TraceStorage {
     unique_processes_.emplace_back(pid);
     return static_cast<UniquePid>(unique_processes_.size() - 1);
   }
-
-  void AddMismatchedSchedSwitch() { ++stats_.mismatched_sched_switch_tids_; }
 
   // Return an unqiue identifier for the contents of each string.
   // The string is copied internally and can be destroyed after this called.
@@ -265,6 +328,17 @@ class TraceStorage {
   const Counters& counters() const { return counters_; }
   Counters* mutable_counters() { return &counters_; }
 
+  const SqlStats& sql_stats() const { return sql_stats_; }
+  SqlStats* mutable_sql_stats() { return &sql_stats_; }
+
+  const Instants& instants() const { return instants_; }
+  Instants* mutable_instants() { return &instants_; }
+
+  const Stats& stats() const { return stats_; }
+  Stats* mutable_stats() { return &stats_; }
+
+  const std::deque<std::string>& string_pool() const { return string_pool_; }
+
   // |unique_processes_| always contains at least 1 element becuase the 0th ID
   // is reserved to indicate an invalid process.
   size_t process_count() const { return unique_processes_.size() - 1; }
@@ -281,7 +355,7 @@ class TraceStorage {
 
   using StringHash = uint64_t;
 
-  // Metadata counters for events being added.
+  // Stats about parsing the trace.
   Stats stats_;
 
   // One entry for each CPU in the trace.
@@ -305,6 +379,12 @@ class TraceStorage {
   // Counter events from the trace. This includes CPU frequency events as well
   // systrace trace_marker counter events.
   Counters counters_;
+
+  SqlStats sql_stats_;
+  // These are instantaneous events in the trace. They have no duration
+  // and do not have a value that make sense to track over time.
+  // e.g. signal events
+  Instants instants_;
 };
 
 }  // namespace trace_processor

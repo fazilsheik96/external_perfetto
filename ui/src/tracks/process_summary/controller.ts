@@ -58,16 +58,15 @@ class ProcessSummaryTrackController extends TrackController<Config, Data> {
           // TODO(dproy): This query is faster if we write it as x < utid < y.
           `(${utids.join(',')})`);
       await this.query(`create virtual table ${this.tableName('span')}
-                     using span(${processSliceView}, ${
-                                                       this.tableName('window')
-                                                     }, cpu);`);
+          using span_join(${processSliceView} PARTITIONED cpu,
+                          ${this.tableName('window')} PARTITIONED cpu);`);
       this.setup = true;
     }
 
     // |resolution| is in s/px we want # ns for 10px window:
     const bucketSizeNs = Math.round(resolution * 10 * 1e9);
     const windowStartNs = Math.floor(startNs / bucketSizeNs) * bucketSizeNs;
-    const windowDurNs = endNs - windowStartNs;
+    const windowDurNs = Math.max(1, endNs - windowStartNs);
 
     this.query(`update ${this.tableName('window')} set
       window_start=${windowStartNs},

@@ -17,6 +17,10 @@ import * as m from 'mithril';
 import {Actions} from '../common/actions';
 
 import {globals} from './globals';
+import {
+  isLegacyTrace,
+  openFileWithLegacyTraceViewer,
+} from './legacy_trace_viewer';
 
 const ALL_PROCESSES_QUERY = 'select name, pid from process order by name;';
 
@@ -39,7 +43,8 @@ order by cpu_sec desc limit 100;`;
 
 const CYCLES_PER_P_STATE_PER_CPU = `
 select ref as cpu, value as freq, sum(dur * value)/1e6 as mcycles
-from counters group by cpu, freq order by mcycles desc limit 20;`;
+from counters where name = 'cpufreq' group by cpu, freq
+order by mcycles desc limit 32;`;
 
 const CPU_TIME_BY_CLUSTER_BY_PROCESS = `
 select process.name as process, thread, core, cpu_sec from (
@@ -49,6 +54,16 @@ select process.name as process, thread, core, cpu_sec from (
     from sched group by utid, cpug order by cpu_sec desc
   ) inner join thread using(utid)
 ) inner join process using(upid) limit 30;`;
+
+
+const SQL_STATS = `
+with first as (select started as ts from sqlstats limit 1)
+select query,
+    round((max(ended - started, 0))/1e6) as runtime_ms,
+    round((max(started - queued, 0))/1e6) as latency_ms,
+    round((started - first.ts)/1e6) as t_start_ms
+from sqlstats, first
+order by started desc`;
 
 function createCannedQuery(query: string): (_: Event) => void {
   return (e: Event) => {
@@ -62,10 +77,10 @@ function createCannedQuery(query: string): (_: Event) => void {
 }
 
 const EXAMPLE_ANDROID_TRACE_URL =
-    'https://storage.googleapis.com/perfetto-misc/example_trace_30s';
+    'https://storage.googleapis.com/perfetto-misc/example_android_trace_30s_1';
 
 const EXAMPLE_CHROME_TRACE_URL =
-    'https://storage.googleapis.com/perfetto-misc/example_chrome_trace_10s.json';
+    'https://storage.googleapis.com/perfetto-misc/example_chrome_trace_4s_1.json';
 
 const SECTIONS = [
   {
@@ -74,8 +89,13 @@ const SECTIONS = [
     expanded: true,
     items: [
       {t: 'Open trace file', a: popupFileSelectionDialog, i: 'folder_open'},
+      {
+        t: 'Open with legacy UI',
+        a: popupFileSelectionDialogOldUI,
+        i: 'folder_open'
+      },
       {t: 'Record new trace', a: navigateRecord, i: 'fiber_smart_record'},
-      {t: 'Show timeline', a: navigateViewer, i: 'fiber_smart_record'},
+      {t: 'Show timeline', a: navigateViewer, i: 'line_style'},
       {t: 'Share current trace', a: dispatchCreatePermalink, i: 'share'},
     ],
   },
@@ -120,13 +140,46 @@ const SECTIONS = [
         a: createCannedQuery(CPU_TIME_BY_CLUSTER_BY_PROCESS),
         i: 'search',
       },
+      {
+        t: 'Debug SQL performance',
+        a: createCannedQuery(SQL_STATS),
+        i: 'bug_report',
+      },
     ],
   },
+  {
+    title: 'Support',
+    summary: 'Documentation & Bugs',
+    items: [
+      {
+        t: 'Documentation',
+        a: 'https://perfetto.dev',
+        i: 'help',
+      },
+      {
+        t: 'Report a bug',
+        a: 'https://goto.google.com/perfetto-ui-bug',
+        i: 'bug_report',
+      },
+    ],
+  },
+
 ];
+
+function getFileElement(): HTMLInputElement {
+  return document.querySelector('input[type=file]')! as HTMLInputElement;
+}
 
 function popupFileSelectionDialog(e: Event) {
   e.preventDefault();
-  (document.querySelector('input[type=file]')! as HTMLInputElement).click();
+  delete getFileElement().dataset['useCatapultLegacyUi'];
+  getFileElement().click();
+}
+
+function popupFileSelectionDialogOldUI(e: Event) {
+  e.preventDefault();
+  getFileElement().dataset['useCatapultLegacyUi'] = '1';
+  getFileElement().click();
 }
 
 function openTraceUrl(url: string): (e: Event) => void {
@@ -135,13 +188,25 @@ function openTraceUrl(url: string): (e: Event) => void {
     globals.dispatch(Actions.openTraceFromUrl({url}));
   };
 }
-
 function onInputElementFileSelectionChanged(e: Event) {
   if (!(e.target instanceof HTMLInputElement)) {
     throw new Error('Not an input element');
   }
   if (!e.target.files) return;
-  globals.dispatch(Actions.openTraceFromFile({file: e.target.files[0]}));
+  const file = e.target.files[0];
+
+  if (e.target.dataset['useCatapultLegacyUi'] === '1') {
+    // Switch back the old catapult UI.
+    if (isLegacyTrace(file.name)) {
+      openFileWithLegacyTraceViewer(file);
+    } else {
+      globals.dispatch(Actions.convertTraceToJson({file}));
+    }
+    return;
+  }
+
+  // Open with the current UI.
+  globals.dispatch(Actions.openTraceFromFile({file}));
 }
 
 function navigateRecord(e: Event) {
@@ -156,10 +221,7 @@ function navigateViewer(e: Event) {
 
 function dispatchCreatePermalink(e: Event) {
   e.preventDefault();
-  // TODO(hjd): Should requestId not be set to nextId++ in the controller?
-  globals.dispatch(Actions.createPermalink({
-    requestId: new Date().toISOString(),
-  }));
+  globals.dispatch(Actions.createPermalink({}));
 }
 
 export class Sidebar implements m.ClassComponent {
@@ -170,8 +232,11 @@ export class Sidebar implements m.ClassComponent {
       for (const item of section.items) {
         vdomItems.push(
             m('li',
-              m(`a[href=#]`,
-                {onclick: item.a},
+              m(`a`,
+                {
+                  onclick: typeof item.a === 'function' ? item.a : null,
+                  href: typeof item.a === 'string' ? item.a : '#',
+                },
                 m('i.material-icons', item.i),
                 item.t)));
       }

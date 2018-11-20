@@ -47,8 +47,10 @@ class CpuSliceTrackController extends TrackController<Config, Data> {
     if (this.setup === false) {
       await this.query(
           `create virtual table window_${this.trackState.id} using window;`);
-      await this.query(`create virtual table span_${this.trackState.id}
-                     using span(sched, window_${this.trackState.id}, cpu);`);
+      await this.query(
+          `create virtual table span_${this.trackState.id}
+              using span_join(sched PARTITIONED cpu,
+                              window_${this.trackState.id} PARTITIONED cpu);`);
       this.setup = true;
     }
 
@@ -61,7 +63,7 @@ class CpuSliceTrackController extends TrackController<Config, Data> {
     if (isQuantized) {
       windowStartNs = Math.floor(windowStartNs / bucketSizeNs) * bucketSizeNs;
     }
-    const windowDurNs = endNs - windowStartNs;
+    const windowDurNs = Math.max(1, endNs - windowStartNs);
 
     this.query(`update window_${this.trackState.id} set
       window_start=${windowStartNs},

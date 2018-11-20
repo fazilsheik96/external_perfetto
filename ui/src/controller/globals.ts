@@ -31,8 +31,9 @@ import {
 export interface App {
   state: State;
   dispatch(action: DeferredAction): void;
-  publish(what: 'OverviewData'|'TrackData'|'Threads'|'QueryResult', data: {}):
-      void;
+  publish(
+      what: 'OverviewData'|'TrackData'|'Threads'|'QueryResult'|'LegacyTrace',
+      data: {}, transferList?: Array<{}>): void;
 }
 
 /**
@@ -73,13 +74,11 @@ class Globals implements App {
     let runAgain = false;
     let summary = this._queuedActions.map(action => action.type).join(', ');
     summary = `Controllers loop (${summary})`;
-    console.time(summary);
     for (let iter = 0; runAgain || this._queuedActions.length > 0; iter++) {
       if (iter > 100) throw new Error('Controllers are stuck in a livelock');
       const actions = this._queuedActions;
       this._queuedActions = new Array<DeferredAction>();
       for (const action of actions) {
-        console.debug('Applying action', action);
         this.applyAction(action);
       }
       this._runningControllers = true;
@@ -90,7 +89,6 @@ class Globals implements App {
       }
     }
     assertExists(this._frontend).send<void>('updateState', [this.state]);
-    console.timeEnd(summary);
   }
 
   createEngine(): Engine {
@@ -104,8 +102,11 @@ class Globals implements App {
   }
 
   // TODO: this needs to be cleaned up.
-  publish(what: 'OverviewData'|'TrackData'|'Threads'|'QueryResult', data: {}) {
-    assertExists(this._frontend).send<void>(`publish${what}`, [data]);
+  publish(
+      what: 'OverviewData'|'TrackData'|'Threads'|'QueryResult'|'LegacyTrace',
+      data: {}, transferList?: Array<{}>) {
+    assertExists(this._frontend)
+        .send<void>(`publish${what}`, [data], transferList);
   }
 
   get state(): State {
