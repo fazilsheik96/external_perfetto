@@ -25,6 +25,7 @@
 #include <vector>
 
 #include "perfetto/base/logging.h"
+#include "perfetto/base/optional.h"
 #include "perfetto/base/string_view.h"
 #include "perfetto/base/utils.h"
 
@@ -43,14 +44,28 @@ using UniqueTid = uint32_t;
 // StringId is an offset into |string_pool_|.
 using StringId = size_t;
 
+// Identifiers for all the tables in the database.
+enum TableId : uint8_t {
+  // Intentionally don't have TableId == 0 so that RowId == 0 can refer to an
+  // invalid row id.
+  kCounters = 1,
+};
+
+// The top 8 bits are set to the TableId and the bottom 32 to the row of the
+// table.
+using RowId = uint64_t;
+
+static const RowId kInvalidRowId = 0;
+
 enum RefType {
-  kNoRef = 0,
-  kUtid = 1,
-  kCpuId = 2,
-  kIrq = 3,
-  kSoftIrq = 4,
-  kUpid = 5,
-  kMax = kUpid + 1
+  kRefNoRef = 0,
+  kRefUtid = 1,
+  kRefCpuId = 2,
+  kRefIrq = 3,
+  kRefSoftIrq = 4,
+  kRefUpid = 5,
+  kRefUtidLookupUpid = 6,
+  kRefMax
 };
 
 // Stores a data inside a trace file in a columnar form. This makes it efficient
@@ -84,8 +99,52 @@ class TraceStorage {
     uint64_t start_ns = 0;
     uint64_t end_ns = 0;
     StringId name_id = 0;
-    UniquePid upid = 0;
+    base::Optional<UniquePid> upid;
     uint32_t tid = 0;
+  };
+
+  // Generic key value storage which can be referenced by other tables.
+  class Args {
+   public:
+    // Varardic type representing the possible values for the args table.
+    struct Varardic {
+      enum Type { kInt, kString, kReal };
+
+      Varardic(int64_t int_val) : type(kInt), int_value(int_val) {}
+      Varardic(StringId string_val) : type(kString), string_value(string_val) {}
+      Varardic(double real_val) : type(kReal), real_value(real_val) {}
+
+      Type type;
+      union {
+        int64_t int_value;
+        StringId string_value;
+        double real_value;
+      };
+    };
+
+    const std::deque<RowId>& ids() const { return ids_; }
+    const std::deque<StringId>& flat_keys() const { return flat_keys_; }
+    const std::deque<StringId>& keys() const { return keys_; }
+    const std::deque<Varardic>& arg_values() const { return arg_values_; }
+    size_t args_count() const { return ids_.size(); }
+
+    void AddArg(RowId id, StringId flat_key, StringId key, int64_t value) {
+      if (id == kInvalidRowId)
+        return;
+
+      ids_.emplace_back(id);
+      flat_keys_.emplace_back(flat_key);
+      keys_.emplace_back(key);
+      arg_values_.emplace_back(value);
+      args_for_id_.emplace(id, args_count() - 1);
+    }
+
+   private:
+    std::deque<RowId> ids_;
+    std::deque<StringId> flat_keys_;
+    std::deque<StringId> keys_;
+    std::deque<Varardic> arg_values_;
+    std::multimap<RowId, size_t> args_for_id_;
   };
 
   class Slices {
@@ -293,7 +352,7 @@ class TraceStorage {
   virtual StringId InternString(base::StringView);
 
   Process* GetMutableProcess(UniquePid upid) {
-    PERFETTO_DCHECK(upid > 0 && upid < unique_processes_.size());
+    PERFETTO_DCHECK(upid < unique_processes_.size());
     return &unique_processes_[upid];
   }
 
@@ -309,7 +368,7 @@ class TraceStorage {
   }
 
   const Process& GetProcess(UniquePid upid) const {
-    PERFETTO_DCHECK(upid > 0 && upid < unique_processes_.size());
+    PERFETTO_DCHECK(upid < unique_processes_.size());
     return unique_processes_[upid];
   }
 
@@ -317,6 +376,11 @@ class TraceStorage {
     // Allow utid == 0 for idle thread retrieval.
     PERFETTO_DCHECK(utid < unique_threads_.size());
     return unique_threads_[utid];
+  }
+
+  static RowId CreateRowId(TableId table, uint32_t row) {
+    static constexpr uint8_t kRowIdTableShift = 32;
+    return (static_cast<uint64_t>(table) << kRowIdTableShift) | row;
   }
 
   const Slices& slices() const { return slices_; }
@@ -336,6 +400,9 @@ class TraceStorage {
 
   const Stats& stats() const { return stats_; }
   Stats* mutable_stats() { return &stats_; }
+
+  const Args& args() const { return args_; }
+  Args* mutable_args() { return &args_; }
 
   const std::deque<std::string>& string_pool() const { return string_pool_; }
 
@@ -361,6 +428,9 @@ class TraceStorage {
   // One entry for each CPU in the trace.
   Slices slices_;
 
+  // Args for all other tables.
+  Args args_;
+
   // One entry for each unique string in the trace.
   std::deque<std::string> string_pool_;
 
@@ -381,6 +451,7 @@ class TraceStorage {
   Counters counters_;
 
   SqlStats sql_stats_;
+
   // These are instantaneous events in the trace. They have no duration
   // and do not have a value that make sense to track over time.
   // e.g. signal events

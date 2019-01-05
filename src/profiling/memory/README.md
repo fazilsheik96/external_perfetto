@@ -4,7 +4,22 @@ _These are temporary instructions while heapprofd is under development. They are
 subject to frequent change and will be obsoleted once heapprofd is integrated
 into Perfetto._
 
-Currently heapprofd only works with SELinux disabled and when run as root.
+
+## Using convenience script
+
+Use the `tools/heap_profile` script to heap profile a process. See all the
+arguments using `tools/heap_profile -h`, or use the defaults and just profile a
+process (e.g. `system_server`):
+
+```
+tools/heap_profile --name system_server
+```
+
+This will create a heap dump every second for a default of 1 minute.
+Head to http://pprof/ and upload the gzipped protos to get a visualization.
+
+## Manual
+Currently heapprofd only works with SELinux disabled.
 
 To start profiling the process `${PID}`, run the following sequence of commands.
 Adjust the `INTERVAL` to trade-off runtime impact for higher accuracy of the
@@ -47,7 +62,9 @@ While we work on UI support, you can convert the trace into pprof compatible
 heap dumps. To do so, run
 
 ```
-trace_to_text profile /tmp/trace
+prodaccess
+/google/bin/users/fmayer/third_party/perfetto:trace_to_text_sig/trace_to_text \
+profile /tmp/trace
 ```
 
 This will create a directory in `/tmp/` containing the heap dumps. Run
