@@ -35,9 +35,11 @@ proto_sources = [
 protozero_library("zero") {
   deps = [
     "../config:zero",
+    "android:zero",
     "chrome:zero",
     "filesystem:zero",
     "ftrace:zero",
+    "power:zero",
     "profiling:zero",
     "ps:zero",
     "sys_stats:zero",
@@ -54,9 +56,11 @@ proto_library("lite") {
   deps = [
     ":minimal_lite",
     "../config:lite",
+    "android:lite",
     "chrome:lite",
     "filesystem:lite",
     "ftrace:lite",
+    "power:lite",
     "profiling:lite",
     "ps:lite",
     "sys_stats:lite",

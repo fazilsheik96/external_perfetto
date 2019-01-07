@@ -31,6 +31,7 @@
 #include "perfetto/tracing/core/trace_packet.h"
 #include "perfetto/tracing/core/trace_writer.h"
 #include "src/base/test/test_task_runner.h"
+#include "src/tracing/core/trace_writer_impl.h"
 #include "src/tracing/test/mock_consumer.h"
 #include "src/tracing/test/mock_producer.h"
 #include "src/tracing/test/test_shared_memory.h"
@@ -48,6 +49,7 @@ using ::testing::InSequence;
 using ::testing::Invoke;
 using ::testing::InvokeWithoutArgs;
 using ::testing::Mock;
+using ::testing::Not;
 using ::testing::Property;
 using ::testing::StrictMock;
 
@@ -95,6 +97,10 @@ class TracingServiceImplTest : public testing::Test {
     return svc->GetProducer(producer_id)->allowed_target_buffers_;
   }
 
+  const std::map<WriterID, BufferID>& GetWriters(ProducerID producer_id) {
+    return svc->GetProducer(producer_id)->writers_;
+  }
+
   size_t GetNumPendingFlushes() {
     return tracing_session()->pending_flushes.size();
   }
@@ -108,6 +114,24 @@ class TracingServiceImplTest : public testing::Test {
       task_runner.PostDelayedTask([timer_expired] { timer_expired(); }, 1);
       task_runner.RunUntilCheckpoint(checkpoint_name);
     }
+  }
+
+  void WaitForTraceWritersChanged(ProducerID producer_id) {
+    static int i = 0;
+    auto checkpoint_name = "writers_changed_" + std::to_string(producer_id) +
+                           "_" + std::to_string(i++);
+    auto writers_changed = task_runner.CreateCheckpoint(checkpoint_name);
+    auto writers = GetWriters(producer_id);
+    std::function<void()> task;
+    task = [&task, writers, writers_changed, producer_id, this]() {
+      if (writers != GetWriters(producer_id)) {
+        writers_changed();
+        return;
+      }
+      task_runner.PostDelayedTask(task, 1);
+    };
+    task_runner.PostDelayedTask(task, 1);
+    task_runner.RunUntilCheckpoint(checkpoint_name);
   }
 
   base::TestTaskRunner task_runner;
@@ -820,7 +844,7 @@ TEST_F(TracingServiceImplTest, ResynchronizeTraceStreamUsingSyncMarker) {
   const int kNumMarkers = 5;
   auto writer = producer->CreateTraceWriter("data_source");
   for (int i = 1; i <= 100; i++) {
-    std::string payload(i, 'A' + (i % 25));
+    std::string payload(static_cast<size_t>(i), 'A' + (i % 25));
     writer->NewTracePacket()->set_for_testing()->set_str(payload.c_str());
     if (i % (100 / kNumMarkers) == 0) {
       writer->Flush();
@@ -941,7 +965,7 @@ TEST_F(TracingServiceImplTest, AllowedBuffers) {
   ds_config23->set_target_buffer(2);  // same buffer as data_source2.2.
   consumer->EnableTracing(trace_config);
 
-  ASSERT_EQ(3, tracing_session()->num_buffers());
+  ASSERT_EQ(3u, tracing_session()->num_buffers());
   std::set<BufferID> expected_buffers_producer1 = {
       tracing_session()->buffers_index[0]};
   std::set<BufferID> expected_buffers_producer2 = {
@@ -982,6 +1006,140 @@ TEST_F(TracingServiceImplTest, AllowedBuffers) {
   consumer->FreeBuffers();
   EXPECT_EQ(std::set<BufferID>(), GetAllowedTargetBuffers(producer1_id));
   EXPECT_EQ(std::set<BufferID>(), GetAllowedTargetBuffers(producer2_id));
+}
+
+#if !PERFETTO_DCHECK_IS_ON()
+TEST_F(TracingServiceImplTest, CommitToForbiddenBufferIsDiscarded) {
+  std::unique_ptr<MockConsumer> consumer = CreateMockConsumer();
+  consumer->Connect(svc.get());
+
+  std::unique_ptr<MockProducer> producer = CreateMockProducer();
+  producer->Connect(svc.get(), "mock_producer");
+  ProducerID producer_id = *last_producer_id();
+  producer->RegisterDataSource("data_source");
+
+  EXPECT_EQ(std::set<BufferID>(), GetAllowedTargetBuffers(producer_id));
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(128);
+  trace_config.add_buffers()->set_size_kb(128);
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("data_source");
+  ds_config->set_target_buffer(0);
+  consumer->EnableTracing(trace_config);
+
+  ASSERT_EQ(2u, tracing_session()->num_buffers());
+  std::set<BufferID> expected_buffers = {tracing_session()->buffers_index[0]};
+  EXPECT_EQ(expected_buffers, GetAllowedTargetBuffers(producer_id));
+
+  producer->WaitForTracingSetup();
+  producer->WaitForDataSourceSetup("data_source");
+  producer->WaitForDataSourceStart("data_source");
+
+  // Calling StartTracing() should be a noop (% a DLOG statement) because the
+  // trace config didn't have the |deferred_start| flag set.
+  consumer->StartTracing();
+
+  // Try to write to the correct buffer.
+  std::unique_ptr<TraceWriter> writer = producer->endpoint()->CreateTraceWriter(
+      tracing_session()->buffers_index[0]);
+  {
+    auto tp = writer->NewTracePacket();
+    tp->set_for_testing()->set_str("good_payload");
+  }
+
+  auto flush_request = consumer->Flush();
+  producer->WaitForFlush(writer.get());
+  ASSERT_TRUE(flush_request.WaitForReply());
+
+  // Try to write to the wrong buffer.
+  writer = producer->endpoint()->CreateTraceWriter(
+      tracing_session()->buffers_index[1]);
+  {
+    auto tp = writer->NewTracePacket();
+    tp->set_for_testing()->set_str("bad_payload");
+  }
+
+  flush_request = consumer->Flush();
+  producer->WaitForFlush(writer.get());
+  ASSERT_TRUE(flush_request.WaitForReply());
+
+  consumer->DisableTracing();
+  producer->WaitForDataSourceStop("data_source");
+  consumer->WaitForTracingDisabled();
+
+  auto packets = consumer->ReadBuffers();
+  EXPECT_THAT(packets, Contains(Property(&protos::TracePacket::for_testing,
+                                         Property(&protos::TestEvent::str,
+                                                  Eq("good_payload")))));
+  EXPECT_THAT(packets, Not(Contains(Property(&protos::TracePacket::for_testing,
+                                             Property(&protos::TestEvent::str,
+                                                      Eq("bad_payload"))))));
+
+  consumer->FreeBuffers();
+  EXPECT_EQ(std::set<BufferID>(), GetAllowedTargetBuffers(producer_id));
+}
+#endif  // !PERFETTO_DCHECK_IS_ON()
+
+TEST_F(TracingServiceImplTest, RegisterAndUnregisterTraceWriter) {
+  std::unique_ptr<MockConsumer> consumer = CreateMockConsumer();
+  consumer->Connect(svc.get());
+
+  std::unique_ptr<MockProducer> producer = CreateMockProducer();
+  producer->Connect(svc.get(), "mock_producer");
+  ProducerID producer_id = *last_producer_id();
+  producer->RegisterDataSource("data_source");
+
+  EXPECT_TRUE(GetWriters(producer_id).empty());
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(128);
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("data_source");
+  ds_config->set_target_buffer(0);
+  consumer->EnableTracing(trace_config);
+
+  producer->WaitForTracingSetup();
+  producer->WaitForDataSourceSetup("data_source");
+  producer->WaitForDataSourceStart("data_source");
+
+  // Calling StartTracing() should be a noop (% a DLOG statement) because the
+  // trace config didn't have the |deferred_start| flag set.
+  consumer->StartTracing();
+
+  // Creating the trace writer should register it with the service.
+  std::unique_ptr<TraceWriter> writer = producer->endpoint()->CreateTraceWriter(
+      tracing_session()->buffers_index[0]);
+
+  WaitForTraceWritersChanged(producer_id);
+
+  std::map<WriterID, BufferID> expected_writers;
+  expected_writers[writer->writer_id()] = tracing_session()->buffers_index[0];
+  EXPECT_EQ(expected_writers, GetWriters(producer_id));
+
+  // Verify writing works.
+  {
+    auto tp = writer->NewTracePacket();
+    tp->set_for_testing()->set_str("payload");
+  }
+
+  auto flush_request = consumer->Flush();
+  producer->WaitForFlush(writer.get());
+  ASSERT_TRUE(flush_request.WaitForReply());
+
+  // Destroying the writer should unregister it.
+  writer.reset();
+  WaitForTraceWritersChanged(producer_id);
+  EXPECT_TRUE(GetWriters(producer_id).empty());
+
+  consumer->DisableTracing();
+  producer->WaitForDataSourceStop("data_source");
+  consumer->WaitForTracingDisabled();
+
+  auto packets = consumer->ReadBuffers();
+  EXPECT_THAT(packets, Contains(Property(
+                           &protos::TracePacket::for_testing,
+                           Property(&protos::TestEvent::str, Eq("payload")))));
 }
 
 }  // namespace perfetto

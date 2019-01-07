@@ -40,6 +40,7 @@
 #include "perfetto/tracing/core/data_source_descriptor.h"
 #include "perfetto/tracing/core/trace_config.h"
 #include "perfetto/tracing/core/trace_packet.h"
+#include "src/perfetto_cmd/config.h"
 #include "src/perfetto_cmd/pbtxt_to_pb.h"
 
 #include "perfetto/config/trace_config.pb.h"
@@ -57,8 +58,7 @@
 namespace perfetto {
 namespace {
 
-constexpr char kDefaultDropBoxTag[] = "perfetto";
-constexpr uint32_t kFlushTimeoutMs = 1000;
+constexpr uint32_t kFlushTimeoutMs = 5000;
 
 perfetto::PerfettoCmd* g_consumer_cmd;
 
@@ -132,21 +132,35 @@ using protozero::proto_utils::MakeTagLengthDelimited;
 int PerfettoCmd::PrintUsage(const char* argv0) {
   PERFETTO_ELOG(R"(
 Usage: %s
-  --background     -b     : Exits immediately and continues tracing in background
+  --background     -d     : Exits immediately and continues tracing in background
   --config         -c     : /path/to/trace/config/file or - for stdin
   --out            -o     : /path/to/out/trace/file or - for stdout
-  --dropbox        -d TAG : Upload trace into DropBox using tag TAG (default: %s)
-  --no-guardrails  -n     : Ignore guardrails triggered when using --dropbox (for testing).
+  --dropbox           TAG : Upload trace into DropBox using tag TAG
+  --no-guardrails         : Ignore guardrails triggered when using --dropbox (for testing).
+  --txt                   : Parse config as pbtxt. Not a stable API. Not for production use.
   --reset-guardrails      : Resets the state of the guardails and exits (for testing).
-  --txt            -t     : Parse config as pbtxt. Not a stable API. Not for production use.
   --help           -h
+
+
+light configuration flags: (only when NOT using -c/--config)
+  --time           -t      : Trace duration N[s,m,h] (default: 10s)
+  --buffer         -b      : Ring buffer size N[mb,gb] (default: 32mb)
+  --size           -s      : Max file size N[mb,gb] (default: in-memory ring-buffer only)
+  ATRACE_CAT               : Record ATRACE_CAT (e.g. wm)
+  FTRACE_GROUP/FTRACE_NAME : Record ftrace event (e.g. sched/sched_switch)
+  FTRACE_GROUP/*           : Record all events in group (e.g. sched/*)
+
 
 statsd-specific flags:
   --alert-id           : ID of the alert that triggered this trace.
   --config-id          : ID of the triggering config.
   --config-uid         : UID of app which registered the config.
+
+Detach mode. DISCOURAGED, read https://docs.perfetto.dev/#/detached-mode :
+  --detach=key          : Detach from the tracing session with the given key.
+  --attach=key [--stop] : Re-attach to the session (optionally stop tracing once reattached).
 )",
-                argv0, kDefaultDropBoxTag);
+                argv0);
   return 1;
 }
 
@@ -156,20 +170,34 @@ int PerfettoCmd::Main(int argc, char** argv) {
     OPT_CONFIG_ID,
     OPT_CONFIG_UID,
     OPT_RESET_GUARDRAILS,
+    OPT_PBTXT_CONFIG,
+    OPT_DROPBOX,
+    OPT_ATRACE_APP,
+    OPT_IGNORE_GUARDRAILS,
+    OPT_DETACH,
+    OPT_ATTACH,
+    OPT_STOP,
   };
   static const struct option long_options[] = {
       // |option_index| relies on the order of options, don't reshuffle them.
       {"help", required_argument, nullptr, 'h'},
       {"config", required_argument, nullptr, 'c'},
       {"out", required_argument, nullptr, 'o'},
-      {"background", no_argument, nullptr, 'b'},
-      {"dropbox", optional_argument, nullptr, 'd'},
-      {"no-guardrails", optional_argument, nullptr, 'n'},
-      {"txt", optional_argument, nullptr, 't'},
+      {"background", no_argument, nullptr, 'd'},
+      {"time", required_argument, nullptr, 't'},
+      {"buffer", required_argument, nullptr, 'b'},
+      {"size", required_argument, nullptr, 's'},
+      {"no-guardrails", no_argument, nullptr, OPT_IGNORE_GUARDRAILS},
+      {"txt", no_argument, nullptr, OPT_PBTXT_CONFIG},
+      {"dropbox", required_argument, nullptr, OPT_DROPBOX},
       {"alert-id", required_argument, nullptr, OPT_ALERT_ID},
       {"config-id", required_argument, nullptr, OPT_CONFIG_ID},
       {"config-uid", required_argument, nullptr, OPT_CONFIG_UID},
       {"reset-guardrails", no_argument, nullptr, OPT_RESET_GUARDRAILS},
+      {"detach", required_argument, nullptr, OPT_DETACH},
+      {"attach", required_argument, nullptr, OPT_ATTACH},
+      {"stop", no_argument, nullptr, OPT_STOP},
+      {"app", required_argument, nullptr, OPT_ATRACE_APP},
       {nullptr, 0, nullptr, 0}};
 
   int option_index = 0;
@@ -181,9 +209,12 @@ int PerfettoCmd::Main(int argc, char** argv) {
   perfetto::protos::TraceConfig::StatsdMetadata statsd_metadata;
   RateLimiter limiter;
 
+  ConfigOptions config_options;
+  bool has_config_options = false;
+
   for (;;) {
     int option =
-        getopt_long(argc, argv, "c:o:bd::nt", long_options, &option_index);
+        getopt_long(argc, argv, "c:o:dt:b:s:", long_options, &option_index);
 
     if (option == -1)
       break;  // EOF.
@@ -220,8 +251,32 @@ int PerfettoCmd::Main(int argc, char** argv) {
     }
 
     if (option == 'd') {
+      background = true;
+      continue;
+    }
+    if (option == 't') {
+      has_config_options = true;
+      config_options.time = std::string(optarg);
+      continue;
+    }
+
+    if (option == 'b') {
+      has_config_options = true;
+      config_options.buffer_size = std::string(optarg);
+      continue;
+    }
+
+    if (option == 's') {
+      has_config_options = true;
+      config_options.max_file_size = std::string(optarg);
+      continue;
+    }
+
+    if (option == OPT_DROPBOX) {
 #if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
-      dropbox_tag_ = optarg ? optarg : kDefaultDropBoxTag;
+      if (!optarg)
+        PERFETTO_FATAL("optarg is null");
+      dropbox_tag_ = optarg;
       continue;
 #else
       PERFETTO_ELOG("DropBox is only supported with Android tree builds");
@@ -229,18 +284,13 @@ int PerfettoCmd::Main(int argc, char** argv) {
 #endif
     }
 
-    if (option == 'b') {
-      background = true;
-      continue;
-    }
-
-    if (option == 'n') {
-      ignore_guardrails = true;
-      continue;
-    }
-
-    if (option == 't') {
+    if (option == OPT_PBTXT_CONFIG) {
       parse_as_pbtxt = true;
+      continue;
+    }
+
+    if (option == OPT_IGNORE_GUARDRAILS) {
+      ignore_guardrails = true;
       continue;
     }
 
@@ -265,9 +315,101 @@ int PerfettoCmd::Main(int argc, char** argv) {
       continue;
     }
 
+    if (option == OPT_ATRACE_APP) {
+      config_options.atrace_apps.push_back(std::string(optarg));
+      has_config_options = true;
+      continue;
+    }
+
+    if (option == OPT_DETACH) {
+      detach_key_ = std::string(optarg);
+      PERFETTO_CHECK(!detach_key_.empty());
+      continue;
+    }
+
+    if (option == OPT_ATTACH) {
+      attach_key_ = std::string(optarg);
+      PERFETTO_CHECK(!attach_key_.empty());
+      continue;
+    }
+
+    if (option == OPT_STOP) {
+      stop_trace_once_attached_ = true;
+      continue;
+    }
+
     return PrintUsage(argv[0]);
   }
 
+  for (ssize_t i = optind; i < argc; i++) {
+    has_config_options = true;
+    config_options.categories.push_back(argv[i]);
+  }
+
+  if (is_detach() && is_attach()) {
+    PERFETTO_ELOG("--attach and --detach are mutually exclusive");
+    return 1;
+  }
+
+  if (is_detach() && background) {
+    PERFETTO_ELOG("--detach and --background are mutually exclusive");
+    return 1;
+  }
+
+  if (stop_trace_once_attached_ && !is_attach()) {
+    PERFETTO_ELOG("--stop is supported only in combination with --attach");
+    return 1;
+  }
+
+  // Parse the trace config. It can be either:
+  // 1) A proto-encoded file/stdin (-c ...).
+  // 2) A proto-text file/stdin (-c ... --txt).
+  // 3) A set of option arguments (-t 10s -s 10m).
+  // The only case in which a trace config is not expected is --attach. In this
+  // case we are just re-attaching to an already started session.
+  perfetto::protos::TraceConfig trace_config_proto;
+  bool parsed = false;
+  if (is_attach()) {
+    if ((!trace_config_raw.empty() || has_config_options)) {
+      PERFETTO_ELOG("Cannot specify a trace config with --attach");
+      return 1;
+    }
+  } else if (has_config_options) {
+    if (!trace_config_raw.empty()) {
+      PERFETTO_ELOG(
+          "Cannot specify both -c/--config and any of --time, --size, "
+          "--buffer, --app, ATRACE_CAT, FTRACE_EVENT");
+      return 1;
+    }
+    parsed = CreateConfigFromOptions(config_options, &trace_config_proto);
+  } else {
+    if (trace_config_raw.empty()) {
+      PERFETTO_ELOG("The TraceConfig is empty");
+      return 1;
+    }
+
+    PERFETTO_DLOG("Parsing TraceConfig, %zu bytes", trace_config_raw.size());
+    if (parse_as_pbtxt) {
+      parsed = ParseTraceConfigPbtxt(config_file_name, trace_config_raw,
+                                     &trace_config_proto);
+    } else {
+      parsed = trace_config_proto.ParseFromString(trace_config_raw);
+    }
+  }
+
+  if (parsed) {
+    *trace_config_proto.mutable_statsd_metadata() = std::move(statsd_metadata);
+    trace_config_.reset(new TraceConfig());
+    trace_config_->FromProto(trace_config_proto);
+    trace_config_raw.clear();
+  } else if (!is_attach()) {
+    PERFETTO_ELOG("The trace config is invalid, bailing out.");
+    return 1;
+  }
+
+  // Set up the output file. Either --out or --dropbox are expected, with the
+  // only exception of --attach. In this case the output file is passed when
+  // detaching.
   if (!trace_out_path_.empty() && !dropbox_tag_.empty()) {
     PERFETTO_ELOG(
         "Can't log to a file (--out) and DropBox (--dropbox) at the same "
@@ -275,35 +417,25 @@ int PerfettoCmd::Main(int argc, char** argv) {
     return 1;
   }
 
-  if (trace_out_path_.empty() && dropbox_tag_.empty()) {
-    return PrintUsage(argv[0]);
-  }
-
-  if (trace_config_raw.empty()) {
-    PERFETTO_ELOG("The TraceConfig is empty");
+  bool open_out_file = true;
+  if (is_attach()) {
+    open_out_file = false;
+    if (!trace_out_path_.empty() || !dropbox_tag_.empty()) {
+      PERFETTO_ELOG("Can't pass an --out file (or --dropbox) to --attach");
+      return 1;
+    }
+  } else if (trace_out_path_.empty() && dropbox_tag_.empty()) {
+    PERFETTO_ELOG("Either --out or --dropbox is required");
+    return 1;
+  } else if (is_detach() && !trace_config_->write_into_file()) {
+    // In detached mode we must pass the file descriptor to the service and
+    // let that one write the trace. We cannot use the IPC readback code path
+    // because the client process is about to exit soon after detaching.
+    PERFETTO_ELOG(
+        "TraceConfig's write_into_file must be true when using --detach");
     return 1;
   }
-
-  perfetto::protos::TraceConfig trace_config_proto;
-  PERFETTO_DLOG("Parsing TraceConfig, %zu bytes", trace_config_raw.size());
-  bool parsed;
-  if (parse_as_pbtxt) {
-    parsed = ParseTraceConfigPbtxt(config_file_name, trace_config_raw,
-                                   &trace_config_proto);
-  } else {
-    parsed = trace_config_proto.ParseFromString(trace_config_raw);
-  }
-
-  if (!parsed) {
-    PERFETTO_ELOG("Could not parse TraceConfig proto");
-    return 1;
-  }
-  *trace_config_proto.mutable_statsd_metadata() = std::move(statsd_metadata);
-  trace_config_.reset(new TraceConfig());
-  trace_config_->FromProto(trace_config_proto);
-  trace_config_raw.clear();
-
-  if (!OpenOutputFile())
+  if (open_out_file && !OpenOutputFile())
     return 1;
 
   if (background) {
@@ -351,6 +483,11 @@ int PerfettoCmd::Main(int argc, char** argv) {
 }
 
 void PerfettoCmd::OnConnect() {
+  if (is_attach()) {
+    consumer_endpoint_->Attach(attach_key_);
+    return;
+  }
+
   PERFETTO_LOG(
       "Connected to the Perfetto traced service, starting tracing for %d ms",
       trace_config_->duration_ms());
@@ -362,6 +499,11 @@ void PerfettoCmd::OnConnect() {
     optional_fd.reset(dup(fileno(*trace_out_stream_)));
 
   consumer_endpoint_->EnableTracing(*trace_config_, std::move(optional_fd));
+
+  if (is_detach()) {
+    consumer_endpoint_->Detach(detach_key_);  // Will invoke OnDetach() soon.
+    return;
+  }
 
   // Failsafe mechanism to avoid waiting indefinitely if the service hangs.
   if (trace_config_->duration_ms()) {
@@ -419,9 +561,8 @@ void PerfettoCmd::FinalizeTraceAndExit() {
     trace_out_stream_.reset();
     did_process_full_trace_ = true;
     if (trace_config_->write_into_file()) {
-      PERFETTO_ILOG("Streamed output to %s", trace_out_path_ == "-"
-                                                 ? "stdout"
-                                                 : trace_out_path_.c_str());
+      // trace_out_path_ might be empty in the case of --attach.
+      PERFETTO_ILOG("Trace written into the output file");
     } else {
       PERFETTO_ILOG(
           "Wrote %" PRIu64 " bytes into %s", bytes_written_,
@@ -495,14 +636,39 @@ void PerfettoCmd::SetupCtrlCSignalHandler() {
   sa.sa_flags = static_cast<decltype(sa.sa_flags)>(SA_RESETHAND | SA_RESTART);
 #pragma GCC diagnostic pop
   sigaction(SIGINT, &sa, nullptr);
+  sigaction(SIGTERM, &sa, nullptr);
 
   task_runner_.AddFileDescriptorWatch(ctrl_c_evt_.fd(), [this] {
-    PERFETTO_LOG("SIGINT received: disabling tracing");
+    PERFETTO_LOG("SIGINT/SIGTERM received: disabling tracing");
     ctrl_c_evt_.Clear();
     consumer_endpoint_->Flush(kFlushTimeoutMs, [this](bool) {
       consumer_endpoint_->DisableTracing();
     });
   });
+}
+
+void PerfettoCmd::OnDetach(bool success) {
+  if (!success) {
+    PERFETTO_ELOG("Session detach failed");
+    exit(1);
+  }
+  exit(0);
+}
+
+void PerfettoCmd::OnAttach(bool success, const TraceConfig& trace_config) {
+  if (!success) {
+    PERFETTO_ELOG("Session re-attach failed. Check service logs for details");
+    exit(1);
+  }
+
+  trace_config_.reset(new TraceConfig(trace_config));
+  PERFETTO_DCHECK(trace_config_->write_into_file());
+
+  if (stop_trace_once_attached_) {
+    consumer_endpoint_->Flush(kFlushTimeoutMs, [this](bool) {
+      consumer_endpoint_->DisableTracing();
+    });
+  }
 }
 
 int __attribute__((visibility("default")))

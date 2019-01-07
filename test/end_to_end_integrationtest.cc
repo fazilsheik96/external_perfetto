@@ -24,10 +24,13 @@
 #include "gtest/gtest.h"
 #include "perfetto/base/build_config.h"
 #include "perfetto/base/logging.h"
+#include "perfetto/base/pipe.h"
 #include "perfetto/traced/traced.h"
 #include "perfetto/tracing/core/trace_config.h"
 #include "perfetto/tracing/core/trace_packet.h"
 #include "src/base/test/test_task_runner.h"
+#include "src/traced/probes/ftrace/ftrace_controller.h"
+#include "src/traced/probes/ftrace/ftrace_procfs.h"
 #include "src/tracing/ipc/default_socket.h"
 #include "test/task_runner_thread.h"
 #include "test/task_runner_thread_delegates.h"
@@ -38,6 +41,32 @@
 
 namespace perfetto {
 
+namespace {
+
+class PerfettoTest : public ::testing::Test {
+ public:
+  void SetUp() override {
+    // TODO(primiano): refactor this, it's copy/pasted in three places now.
+    size_t index = 0;
+    constexpr auto kTracingPaths = FtraceController::kTracingPaths;
+    while (!ftrace_procfs_ && kTracingPaths[index]) {
+      ftrace_procfs_ = FtraceProcfs::Create(kTracingPaths[index++]);
+    }
+    if (!ftrace_procfs_)
+      return;
+    ftrace_procfs_->SetTracingOn(false);
+  }
+
+  void TearDown() override {
+    if (ftrace_procfs_)
+      ftrace_procfs_->SetTracingOn(false);
+  }
+
+  std::unique_ptr<FtraceProcfs> ftrace_procfs_;
+};
+
+}  // namespace
+
 // If we're building on Android and starting the daemons ourselves,
 // create the sockets in a world-writable location.
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) && \
@@ -47,14 +76,14 @@ namespace perfetto {
 #define TEST_PRODUCER_SOCK_NAME ::perfetto::GetProducerSocket()
 #endif
 
-// TODO(b/73453011): reenable this on more platforms (including standalone
-// Android).
+// TODO(b/73453011): reenable on more platforms (including standalone Android).
 #if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD)
-#define MAYBE_TestFtraceProducer TestFtraceProducer
+#define TreeHuggerOnly(x) x
 #else
-#define MAYBE_TestFtraceProducer DISABLED_TestFtraceProducer
+#define TreeHuggerOnly(x) DISABLED_##x
 #endif
-TEST(PerfettoTest, MAYBE_TestFtraceProducer) {
+
+TEST_F(PerfettoTest, TreeHuggerOnly(TestFtraceProducer)) {
   base::TestTaskRunner task_runner;
 
   TestHelper helper(&task_runner);
@@ -97,7 +126,119 @@ TEST(PerfettoTest, MAYBE_TestFtraceProducer) {
   }
 }
 
-TEST(PerfettoTest, TestFakeProducer) {
+TEST_F(PerfettoTest, TreeHuggerOnly(TestFtraceFlush)) {
+  base::TestTaskRunner task_runner;
+
+  TestHelper helper(&task_runner);
+  helper.StartServiceIfRequired();
+
+#if PERFETTO_BUILDFLAG(PERFETTO_START_DAEMONS)
+  TaskRunnerThread producer_thread("perfetto.prd");
+  producer_thread.Start(std::unique_ptr<ProbesProducerDelegate>(
+      new ProbesProducerDelegate(TEST_PRODUCER_SOCK_NAME)));
+#endif
+
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+
+  const uint32_t kTestTimeoutMs = 30000;
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(16);
+  trace_config.set_duration_ms(kTestTimeoutMs);
+
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("linux.ftrace");
+
+  auto* ftrace_config = ds_config->mutable_ftrace_config();
+  *ftrace_config->add_ftrace_events() = "print";
+
+  helper.StartTracing(trace_config);
+
+  // Do a first flush just to synchronize with the producer. The problem here
+  // is that, on a Linux workstation, the producer can take several seconds just
+  // to get to the point where ftrace is ready. We use the flush ack as a
+  // synchronization point.
+  helper.FlushAndWait(kTestTimeoutMs);
+
+  EXPECT_TRUE(ftrace_procfs_->IsTracingEnabled());
+  const char kMarker[] = "just_one_event";
+  EXPECT_TRUE(ftrace_procfs_->WriteTraceMarker(kMarker));
+
+  // This is the real flush we are testing.
+  helper.FlushAndWait(kTestTimeoutMs);
+
+  helper.DisableTracing();
+  helper.WaitForTracingDisabled(kTestTimeoutMs);
+
+  helper.ReadData();
+  helper.WaitForReadData();
+
+  int marker_found = 0;
+  for (const auto& packet : helper.trace()) {
+    for (int i = 0; i < packet.ftrace_events().event_size(); i++) {
+      const auto& ev = packet.ftrace_events().event(i);
+      if (ev.has_print() && ev.print().buf().find(kMarker) != std::string::npos)
+        marker_found++;
+    }
+  }
+  ASSERT_EQ(marker_found, 1);
+}
+
+TEST_F(PerfettoTest, TreeHuggerOnly(TestBatteryTracing)) {
+  base::TestTaskRunner task_runner;
+
+  TestHelper helper(&task_runner);
+  helper.StartServiceIfRequired();
+
+#if PERFETTO_BUILDFLAG(PERFETTO_START_DAEMONS)
+  TaskRunnerThread producer_thread("perfetto.prd");
+  producer_thread.Start(std::unique_ptr<ProbesProducerDelegate>(
+      new ProbesProducerDelegate(TEST_PRODUCER_SOCK_NAME)));
+#else
+  base::ignore_result(TEST_PRODUCER_SOCK_NAME);
+#endif
+
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(128);
+  trace_config.set_duration_ms(3000);
+
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("android.power");
+  ds_config->set_target_buffer(0);
+  auto* power_config = ds_config->mutable_android_power_config();
+  power_config->set_battery_poll_ms(250);
+  *power_config->add_battery_counters() =
+      AndroidPowerConfig::BATTERY_COUNTER_CHARGE;
+  *power_config->add_battery_counters() =
+      AndroidPowerConfig::BATTERY_COUNTER_CAPACITY_PERCENT;
+
+  helper.StartTracing(trace_config);
+  helper.WaitForTracingDisabled();
+
+  helper.ReadData();
+  helper.WaitForReadData();
+
+  const auto& packets = helper.trace();
+  ASSERT_GT(packets.size(), 0u);
+
+  bool has_battery_packet = false;
+  for (const auto& packet : packets) {
+    if (!packet.has_battery())
+      continue;
+    has_battery_packet = true;
+    // Unfortunately we cannot make any assertions on the charge counter.
+    // On some devices it can reach negative values (b/64685329).
+    EXPECT_GE(packet.battery().capacity_percent(), 0);
+    EXPECT_LE(packet.battery().capacity_percent(), 100);
+  }
+
+  ASSERT_TRUE(has_battery_packet);
+}
+
+TEST_F(PerfettoTest, TestFakeProducer) {
   base::TestTaskRunner task_runner;
 
   TestHelper helper(&task_runner);
@@ -138,7 +279,7 @@ TEST(PerfettoTest, TestFakeProducer) {
   }
 }
 
-TEST(PerfettoTest, VeryLargePackets) {
+TEST_F(PerfettoTest, VeryLargePackets) {
   base::TestTaskRunner task_runner;
 
   TestHelper helper(&task_runner);
@@ -181,6 +322,93 @@ TEST(PerfettoTest, VeryLargePackets) {
     for (size_t i = 0; i < msg_size; i++)
       ASSERT_EQ(i < msg_size - 1 ? '.' : 0, packet.for_testing().str()[i]);
   }
+}
+
+TEST_F(PerfettoTest, DetachAndReattach) {
+  base::TestTaskRunner task_runner;
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(1024);
+  trace_config.set_duration_ms(10000);  // Max timeout, session is ended before.
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("android.perfetto.FakeProducer");
+  static constexpr size_t kNumPackets = 10;
+  ds_config->mutable_for_testing()->set_message_count(kNumPackets);
+  ds_config->mutable_for_testing()->set_message_size(32);
+
+  // Enable tracing and detach as soon as it gets started.
+  TestHelper helper(&task_runner);
+  helper.StartServiceIfRequired();
+  auto* fake_producer = helper.ConnectFakeProducer();
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+  helper.StartTracing(trace_config);
+
+  // Detach.
+  helper.DetachConsumer("key");
+
+  // Write data while detached.
+  helper.WaitForProducerEnabled();
+  auto on_data_written = task_runner.CreateCheckpoint("data_written");
+  fake_producer->ProduceEventBatch(helper.WrapTask(on_data_written));
+  task_runner.RunUntilCheckpoint("data_written");
+
+  // Then reattach the consumer.
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+  helper.AttachConsumer("key");
+
+  helper.DisableTracing();
+  helper.WaitForTracingDisabled();
+
+  helper.ReadData();
+  helper.WaitForReadData();
+  const auto& packets = helper.trace();
+  ASSERT_EQ(packets.size(), kNumPackets);
+}
+
+// Tests that a detached trace session is automatically cleaned up if the
+// consumer doesn't re-attach before its expiration time.
+TEST_F(PerfettoTest, ReattachFailsAfterTimeout) {
+  base::TestTaskRunner task_runner;
+
+  TraceConfig trace_config;
+  trace_config.add_buffers()->set_size_kb(1024);
+  trace_config.set_duration_ms(250);
+  trace_config.set_write_into_file(true);
+  trace_config.set_file_write_period_ms(100000);
+  auto* ds_config = trace_config.add_data_sources()->mutable_config();
+  ds_config->set_name("android.perfetto.FakeProducer");
+  ds_config->mutable_for_testing()->set_message_count(1);
+  ds_config->mutable_for_testing()->set_message_size(32);
+  ds_config->mutable_for_testing()->set_send_batch_on_register(true);
+
+  // Enable tracing and detach as soon as it gets started.
+  TestHelper helper(&task_runner);
+  helper.StartServiceIfRequired();
+  helper.ConnectFakeProducer();
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+
+  auto pipe_pair = base::Pipe::Create();
+  helper.StartTracing(trace_config, std::move(pipe_pair.wr));
+
+  // Detach.
+  helper.DetachConsumer("key");
+
+  // Use the file EOF (write end closed) as a way to detect when the trace
+  // session is ended.
+  char buf[1024];
+  while (PERFETTO_EINTR(read(*pipe_pair.rd, buf, sizeof(buf))) > 0) {
+  }
+
+  // Give some margin for the tracing service to destroy the session.
+  usleep(250000);
+
+  // Reconnect and find out that it's too late and the session is gone.
+  helper.ConnectConsumer();
+  helper.WaitForConsumerConnect();
+  EXPECT_FALSE(helper.AttachConsumer("key"));
 }
 
 }  // namespace perfetto

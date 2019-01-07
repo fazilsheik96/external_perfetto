@@ -16,10 +16,13 @@ import * as protos from '../gen/protos';
 
 // Aliases protos to avoid the super nested namespaces.
 // See https://www.typescriptlang.org/docs/handbook/namespaces.html#aliases
+import IAndroidPowerConfig = protos.perfetto.protos.IAndroidPowerConfig;
 import IProcessStatsConfig = protos.perfetto.protos.IProcessStatsConfig;
 import IRawQueryArgs = protos.perfetto.protos.IRawQueryArgs;
 import ISysStatsConfig = protos.perfetto.protos.ISysStatsConfig;
 import ITraceConfig = protos.perfetto.protos.ITraceConfig;
+import BatteryCounters =
+    protos.perfetto.protos.AndroidPowerConfig.BatteryCounters;
 import MeminfoCounters = protos.perfetto.protos.MeminfoCounters;
 import RawQueryArgs = protos.perfetto.protos.RawQueryArgs;
 import RawQueryResult = protos.perfetto.protos.RawQueryResult;
@@ -32,8 +35,9 @@ import VmstatCounters = protos.perfetto.protos.VmstatCounters;
 export interface Row { [key: string]: number|string; }
 
 function getCell(result: RawQueryResult, column: number, row: number): number|
-    string {
+    string|null {
   const values = result.columns[column];
+  if (values.isNulls![row]) return null;
   switch (result.columnDescriptors[column].type) {
     case RawQueryResult.ColumnDesc.Type.LONG:
       return +values.longValues![row];
@@ -77,17 +81,20 @@ export function* rawQueryResultIter(result: RawQueryResult) {
   for (let rowNum = 0; rowNum < result.numRecords; rowNum++) {
     const row: Row = {};
     for (const [name, colNum] of columns) {
-      row[name] = getCell(result, colNum, rowNum);
+      const cell = getCell(result, colNum, rowNum);
+      row[name] = cell === null ? '[NULL]' : cell;
     }
     yield row;
   }
 }
 
 export {
+  IAndroidPowerConfig,
   IProcessStatsConfig,
   IRawQueryArgs,
   ISysStatsConfig,
   ITraceConfig,
+  BatteryCounters,
   MeminfoCounters,
   RawQueryArgs,
   RawQueryResult,

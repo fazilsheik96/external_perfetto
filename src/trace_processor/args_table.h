@@ -17,14 +17,13 @@
 #ifndef SRC_TRACE_PROCESSOR_ARGS_TABLE_H_
 #define SRC_TRACE_PROCESSOR_ARGS_TABLE_H_
 
-#include "src/trace_processor/storage_schema.h"
-#include "src/trace_processor/table.h"
+#include "src/trace_processor/storage_table.h"
 #include "src/trace_processor/trace_storage.h"
 
 namespace perfetto {
 namespace trace_processor {
 
-class ArgsTable : public Table {
+class ArgsTable : public StorageTable {
  public:
   using VarardicType = TraceStorage::Args::Varardic::Type;
 
@@ -33,13 +32,25 @@ class ArgsTable : public Table {
   ArgsTable(sqlite3*, const TraceStorage*);
 
   // Table implementation.
-  Table::Schema CreateSchema(int argc, const char* const* argv) override;
+  base::Optional<Table::Schema> Init(int, const char* const*) override;
   std::unique_ptr<Table::Cursor> CreateCursor(const QueryConstraints&,
                                               sqlite3_value**) override;
   int BestIndex(const QueryConstraints&, BestIndexInfo*) override;
 
  private:
-  class ValueColumn final : public StorageSchema::Column {
+  class IdColumn final : public NumericColumn<RowId> {
+   public:
+    IdColumn(std::string col_name,
+             const TraceStorage* storage,
+             const std::deque<RowId>* ids);
+
+    void Filter(int op, sqlite3_value* value, FilteredRowIndex*) const override;
+
+   private:
+    const TraceStorage* storage_ = nullptr;
+  };
+
+  class ValueColumn final : public StorageColumn {
    public:
     ValueColumn(std::string col_name,
                 VarardicType type,
@@ -49,7 +60,7 @@ class ArgsTable : public Table {
 
     Bounds BoundFilter(int op, sqlite3_value* sqlite_val) const override;
 
-    Predicate Filter(int op, sqlite3_value* value) const override;
+    void Filter(int op, sqlite3_value* value, FilteredRowIndex*) const override;
 
     Comparator Sort(const QueryConstraints::OrderBy& ob) const override;
 
@@ -64,7 +75,7 @@ class ArgsTable : public Table {
         case VarardicType::kString:
           return Table::ColumnType::kString;
       }
-      PERFETTO_CHECK(false);
+      PERFETTO_FATAL("Not reached");  // For gcc
     }
 
    private:
@@ -74,7 +85,6 @@ class ArgsTable : public Table {
     const TraceStorage* storage_ = nullptr;
   };
 
-  StorageSchema schema_;
   const TraceStorage* const storage_;
 };
 

@@ -32,22 +32,11 @@ using ::perfetto::protos::pbzero::ProfilePacket;
 }
 
 GlobalCallstackTrie::Node* GlobalCallstackTrie::Node::GetOrCreateChild(
-    const Interner<Frame>::Interned& loc) {
+    const Interned<Frame>& loc) {
   Node* child = children_.Get(loc);
   if (!child)
     child = children_.Emplace(loc, this);
   return child;
-}
-
-std::vector<Interner<Frame>::Interned>
-GlobalCallstackTrie::Node::BuildCallstack() const {
-  const Node* node = this;
-  std::vector<Interner<Frame>::Interned> res;
-  while (node) {
-    res.emplace_back(node->location_);
-    node = node->parent_;
-  }
-  return res;
 }
 
 void HeapTracker::RecordMalloc(
@@ -69,9 +58,19 @@ void HeapTracker::RecordMalloc(
     }
   }
 
-  GlobalCallstackTrie::Node* node =
-      callsites_->IncrementCallsite(callstack, size);
-  allocations_.emplace(address, Allocation(size, sequence_number, node));
+  GlobalCallstackTrie::Node* node = callsites_->CreateCallsite(callstack);
+
+  auto callstack_allocations_it = callstack_allocations_.find(node);
+  if (callstack_allocations_it == callstack_allocations_.end()) {
+    GlobalCallstackTrie::IncrementNode(node);
+    bool inserted;
+    std::tie(callstack_allocations_it, inserted) =
+        callstack_allocations_.emplace(node, node);
+    PERFETTO_DCHECK(inserted);
+  }
+  allocations_.emplace(
+      address,
+      Allocation(size, sequence_number, &(callstack_allocations_it->second)));
 
   // Keep the sequence tracker consistent.
   RecordFree(kNoopFree, sequence_number);
@@ -111,57 +110,96 @@ void HeapTracker::CommitFree(uint64_t sequence_number, uint64_t address) {
 void HeapTracker::Dump(
     ProfilePacket::ProcessHeapSamples* proto,
     std::set<GlobalCallstackTrie::Node*>* callstacks_to_dump) {
-  for (const auto& p : allocations_) {
-    const Allocation& alloc = p.second;
+  // There are two reasons we remove the unused callstack allocations on the
+  // next iteration of Dump:
+  // * We need to remove them after the callstacks were dumped, which currently
+  //   happens after the allocations are dumped.
+  // * This way, we do not destroy and recreate callstacks as frequently.
+  for (auto it_and_alloc : dead_callstack_allocations_) {
+    auto& it = it_and_alloc.first;
+    uint64_t allocated = it_and_alloc.second;
+    const CallstackAllocations& alloc = it->second;
+    if (alloc.allocation_count == allocated && alloc.free_count == allocated)
+      callstack_allocations_.erase(it);
+  }
+  dead_callstack_allocations_.clear();
+
+  for (auto it = callstack_allocations_.begin();
+       it != callstack_allocations_.end(); ++it) {
+    const CallstackAllocations& alloc = it->second;
     callstacks_to_dump->emplace(alloc.node);
     ProfilePacket::HeapSample* sample = proto->add_samples();
     sample->set_callstack_id(alloc.node->id());
-    sample->set_cumulative_allocated(alloc.total_size);
+    sample->set_cumulative_allocated(alloc.allocated);
+    sample->set_cumulative_freed(alloc.freed);
+    sample->set_alloc_count(alloc.allocation_count);
+    sample->set_free_count(alloc.free_count);
+
+    if (alloc.allocation_count == alloc.free_count)
+      dead_callstack_allocations_.emplace_back(it, alloc.allocation_count);
   }
 }
 
-uint64_t GlobalCallstackTrie::GetCumSizeForTesting(
+uint64_t HeapTracker::GetSizeForTesting(
+    const std::vector<unwindstack::FrameData>& stack) {
+  GlobalCallstackTrie::Node* node = callsites_->CreateCallsite(stack);
+  // Hack to make it go away again if it wasn't used before.
+  // This is only good because this is used for testing only.
+  GlobalCallstackTrie::IncrementNode(node);
+  GlobalCallstackTrie::DecrementNode(node);
+  auto it = callstack_allocations_.find(node);
+  if (it == callstack_allocations_.end()) {
+    return 0;
+  }
+  const CallstackAllocations& alloc = it->second;
+  return alloc.allocated - alloc.freed;
+}
+
+std::vector<Interned<Frame>> GlobalCallstackTrie::BuildCallstack(
+    const Node* node) const {
+  std::vector<Interned<Frame>> res;
+  while (node != &root_) {
+    res.emplace_back(node->location_);
+    node = node->parent_;
+  }
+  return res;
+}
+
+GlobalCallstackTrie::Node* GlobalCallstackTrie::CreateCallsite(
     const std::vector<unwindstack::FrameData>& callstack) {
   Node* node = &root_;
   for (const unwindstack::FrameData& loc : callstack) {
-    node = node->children_.Get(InternCodeLocation(loc));
-    if (node == nullptr)
-      return 0;
-  }
-  return node->cum_size_;
-}
-
-GlobalCallstackTrie::Node* GlobalCallstackTrie::IncrementCallsite(
-    const std::vector<unwindstack::FrameData>& callstack,
-    uint64_t size) {
-  Node* node = &root_;
-  node->cum_size_ += size;
-  for (const unwindstack::FrameData& loc : callstack) {
     node = node->GetOrCreateChild(InternCodeLocation(loc));
-    node->cum_size_ += size;
   }
   return node;
 }
 
-void GlobalCallstackTrie::DecrementNode(Node* node, uint64_t size) {
-  PERFETTO_DCHECK(node->cum_size_ >= size);
+void GlobalCallstackTrie::IncrementNode(Node* node) {
+  while (node != nullptr) {
+    node->ref_count_ += 1;
+    node = node->parent_;
+  }
+}
+
+void GlobalCallstackTrie::DecrementNode(Node* node) {
+  PERFETTO_DCHECK(node->ref_count_ >= 1);
 
   bool delete_prev = false;
   Node* prev = nullptr;
   while (node != nullptr) {
     if (delete_prev)
       node->children_.Remove(*prev);
-    node->cum_size_ -= size;
-    delete_prev = node->cum_size_ == 0;
+    node->ref_count_ -= 1;
+    delete_prev = node->ref_count_ == 0;
     prev = node;
     node = node->parent_;
   }
 }
 
-Interner<Frame>::Interned GlobalCallstackTrie::InternCodeLocation(
+Interned<Frame> GlobalCallstackTrie::InternCodeLocation(
     const unwindstack::FrameData& loc) {
   Mapping map{};
-  map.offset = loc.map_offset;
+  map.offset = loc.map_elf_start_offset;
   map.start = loc.map_start;
   map.end = loc.map_end;
   map.load_bias = loc.map_load_bias;
@@ -175,7 +213,7 @@ Interner<Frame>::Interned GlobalCallstackTrie::InternCodeLocation(
   return frame_interner_.Intern(frame);
 }
 
-Interner<Frame>::Interned GlobalCallstackTrie::MakeRootFrame() {
+Interned<Frame> GlobalCallstackTrie::MakeRootFrame() {
   Mapping map{};
 
   Frame frame(mapping_interner_.Intern(std::move(map)),
@@ -184,11 +222,10 @@ Interner<Frame>::Interned GlobalCallstackTrie::MakeRootFrame() {
   return frame_interner_.Intern(frame);
 }
 
-void DumpState::WriteMap(ProfilePacket* packet,
-                         const Interner<Mapping>::Interned map) {
+void DumpState::WriteMap(ProfilePacket* packet, const Interned<Mapping> map) {
   auto map_it_and_inserted = dumped_mappings.emplace(map.id());
   if (map_it_and_inserted.second) {
-    for (const Interner<std::string>::Interned& str : map->path_components)
+    for (const Interned<std::string>& str : map->path_components)
       WriteString(packet, str);
 
     auto mapping = packet->add_mappings();
@@ -197,13 +234,12 @@ void DumpState::WriteMap(ProfilePacket* packet,
     mapping->set_start(map->start);
     mapping->set_end(map->end);
     mapping->set_load_bias(map->load_bias);
-    for (const Interner<std::string>::Interned& str : map->path_components)
+    for (const Interned<std::string>& str : map->path_components)
       mapping->add_path_string_ids(str.id());
   }
 }
 
-void DumpState::WriteFrame(ProfilePacket* packet,
-                           Interner<Frame>::Interned frame) {
+void DumpState::WriteFrame(ProfilePacket* packet, Interned<Frame> frame) {
   WriteMap(packet, frame->mapping);
   WriteString(packet, frame->function_name);
   bool inserted;
@@ -218,7 +254,7 @@ void DumpState::WriteFrame(ProfilePacket* packet,
 }
 
 void DumpState::WriteString(ProfilePacket* packet,
-                            const Interner<std::string>::Interned& str) {
+                            const Interned<std::string>& str) {
   bool inserted;
   std::tie(std::ignore, inserted) = dumped_strings.emplace(str.id());
   if (inserted) {
@@ -270,12 +306,12 @@ void BookkeepingThread::HandleBookkeepingRecord(BookkeepingRecord* rec) {
     for (GlobalCallstackTrie::Node* node : callstacks_to_dump) {
       // There need to be two separate loops over built_callstack because
       // protozero cannot interleave different messages.
-      auto built_callstack = node->BuildCallstack();
-      for (const Interner<Frame>::Interned& frame : built_callstack)
+      auto built_callstack = callsites_.BuildCallstack(node);
+      for (const Interned<Frame>& frame : built_callstack)
         dump_state.WriteFrame(profile_packet, frame);
       ProfilePacket::Callstack* callstack = profile_packet->add_callstacks();
       callstack->set_id(node->id());
-      for (const Interner<Frame>::Interned& frame : built_callstack)
+      for (const Interned<Frame>& frame : built_callstack)
         callstack->add_frame_ids(frame.id());
     }
 
@@ -291,6 +327,7 @@ void BookkeepingThread::HandleBookkeepingRecord(BookkeepingRecord* rec) {
         it = bookkeeping_data_.erase(it);
       }
     }
+    trace_packet->Finalize();
     dump_rec.callback();
   } else if (rec->record_type == BookkeepingRecord::Type::Free) {
     FreeRecord& free_rec = rec->free_record;
@@ -314,16 +351,18 @@ void BookkeepingThread::HandleBookkeepingRecord(BookkeepingRecord* rec) {
   }
 }
 
-void BookkeepingThread::NotifyClientConnected(pid_t pid) {
+BookkeepingThread::ProcessHandle BookkeepingThread::NotifyProcessConnected(
+    pid_t pid) {
   std::lock_guard<std::mutex> l(bookkeeping_mutex_);
   // emplace gives the existing BookkeepingData for pid if it already exists
   // or creates a new one.
   auto it_and_inserted = bookkeeping_data_.emplace(pid, &callsites_);
   BookkeepingData& bk = it_and_inserted.first->second;
   bk.ref_count++;
+  return {this, pid};
 }
 
-void BookkeepingThread::NotifyClientDisconnected(pid_t pid) {
+void BookkeepingThread::NotifyProcessDisconnected(pid_t pid) {
   std::lock_guard<std::mutex> l(bookkeeping_mutex_);
   auto it = bookkeeping_data_.find(pid);
   if (it == bookkeeping_data_.end()) {
@@ -340,6 +379,38 @@ void BookkeepingThread::Run(BoundedQueue<BookkeepingRecord>* input_queue) {
       return;
     HandleBookkeepingRecord(&rec);
   }
+}
+
+BookkeepingThread::ProcessHandle::ProcessHandle(
+    BookkeepingThread* bookkeeping_thread,
+    pid_t pid)
+    : bookkeeping_thread_(bookkeeping_thread), pid_(pid) {}
+
+BookkeepingThread::ProcessHandle::~ProcessHandle() {
+  if (bookkeeping_thread_)
+    bookkeeping_thread_->NotifyProcessDisconnected(pid_);
+}
+
+BookkeepingThread::ProcessHandle::ProcessHandle(ProcessHandle&& other) noexcept
+    : bookkeeping_thread_(other.bookkeeping_thread_), pid_(other.pid_) {
+  other.bookkeeping_thread_ = nullptr;
+}
+
+BookkeepingThread::ProcessHandle& BookkeepingThread::ProcessHandle::operator=(
+    ProcessHandle&& other) noexcept {
+  // Construct this temporary because the RHS could be an lvalue cast to an
+  // rvalue whose lifetime we do not know.
+  ProcessHandle tmp(std::move(other));
+  using std::swap;
+  swap(*this, tmp);
+  return *this;
+}
+
+void swap(BookkeepingThread::ProcessHandle& a,
+          BookkeepingThread::ProcessHandle& b) {
+  using std::swap;
+  swap(a.bookkeeping_thread_, b.bookkeeping_thread_);
+  swap(a.pid_, b.pid_);
 }
 
 }  // namespace profiling

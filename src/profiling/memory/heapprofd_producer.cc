@@ -46,77 +46,6 @@ ClientConfiguration MakeClientConfiguration(const DataSourceConfig& cfg) {
   return client_config;
 }
 
-template <typename Fn>
-void ForEachPid(const char* file, Fn callback) {
-  base::ScopedDir proc_dir(opendir("/proc"));
-  if (!proc_dir) {
-    PERFETTO_DFATAL("Failed to open /proc");
-    return;
-  }
-  struct dirent* entry;
-  while ((entry = readdir(*proc_dir))) {
-    char filename_buf[128];
-    ssize_t written = snprintf(filename_buf, sizeof(filename_buf),
-                               "/proc/%s/%s", entry->d_name, file);
-    if (written < 0 || static_cast<size_t>(written) >= sizeof(filename_buf)) {
-      if (written < 0)
-        PERFETTO_DFATAL("Failed to concatenate cmdline file.");
-      else
-        PERFETTO_DFATAL("Overflow when concatenating cmdline file.");
-      continue;
-    }
-    char* end;
-    long int pid = strtol(entry->d_name, &end, 10);
-    if (*end != '\0')
-      continue;
-    callback(static_cast<pid_t>(pid), filename_buf);
-  }
-}
-
-void FindAllProfilablePids(std::vector<pid_t>* pids) {
-  ForEachPid("cmdline", [pids](pid_t pid, const char* filename_buf) {
-    if (pid == getpid())
-      return;
-    struct stat statbuf;
-    // Check if we have permission to the process.
-    if (stat(filename_buf, &statbuf) == 0)
-      pids->emplace_back(pid);
-  });
-}
-
-void FindPidsForCmdlines(const std::vector<std::string>& cmdlines,
-                         std::vector<pid_t>* pids) {
-  ForEachPid("cmdline", [&cmdlines, pids](pid_t pid, const char* filename_buf) {
-    if (pid == getpid())
-      return;
-    std::string process_cmdline;
-    process_cmdline.reserve(128);
-    if (!base::ReadFile(filename_buf, &process_cmdline))
-      return;
-    if (process_cmdline.empty())
-      return;
-
-    // Strip everything after @ for Java processes.
-    // Otherwise, strip newline at EOF.
-    size_t endpos = process_cmdline.find('\0');
-    if (endpos == std::string::npos) {
-      PERFETTO_DFATAL("No nullbyte in cmdline.");
-      return;
-    }
-    size_t atpos = process_cmdline.find('@');
-    if (atpos != std::string::npos && atpos < endpos)
-      endpos = atpos;
-    if (endpos < 1)
-      return;
-    process_cmdline.resize(endpos);
-
-    for (const std::string& cmdline : cmdlines) {
-      if (process_cmdline == cmdline)
-        pids->emplace_back(static_cast<pid_t>(pid));
-    }
-  });
-}
-
 }  // namespace
 
 // We create kUnwinderThreads unwinding threads and one bookeeping thread.
@@ -194,6 +123,12 @@ void HeapprofdProducer::OnDisconnect() {
 void HeapprofdProducer::SetupDataSource(DataSourceInstanceID id,
                                         const DataSourceConfig& cfg) {
   PERFETTO_DLOG("Setting up data source.");
+  const HeapprofdConfig& heapprofd_config = cfg.heapprofd_config();
+  if (heapprofd_config.all() && !heapprofd_config.pid().empty())
+    PERFETTO_ELOG("No point setting all and pid");
+  if (heapprofd_config.all() && !heapprofd_config.process_cmdline().empty())
+    PERFETTO_ELOG("No point setting all and process_cmdline");
+
   if (cfg.name() != kHeapprofdDataSource) {
     PERFETTO_DLOG("Invalid data source name.");
     return;
@@ -206,51 +141,20 @@ void HeapprofdProducer::SetupDataSource(DataSourceInstanceID id,
     return;
   }
 
-  const HeapprofdConfig& heapprofd_config = cfg.heapprofd_config();
-
   DataSource data_source;
 
-  if (heapprofd_config.all()) {
-    data_source.properties.emplace_back(properties_.SetAll());
-  } else {
-    for (std::string cmdline : heapprofd_config.process_cmdline())
-      data_source.properties.emplace_back(
-          properties_.SetProperty(std::move(cmdline)));
-  }
+  ProcessSetSpec process_set_spec{};
+  process_set_spec.all = heapprofd_config.all();
+  process_set_spec.client_configuration = MakeClientConfiguration(cfg);
+  process_set_spec.pids.insert(heapprofd_config.pid().cbegin(),
+                               heapprofd_config.pid().cend());
+  process_set_spec.process_cmdline.insert(
+      heapprofd_config.process_cmdline().cbegin(),
+      heapprofd_config.process_cmdline().cend());
 
-  ClientConfiguration client_config = MakeClientConfiguration(cfg);
-
-  if (heapprofd_config.all()) {
-    FindAllProfilablePids(&data_source.pids);
-    if (!heapprofd_config.pid().empty())
-      PERFETTO_ELOG("Got all and pid. Ignoring pid.");
-    if (!heapprofd_config.process_cmdline().empty())
-      PERFETTO_ELOG("Got all and process_cmdline. Ignoring process_cmdline.");
-  } else {
-    for (uint64_t pid : heapprofd_config.pid())
-      data_source.pids.emplace_back(static_cast<pid_t>(pid));
-
-    FindPidsForCmdlines(heapprofd_config.process_cmdline(), &data_source.pids);
-  }
-
-  auto pid_it = data_source.pids.begin();
-  while (pid_it != data_source.pids.end()) {
-    auto profiling_session = socket_listener_.ExpectPID(*pid_it, client_config);
-    if (!profiling_session) {
-      PERFETTO_DFATAL("No enabling duplicate profiling session for %d",
-                      *pid_it);
-      pid_it = data_source.pids.erase(pid_it);
-      continue;
-    }
-    data_source.sessions.emplace_back(std::move(profiling_session));
-    ++pid_it;
-  }
-
-  if (data_source.pids.empty()) {
-    // TODO(fmayer): Whole system profiling.
-    PERFETTO_DLOG("No valid pids given. Not setting up data source.");
-    return;
-  }
+  data_source.processes =
+      socket_listener_.process_matcher().AwaitProcessSetSpec(
+          std::move(process_set_spec));
 
   auto buffer_id = static_cast<BufferID>(cfg.target_buffer());
   data_source.trace_writer = endpoint_->CreateTraceWriter(buffer_id);
@@ -276,24 +180,40 @@ void HeapprofdProducer::DoContinuousDump(DataSourceInstanceID id,
 void HeapprofdProducer::StartDataSource(DataSourceInstanceID id,
                                         const DataSourceConfig& cfg) {
   PERFETTO_DLOG("Start DataSource");
+  const HeapprofdConfig& heapprofd_config = cfg.heapprofd_config();
+
   auto it = data_sources_.find(id);
   if (it == data_sources_.end()) {
     PERFETTO_DFATAL("Received invalid data source instance to start: %" PRIu64,
                     id);
     return;
   }
+  DataSource& data_source = it->second;
 
-  const DataSource& data_source = it->second;
+  if (heapprofd_config.all())
+    data_source.properties.emplace_back(properties_.SetAll());
 
-  for (pid_t pid : data_source.pids) {
+  for (std::string cmdline : heapprofd_config.process_cmdline())
+    data_source.properties.emplace_back(
+        properties_.SetProperty(std::move(cmdline)));
+
+  std::set<pid_t> pids;
+  if (heapprofd_config.all())
+    FindAllProfilablePids(&pids);
+  for (uint64_t pid : heapprofd_config.pid())
+    pids.emplace(static_cast<pid_t>(pid));
+
+  if (!heapprofd_config.process_cmdline().empty())
+    FindPidsForCmdlines(heapprofd_config.process_cmdline(), &pids);
+
+  for (pid_t pid : pids) {
     PERFETTO_DLOG("Sending %d to %d", kHeapprofdSignal, pid);
     if (kill(pid, kHeapprofdSignal) != 0) {
       PERFETTO_DPLOG("kill");
     }
   }
 
-  const auto continuous_dump_config =
-      cfg.heapprofd_config().continuous_dump_config();
+  const auto continuous_dump_config = heapprofd_config.continuous_dump_config();
   uint32_t dump_interval = continuous_dump_config.dump_interval_ms();
   if (dump_interval) {
     auto weak_producer = weak_factory_.GetWeakPtr();
@@ -330,15 +250,22 @@ bool HeapprofdProducer::Dump(DataSourceInstanceID id,
   BookkeepingRecord record{};
   record.record_type = BookkeepingRecord::Type::Dump;
   DumpRecord& dump_record = record.dump_record;
-  dump_record.pids = data_source.pids;
+  std::set<pid_t> pids = data_source.processes.GetPIDs();
+  dump_record.pids.insert(dump_record.pids.begin(), pids.cbegin(), pids.cend());
   dump_record.trace_writer = data_source.trace_writer;
+
+  std::weak_ptr<TraceWriter> weak_trace_writer = data_source.trace_writer;
 
   auto weak_producer = weak_factory_.GetWeakPtr();
   base::TaskRunner* task_runner = task_runner_;
   if (has_flush_id) {
-    dump_record.callback = [task_runner, weak_producer, flush_id] {
+    dump_record.callback = [task_runner, weak_producer, flush_id,
+                            weak_trace_writer] {
+      auto trace_writer = weak_trace_writer.lock();
+      if (trace_writer)
+        trace_writer->Flush();
       task_runner->PostTask([weak_producer, flush_id] {
-        if (!weak_producer)
+        if (weak_producer)
           return weak_producer->FinishDataSourceFlush(flush_id);
       });
     };

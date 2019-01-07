@@ -293,18 +293,21 @@ class SharedMemoryABI {
       // |chunk_id| + 1 (within the same |writer_id|).
       kLastPacketContinuesOnNextChunk = 1 << 1,
 
-      // The data in the chunk has holes (even if the chunk is marked as
-      // kChunkComplete) that need to be patched out-of-band before the chunk
-      // can be read.
+      // If set, the last (fragmented) TracePacket in the chunk has holes (even
+      // if the chunk is marked as kChunkComplete) that need to be patched
+      // out-of-band before the chunk can be read.
       kChunkNeedsPatching = 1 << 2,
     };
 
     struct Packets {
       // Number of valid TracePacket protobuf messages contained in the chunk.
       // Each TracePacket is prefixed by its own size. This field is
-      // monotonically updated by the Producer with release store semantic after
-      // the packet has been written into the chunk.
+      // monotonically updated by the Producer with release store semantic when
+      // the packet at position |count| is started. This last packet may not be
+      // considered complete until |count| is incremented for the subsequent
+      // packet or the chunk is completed.
       uint16_t count : 10;
+      static constexpr size_t kMaxCount = (1 << 10) - 1;
 
       // See Flags above.
       uint16_t flags : 6;
@@ -374,17 +377,19 @@ class SharedMemoryABI {
     }
 
     // Increases |packets.count| with release semantics (note, however, that the
-    // packet count is incremented *before* starting writing a packet).
-    // The increment is atomic but NOT race-free (i.e. no CAS). Only the
-    // Producer is supposed to perform this increment, and it's supposed to do
-    // that in a thread-safe way (holding a lock). A Chunk cannot be shared by
-    // multiple Producer threads without locking. The packet count is cleared by
-    // TryAcquireChunk(), when passing the new header for the chunk.
-    void IncrementPacketCount() {
+    // packet count is incremented *before* starting writing a packet). Returns
+    // the new packet count. The increment is atomic but NOT race-free (i.e. no
+    // CAS). Only the Producer is supposed to perform this increment, and it's
+    // supposed to do that in a thread-safe way (holding a lock). A Chunk cannot
+    // be shared by multiple Producer threads without locking. The packet count
+    // is cleared by TryAcquireChunk(), when passing the new header for the
+    // chunk.
+    uint16_t IncrementPacketCount() {
       ChunkHeader* chunk_header = header();
       auto packets = chunk_header->packets.load(std::memory_order_relaxed);
       packets.count++;
       chunk_header->packets.store(packets, std::memory_order_release);
+      return packets.count;
     }
 
     // Flags are cleared by TryAcquireChunk(), by passing the new header for
