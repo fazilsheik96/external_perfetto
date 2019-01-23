@@ -28,6 +28,7 @@
 #include "perfetto/base/optional.h"
 #include "perfetto/base/string_view.h"
 #include "perfetto/base/utils.h"
+#include "src/trace_processor/stats.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -49,6 +50,8 @@ enum TableId : uint8_t {
   // Intentionally don't have TableId == 0 so that RowId == 0 can refer to an
   // invalid row id.
   kCounters = 1,
+  kRawEvents = 2,
+  kInstants = 3,
 };
 
 // The top 8 bits are set to the TableId and the bottom 32 to the row of the
@@ -78,12 +81,6 @@ class TraceStorage {
 
   virtual ~TraceStorage();
 
-  struct Stats {
-    int64_t mismatched_sched_switch_tids = 0;
-    int64_t rss_stat_no_process = 0;
-    int64_t mem_counter_no_process = 0;
-  };
-
   // Information about a unique process seen in a trace.
   struct Process {
     explicit Process(uint32_t p) : pid(p) {}
@@ -106,13 +103,30 @@ class TraceStorage {
   // Generic key value storage which can be referenced by other tables.
   class Args {
    public:
-    // Varardic type representing the possible values for the args table.
-    struct Varardic {
+    // Variadic type representing the possible values for the args table.
+    struct Variadic {
       enum Type { kInt, kString, kReal };
 
-      Varardic(int64_t int_val) : type(kInt), int_value(int_val) {}
-      Varardic(StringId string_val) : type(kString), string_value(string_val) {}
-      Varardic(double real_val) : type(kReal), real_value(real_val) {}
+      static Variadic Integer(int64_t int_value) {
+        Variadic variadic;
+        variadic.type = Type::kInt;
+        variadic.int_value = int_value;
+        return variadic;
+      }
+
+      static Variadic String(StringId string_id) {
+        Variadic variadic;
+        variadic.type = Type::kString;
+        variadic.string_value = string_id;
+        return variadic;
+      }
+
+      static Variadic Real(double real_value) {
+        Variadic variadic;
+        variadic.type = Type::kReal;
+        variadic.real_value = real_value;
+        return variadic;
+      }
 
       Type type;
       union {
@@ -125,13 +139,13 @@ class TraceStorage {
     const std::deque<RowId>& ids() const { return ids_; }
     const std::deque<StringId>& flat_keys() const { return flat_keys_; }
     const std::deque<StringId>& keys() const { return keys_; }
-    const std::deque<Varardic>& arg_values() const { return arg_values_; }
+    const std::deque<Variadic>& arg_values() const { return arg_values_; }
     const std::multimap<RowId, uint32_t>& args_for_id() const {
       return args_for_id_;
     }
     size_t args_count() const { return ids_.size(); }
 
-    void AddArg(RowId id, StringId flat_key, StringId key, int64_t value) {
+    void AddArg(RowId id, StringId flat_key, StringId key, Variadic value) {
       if (id == kInvalidRowId)
         return;
 
@@ -146,7 +160,7 @@ class TraceStorage {
     std::deque<RowId> ids_;
     std::deque<StringId> flat_keys_;
     std::deque<StringId> keys_;
-    std::deque<Varardic> arg_values_;
+    std::deque<Variadic> arg_values_;
     std::multimap<RowId, uint32_t> args_for_id_;
   };
 
@@ -160,6 +174,7 @@ class TraceStorage {
       start_ns_.emplace_back(start_ns);
       durations_.emplace_back(duration_ns);
       utids_.emplace_back(utid);
+      rows_for_utids_.emplace(utid, slice_count() - 1);
       return slice_count() - 1;
     }
 
@@ -177,6 +192,10 @@ class TraceStorage {
 
     const std::deque<UniqueTid>& utids() const { return utids_; }
 
+    const std::multimap<UniqueTid, uint32_t>& rows_for_utids() const {
+      return rows_for_utids_;
+    }
+
    private:
     // Each deque below has the same number of entries (the number of slices
     // in the trace for the CPU).
@@ -184,6 +203,7 @@ class TraceStorage {
     std::deque<int64_t> start_ns_;
     std::deque<int64_t> durations_;
     std::deque<UniqueTid> utids_;
+    std::multimap<UniqueTid, uint32_t> rows_for_utids_;
   };
 
   class NestableSlices {
@@ -304,17 +324,17 @@ class TraceStorage {
 
   class Instants {
    public:
-    inline size_t AddInstantEvent(int64_t timestamp,
-                                  StringId name_id,
-                                  double value,
-                                  int64_t ref,
-                                  RefType type) {
+    inline uint32_t AddInstantEvent(int64_t timestamp,
+                                    StringId name_id,
+                                    double value,
+                                    int64_t ref,
+                                    RefType type) {
       timestamps_.emplace_back(timestamp);
       name_ids_.emplace_back(name_id);
       values_.emplace_back(value);
       refs_.emplace_back(ref);
       types_.emplace_back(type);
-      return instant_count() - 1;
+      return static_cast<uint32_t>(instant_count() - 1);
     }
 
     size_t instant_count() const { return timestamps_.size(); }
@@ -336,6 +356,75 @@ class TraceStorage {
     std::deque<int64_t> refs_;
     std::deque<RefType> types_;
   };
+
+  class RawEvents {
+   public:
+    inline RowId AddRawEvent(int64_t timestamp,
+                             StringId name_id,
+                             uint32_t cpu,
+                             UniqueTid utid) {
+      timestamps_.emplace_back(timestamp);
+      name_ids_.emplace_back(name_id);
+      cpus_.emplace_back(cpu);
+      utids_.emplace_back(utid);
+      return CreateRowId(TableId::kRawEvents,
+                         static_cast<uint32_t>(raw_event_count() - 1));
+    }
+
+    size_t raw_event_count() const { return timestamps_.size(); }
+
+    const std::deque<int64_t>& timestamps() const { return timestamps_; }
+
+    const std::deque<StringId>& name_ids() const { return name_ids_; }
+
+    const std::deque<uint32_t>& cpus() const { return cpus_; }
+
+    const std::deque<UniqueTid>& utids() const { return utids_; }
+
+   private:
+    std::deque<int64_t> timestamps_;
+    std::deque<StringId> name_ids_;
+    std::deque<uint32_t> cpus_;
+    std::deque<UniqueTid> utids_;
+  };
+
+  class AndroidLogs {
+   public:
+    inline size_t AddLogEvent(int64_t timestamp,
+                              UniqueTid utid,
+                              uint8_t prio,
+                              StringId tag_id,
+                              StringId msg_id) {
+      timestamps_.emplace_back(timestamp);
+      utids_.emplace_back(utid);
+      prios_.emplace_back(prio);
+      tag_ids_.emplace_back(tag_id);
+      msg_ids_.emplace_back(msg_id);
+      return size() - 1;
+    }
+
+    size_t size() const { return timestamps_.size(); }
+
+    const std::deque<int64_t>& timestamps() const { return timestamps_; }
+    const std::deque<UniqueTid>& utids() const { return utids_; }
+    const std::deque<uint8_t>& prios() const { return prios_; }
+    const std::deque<StringId>& tag_ids() const { return tag_ids_; }
+    const std::deque<StringId>& msg_ids() const { return msg_ids_; }
+
+   private:
+    std::deque<int64_t> timestamps_;
+    std::deque<UniqueTid> utids_;
+    std::deque<uint8_t> prios_;
+    std::deque<StringId> tag_ids_;
+    std::deque<StringId> msg_ids_;
+  };
+
+  struct Stats {
+    using IndexMap = std::map<int, int64_t>;
+    int64_t value = 0;
+    IndexMap indexed_values;
+  };
+  using StatsMap = std::array<Stats, stats::kNumKeys>;
 
   void ResetStorage();
 
@@ -362,6 +451,27 @@ class TraceStorage {
   Thread* GetMutableThread(UniqueTid utid) {
     PERFETTO_DCHECK(utid < unique_threads_.size());
     return &unique_threads_[utid];
+  }
+
+  // Example usage: SetStats(stats::android_log_num_failed, 42);
+  void SetStats(size_t key, int64_t value) {
+    PERFETTO_DCHECK(key < stats::kNumKeys);
+    PERFETTO_DCHECK(stats::kTypes[key] == stats::kSingle);
+    stats_[key].value = value;
+  }
+
+  // Example usage: IncrementStats(stats::android_log_num_failed, -1);
+  void IncrementStats(size_t key, int64_t increment = 1) {
+    PERFETTO_DCHECK(key < stats::kNumKeys);
+    PERFETTO_DCHECK(stats::kTypes[key] == stats::kSingle);
+    stats_[key].value += increment;
+  }
+
+  // Example usage: SetIndexedStats(stats::cpu_failure, 1, 42);
+  void SetIndexedStats(size_t key, int index, int64_t value) {
+    PERFETTO_DCHECK(key < stats::kNumKeys);
+    PERFETTO_DCHECK(stats::kTypes[key] == stats::kIndexed);
+    stats_[key].indexed_values[index] = value;
   }
 
   // Reading methods.
@@ -401,21 +511,26 @@ class TraceStorage {
   const Instants& instants() const { return instants_; }
   Instants* mutable_instants() { return &instants_; }
 
-  const Stats& stats() const { return stats_; }
-  Stats* mutable_stats() { return &stats_; }
+  const AndroidLogs& android_logs() const { return android_log_; }
+  AndroidLogs* mutable_android_log() { return &android_log_; }
+
+  const StatsMap& stats() const { return stats_; }
 
   const Args& args() const { return args_; }
   Args* mutable_args() { return &args_; }
+
+  const RawEvents& raw_events() const { return raw_events_; }
+  RawEvents* mutable_raw_events() { return &raw_events_; }
 
   const std::deque<std::string>& string_pool() const { return string_pool_; }
 
   // |unique_processes_| always contains at least 1 element becuase the 0th ID
   // is reserved to indicate an invalid process.
-  size_t process_count() const { return unique_processes_.size() - 1; }
+  size_t process_count() const { return unique_processes_.size(); }
 
   // |unique_threads_| always contains at least 1 element becuase the 0th ID
   // is reserved to indicate an invalid thread.
-  size_t thread_count() const { return unique_threads_.size() - 1; }
+  size_t thread_count() const { return unique_threads_.size(); }
 
   // Number of interned strings in the pool. Includes the empty string w/ ID=0.
   size_t string_count() const { return string_pool_.size(); }
@@ -426,7 +541,7 @@ class TraceStorage {
   using StringHash = uint64_t;
 
   // Stats about parsing the trace.
-  Stats stats_;
+  StatsMap stats_{};
 
   // One entry for each CPU in the trace.
   Slices slices_;
@@ -459,6 +574,13 @@ class TraceStorage {
   // and do not have a value that make sense to track over time.
   // e.g. signal events
   Instants instants_;
+
+  // Raw events are every ftrace event in the trace. The raw event includes
+  // the timestamp and the pid. The args for the raw event will be in the
+  // args table. This table can be used to generate a text version of the
+  // trace.
+  RawEvents raw_events_;
+  AndroidLogs android_log_;
 };
 
 }  // namespace trace_processor

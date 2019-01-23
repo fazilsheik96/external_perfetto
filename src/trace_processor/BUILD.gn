@@ -42,9 +42,13 @@ static_library("trace_processor") {
 
 source_set("lib") {
   sources = [
+    "android_logs_table.cc",
+    "android_logs_table.h",
     "args_table.cc",
     "args_table.h",
     "chunked_trace_reader.h",
+    "clock_tracker.cc",
+    "clock_tracker.h",
     "counters_table.cc",
     "counters_table.h",
     "event_tracker.cc",
@@ -53,6 +57,8 @@ source_set("lib") {
     "filtered_row_index.h",
     "ftrace_descriptors.cc",
     "ftrace_descriptors.h",
+    "ftrace_utils.cc",
+    "ftrace_utils.h",
     "instants_table.cc",
     "instants_table.h",
     "process_table.cc",
@@ -65,6 +71,8 @@ source_set("lib") {
     "proto_trace_tokenizer.h",
     "query_constraints.cc",
     "query_constraints.h",
+    "raw_table.cc",
+    "raw_table.h",
     "row_iterators.cc",
     "row_iterators.h",
     "sched_slice_table.cc",
@@ -79,6 +87,7 @@ source_set("lib") {
     "sql_stats_table.cc",
     "sql_stats_table.h",
     "sqlite_utils.h",
+    "stats.h",
     "stats_table.cc",
     "stats_table.h",
     "storage_columns.cc",
@@ -162,9 +171,11 @@ copy("trace_processor_shell") {
 source_set("unittests") {
   testonly = true
   sources = [
+    "clock_tracker_unittest.cc",
     "counters_table_unittest.cc",
     "event_tracker_unittest.cc",
     "filtered_row_index_unittest.cc",
+    "ftrace_utils_unittest.cc",
     "process_table_unittest.cc",
     "process_tracker_unittest.cc",
     "proto_trace_parser_unittest.cc",

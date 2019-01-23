@@ -84,12 +84,31 @@ class ProtoTraceParser {
   void ParseLowmemoryKill(int64_t ts, TraceBlobView);
   void ParseBatteryCounters(int64_t ts, TraceBlobView);
   void ParseOOMScoreAdjUpdate(int64_t ts, TraceBlobView);
+  void ParseClockSnapshot(TraceBlobView);
+  std::pair<int /*type*/, int64_t> ParseClockField(TraceBlobView);
+  void ParseAndroidLogPacket(TraceBlobView);
+  void ParseAndroidLogEvent(TraceBlobView);
+  void ParseAndroidLogBinaryArg(TraceBlobView, char** str, size_t avail);
+  void ParseAndroidLogStats(TraceBlobView);
+  void ParseGenericFtrace(int64_t timestamp,
+                          uint32_t cpu,
+                          uint32_t pid,
+                          TraceBlobView view);
+  void ParseGenericFtraceField(RowId generic_row_id, TraceBlobView view);
+  void ParseTypedFtraceToRaw(uint32_t ftrace_id,
+                             int64_t timestamp,
+                             uint32_t cpu,
+                             uint32_t pid,
+                             TraceBlobView view);
+  void ParseTraceStats(TraceBlobView);
+  void ParseFtraceStats(TraceBlobView);
 
  private:
   TraceProcessorContext* context_;
   const StringId utid_name_id_;
   const StringId cpu_freq_name_id_;
   const StringId cpu_idle_name_id_;
+  const StringId comm_name_id_;
   const StringId num_forks_name_id_;
   const StringId num_irq_total_name_id_;
   const StringId num_softirq_total_name_id_;
@@ -108,6 +127,7 @@ class ProtoTraceParser {
   const StringId batt_capacity_id_;
   const StringId batt_current_id_;
   const StringId batt_current_avg_id_;
+  const StringId lmk_id_;
   const StringId oom_score_adj_id_;
   const StringId ion_total_unknown_id_;
   const StringId ion_change_unknown_id_;

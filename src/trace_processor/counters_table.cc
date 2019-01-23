@@ -35,32 +35,22 @@ void CountersTable::RegisterTable(sqlite3* db, const TraceStorage* storage) {
   Table::Register<CountersTable>(db, storage, "counters");
 }
 
-base::Optional<Table::Schema> CountersTable::Init(int, const char* const*) {
-  const auto& counters = storage_->counters();
-  std::unique_ptr<StorageColumn> cols[] = {
-      IdColumnPtr("id", TableId::kCounters),
-      NumericColumnPtr("ts", &counters.timestamps(), false /* hidden */,
-                       true /* ordered */),
-      StringColumnPtr("name", &counters.name_ids(), &storage_->string_pool()),
-      NumericColumnPtr("value", &counters.values()),
-      NumericColumnPtr("dur", &counters.durations()),
-      TsEndPtr("ts_end", &counters.timestamps(), &counters.durations()),
-      std::unique_ptr<RefColumn>(new RefColumn("ref", storage_)),
-      StringColumnPtr("ref_type", &counters.types(), &ref_types_)};
-  schema_ = StorageSchema({
-      std::make_move_iterator(std::begin(cols)),
-      std::make_move_iterator(std::end(cols)),
-  });
-  return schema_.ToTableSchema({"name", "ts", "ref"});
+StorageSchema CountersTable::CreateStorageSchema() {
+  const auto& cs = storage_->counters();
+  return StorageSchema::Builder()
+      .AddColumn<IdColumn>("id", TableId::kCounters)
+      .AddOrderedNumericColumn("ts", &cs.timestamps())
+      .AddStringColumn("name", &cs.name_ids(), &storage_->string_pool())
+      .AddNumericColumn("value", &cs.values())
+      .AddNumericColumn("dur", &cs.durations())
+      .AddColumn<TsEndColumn>("ts_end", &cs.timestamps(), &cs.durations())
+      .AddColumn<RefColumn>("ref", storage_)
+      .AddStringColumn("ref_type", &cs.types(), &ref_types_)
+      .Build({"name", "ts", "ref"});
 }
 
-std::unique_ptr<Table::Cursor> CountersTable::CreateCursor(
-    const QueryConstraints& qc,
-    sqlite3_value** argv) {
-  uint32_t count = static_cast<uint32_t>(storage_->counters().counter_count());
-  auto it = CreateBestRowIteratorForGenericSchema(count, qc, argv);
-  return std::unique_ptr<Table::Cursor>(
-      new Cursor(std::move(it), schema_.mutable_columns()));
+uint32_t CountersTable::RowCount() {
+  return static_cast<uint32_t>(storage_->counters().counter_count());
 }
 
 int CountersTable::BestIndex(const QueryConstraints& qc, BestIndexInfo* info) {
@@ -69,8 +59,8 @@ int CountersTable::BestIndex(const QueryConstraints& qc, BestIndexInfo* info) {
 
   // Only the string columns are handled by SQLite
   info->order_by_consumed = true;
-  size_t name_index = schema_.ColumnIndexFromName("name");
-  size_t ref_type_index = schema_.ColumnIndexFromName("ref_type");
+  size_t name_index = schema().ColumnIndexFromName("name");
+  size_t ref_type_index = schema().ColumnIndexFromName("ref_type");
   for (size_t i = 0; i < qc.constraints().size(); i++) {
     info->omit[i] =
         qc.constraints()[i].iColumn != static_cast<int>(name_index) &&
@@ -109,15 +99,16 @@ CountersTable::RefColumn::Bounds CountersTable::RefColumn::BoundFilter(
 void CountersTable::RefColumn::Filter(int op,
                                       sqlite3_value* value,
                                       FilteredRowIndex* index) const {
-  auto predicate = sqlite_utils::CreatePredicate<int64_t>(op, value);
-  index->FilterRows([this, &predicate](uint32_t row) {
+  bool op_is_null = sqlite_utils::IsOpIsNull(op);
+  auto predicate = sqlite_utils::CreateNumericPredicate<int64_t>(op, value);
+  index->FilterRows([this, &predicate, op_is_null](uint32_t row) {
     auto ref = storage_->counters().refs()[row];
     auto type = storage_->counters().types()[row];
     if (type == RefType::kRefUtidLookupUpid) {
       auto upid = storage_->GetThread(static_cast<uint32_t>(ref)).upid;
       // Trying to filter null with any operation we currently handle
       // should return false.
-      return predicate(upid);
+      return upid.has_value() ? predicate(upid.value()) : op_is_null;
     }
     return predicate(ref);
   });

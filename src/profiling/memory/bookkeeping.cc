@@ -29,6 +29,11 @@ namespace perfetto {
 namespace profiling {
 namespace {
 using ::perfetto::protos::pbzero::ProfilePacket;
+// This needs to be lower than the maximum acceptable chunk size, because this
+// is checked *before* writing another submessage. We conservatively assume
+// submessages can be up to 100k here for a 500k chunk size.
+// DropBox has a 500k chunk limit, and each chunk needs to parse as a proto.
+uint32_t kPacketSizeThreshold = 400000;
 }
 
 GlobalCallstackTrie::Node* GlobalCallstackTrie::Node::GetOrCreateChild(
@@ -46,70 +51,81 @@ void HeapTracker::RecordMalloc(
     uint64_t sequence_number) {
   auto it = allocations_.find(address);
   if (it != allocations_.end()) {
-    if (it->second.sequence_number > sequence_number) {
-      return;
-    } else {
-      // Clean up previous allocation by pretending a free happened just after
-      // it.
-      // CommitFree only uses the sequence number to check whether the
-      // currently active allocation is newer than the free, so we can make
-      // up a sequence_number here.
-      CommitFree(it->second.sequence_number + 1, address);
+    Allocation& alloc = it->second;
+    PERFETTO_DCHECK(alloc.sequence_number != sequence_number);
+    if (alloc.sequence_number < sequence_number) {
+      // As we are overwriting the previous allocation, the previous allocation
+      // must have been freed.
+      //
+      // This makes the sequencing a bit incorrect. We are overwriting this
+      // allocation, so we prentend both the alloc and the free for this have
+      // already happened at committed_sequence_number_, while in fact the free
+      // might not have happened until right before this operation.
+
+      if (alloc.sequence_number > commited_sequence_number_) {
+        // Only count the previous allocation if it hasn't already been
+        // committed to avoid double counting it.
+        alloc.AddToCallstackAllocations();
+      }
+
+      alloc.SubtractFromCallstackAllocations();
+      GlobalCallstackTrie::Node* node = callsites_->CreateCallsite(callstack);
+      alloc.total_size = size;
+      alloc.sequence_number = sequence_number;
+      alloc.callstack_allocations = MaybeCreateCallstackAllocations(node);
     }
+  } else {
+    GlobalCallstackTrie::Node* node = callsites_->CreateCallsite(callstack);
+    allocations_.emplace(address,
+                         Allocation(size, sequence_number,
+                                    MaybeCreateCallstackAllocations(node)));
   }
 
-  GlobalCallstackTrie::Node* node = callsites_->CreateCallsite(callstack);
-
-  auto callstack_allocations_it = callstack_allocations_.find(node);
-  if (callstack_allocations_it == callstack_allocations_.end()) {
-    GlobalCallstackTrie::IncrementNode(node);
-    bool inserted;
-    std::tie(callstack_allocations_it, inserted) =
-        callstack_allocations_.emplace(node, node);
-    PERFETTO_DCHECK(inserted);
-  }
-  allocations_.emplace(
-      address,
-      Allocation(size, sequence_number, &(callstack_allocations_it->second)));
-
-  // Keep the sequence tracker consistent.
-  RecordFree(kNoopFree, sequence_number);
+  RecordOperation(sequence_number, address);
 }
 
-void HeapTracker::RecordFree(uint64_t address, uint64_t sequence_number) {
-  if (sequence_number != sequence_number_ + 1) {
-    pending_frees_.emplace(sequence_number, address);
+void HeapTracker::RecordOperation(uint64_t sequence_number, uint64_t address) {
+  if (sequence_number != commited_sequence_number_ + 1) {
+    pending_operations_.emplace(sequence_number, address);
     return;
   }
 
-  if (address != kNoopFree)
-    CommitFree(sequence_number, address);
-  sequence_number_++;
+  CommitOperation(sequence_number, address);
 
-  // At this point some other pending frees might be eligible to be committed.
-  auto it = pending_frees_.begin();
-  while (it != pending_frees_.end() && it->first == sequence_number_ + 1) {
-    if (it->second != kNoopFree)
-      CommitFree(it->first, it->second);
-    sequence_number_++;
-    it = pending_frees_.erase(it);
+  // At this point some other pending operations might be eligible to be
+  // committed.
+  auto it = pending_operations_.begin();
+  while (it != pending_operations_.end() &&
+         it->first == commited_sequence_number_ + 1) {
+    CommitOperation(it->first, it->second);
+    it = pending_operations_.erase(it);
   }
 }
 
-void HeapTracker::CommitFree(uint64_t sequence_number, uint64_t address) {
+void HeapTracker::CommitOperation(uint64_t sequence_number, uint64_t address) {
+  commited_sequence_number_++;
+
+  // We will see many frees for addresses we do not know about.
   auto leaf_it = allocations_.find(address);
   if (leaf_it == allocations_.end())
     return;
 
-  const Allocation& value = leaf_it->second;
-  if (value.sequence_number > sequence_number)
-    return;
-  allocations_.erase(leaf_it);
+  Allocation& value = leaf_it->second;
+  if (value.sequence_number == sequence_number) {
+    value.AddToCallstackAllocations();
+  } else if (value.sequence_number < sequence_number) {
+    value.SubtractFromCallstackAllocations();
+    allocations_.erase(leaf_it);
+  }
+  // else (value.sequence_number > sequence_number:
+  //  This allocation has been replaced by a newer one in RecordMalloc.
+  //  This code commits ther previous allocation's malloc (and implicit free
+  //  that must have happened, as there is now a new allocation at the same
+  //  address). This means that this operation, be it a malloc or a free, must
+  //  be treated as a no-op.
 }
 
-void HeapTracker::Dump(
-    ProfilePacket::ProcessHeapSamples* proto,
-    std::set<GlobalCallstackTrie::Node*>* callstacks_to_dump) {
+void HeapTracker::Dump(pid_t pid, DumpState* dump_state) {
   // There are two reasons we remove the unused callstack allocations on the
   // next iteration of Dump:
   // * We need to remove them after the callstacks were dumped, which currently
@@ -119,23 +135,35 @@ void HeapTracker::Dump(
     auto& it = it_and_alloc.first;
     uint64_t allocated = it_and_alloc.second;
     const CallstackAllocations& alloc = it->second;
-    if (alloc.allocation_count == allocated && alloc.free_count == allocated)
+    if (alloc.allocs == 0 && alloc.allocation_count == allocated)
       callstack_allocations_.erase(it);
   }
   dead_callstack_allocations_.clear();
 
+  if (dump_state->currently_written() > kPacketSizeThreshold)
+    dump_state->NewProfilePacket();
+
+  ProfilePacket::ProcessHeapSamples* proto =
+      dump_state->current_profile_packet->add_process_dumps();
+  proto->set_pid(static_cast<uint64_t>(pid));
   for (auto it = callstack_allocations_.begin();
        it != callstack_allocations_.end(); ++it) {
+    if (dump_state->currently_written() > kPacketSizeThreshold) {
+      dump_state->NewProfilePacket();
+      proto = dump_state->current_profile_packet->add_process_dumps();
+      proto->set_pid(static_cast<uint64_t>(pid));
+    }
+
     const CallstackAllocations& alloc = it->second;
-    callstacks_to_dump->emplace(alloc.node);
+    dump_state->callstacks_to_dump.emplace(alloc.node);
     ProfilePacket::HeapSample* sample = proto->add_samples();
     sample->set_callstack_id(alloc.node->id());
-    sample->set_cumulative_allocated(alloc.allocated);
-    sample->set_cumulative_freed(alloc.freed);
+    sample->set_self_allocated(alloc.allocated);
+    sample->set_self_freed(alloc.freed);
     sample->set_alloc_count(alloc.allocation_count);
     sample->set_free_count(alloc.free_count);
 
-    if (alloc.allocation_count == alloc.free_count)
+    if (alloc.allocs == 0)
       dead_callstack_allocations_.emplace_back(it, alloc.allocation_count);
   }
 }
@@ -222,13 +250,16 @@ Interned<Frame> GlobalCallstackTrie::MakeRootFrame() {
   return frame_interner_.Intern(frame);
 }
 
-void DumpState::WriteMap(ProfilePacket* packet, const Interned<Mapping> map) {
+void DumpState::WriteMap(const Interned<Mapping> map) {
   auto map_it_and_inserted = dumped_mappings.emplace(map.id());
   if (map_it_and_inserted.second) {
     for (const Interned<std::string>& str : map->path_components)
-      WriteString(packet, str);
+      WriteString(str);
 
-    auto mapping = packet->add_mappings();
+    if (currently_written() > kPacketSizeThreshold)
+      NewProfilePacket();
+
+    auto mapping = current_profile_packet->add_mappings();
     mapping->set_id(map.id());
     mapping->set_offset(map->offset);
     mapping->set_start(map->start);
@@ -239,13 +270,16 @@ void DumpState::WriteMap(ProfilePacket* packet, const Interned<Mapping> map) {
   }
 }
 
-void DumpState::WriteFrame(ProfilePacket* packet, Interned<Frame> frame) {
-  WriteMap(packet, frame->mapping);
-  WriteString(packet, frame->function_name);
+void DumpState::WriteFrame(Interned<Frame> frame) {
+  WriteMap(frame->mapping);
+  WriteString(frame->function_name);
   bool inserted;
   std::tie(std::ignore, inserted) = dumped_frames.emplace(frame.id());
   if (inserted) {
-    auto frame_proto = packet->add_frames();
+    if (currently_written() > kPacketSizeThreshold)
+      NewProfilePacket();
+
+    auto frame_proto = current_profile_packet->add_frames();
     frame_proto->set_id(frame.id());
     frame_proto->set_function_name_id(frame->function_name.id());
     frame_proto->set_mapping_id(frame->mapping.id());
@@ -253,12 +287,14 @@ void DumpState::WriteFrame(ProfilePacket* packet, Interned<Frame> frame) {
   }
 }
 
-void DumpState::WriteString(ProfilePacket* packet,
-                            const Interned<std::string>& str) {
+void DumpState::WriteString(const Interned<std::string>& str) {
   bool inserted;
   std::tie(std::ignore, inserted) = dumped_strings.emplace(str.id());
   if (inserted) {
-    auto interned_string = packet->add_strings();
+    if (currently_written() > kPacketSizeThreshold)
+      NewProfilePacket();
+
+    auto interned_string = current_profile_packet->add_strings();
     interned_string->set_id(str.id());
     interned_string->set_str(str->c_str(), str->size());
   }
@@ -279,37 +315,30 @@ void BookkeepingThread::HandleBookkeepingRecord(BookkeepingRecord* rec) {
   if (rec->record_type == BookkeepingRecord::Type::Dump) {
     DumpRecord& dump_rec = rec->dump_record;
     std::shared_ptr<TraceWriter> trace_writer = dump_rec.trace_writer.lock();
-    if (!trace_writer)
+    if (!trace_writer) {
+      PERFETTO_LOG("Not dumping heaps");
       return;
+    }
     PERFETTO_LOG("Dumping heaps");
-    std::set<GlobalCallstackTrie::Node*> callstacks_to_dump;
-    TraceWriter::TracePacketHandle trace_packet =
-        trace_writer->NewTracePacket();
-    auto profile_packet = trace_packet->set_profile_packet();
+    DumpState dump_state(trace_writer.get(), &next_index);
+
     for (const pid_t pid : dump_rec.pids) {
-      ProfilePacket::ProcessHeapSamples* sample =
-          profile_packet->add_process_dumps();
-      sample->set_pid(static_cast<uint64_t>(pid));
       auto it = bookkeeping_data_.find(pid);
       if (it == bookkeeping_data_.end())
         continue;
 
       PERFETTO_LOG("Dumping %d ", it->first);
-      it->second.heap_tracker.Dump(sample, &callstacks_to_dump);
+      it->second.heap_tracker.Dump(pid, &dump_state);
     }
 
-    // TODO(fmayer): For incremental dumps, this should be owned by the
-    // producer. This way we can keep track on what we dumped accross multiple
-    // dumps.
-    DumpState dump_state;
-
-    for (GlobalCallstackTrie::Node* node : callstacks_to_dump) {
+    for (GlobalCallstackTrie::Node* node : dump_state.callstacks_to_dump) {
       // There need to be two separate loops over built_callstack because
       // protozero cannot interleave different messages.
       auto built_callstack = callsites_.BuildCallstack(node);
       for (const Interned<Frame>& frame : built_callstack)
-        dump_state.WriteFrame(profile_packet, frame);
-      ProfilePacket::Callstack* callstack = profile_packet->add_callstacks();
+        dump_state.WriteFrame(frame);
+      ProfilePacket::Callstack* callstack =
+          dump_state.current_profile_packet->add_callstacks();
       callstack->set_id(node->id());
       for (const Interned<Frame>& frame : built_callstack)
         callstack->add_frame_ids(frame.id());
@@ -327,8 +356,8 @@ void BookkeepingThread::HandleBookkeepingRecord(BookkeepingRecord* rec) {
         it = bookkeeping_data_.erase(it);
       }
     }
-    trace_packet->Finalize();
-    dump_rec.callback();
+    dump_state.current_trace_packet->Finalize();
+    trace_writer->Flush(dump_rec.callback);
   } else if (rec->record_type == BookkeepingRecord::Type::Free) {
     FreeRecord& free_rec = rec->free_record;
     FreePageEntry* entries = free_rec.metadata->entries;

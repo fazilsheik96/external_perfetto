@@ -69,7 +69,7 @@ cc_binary {
     "src/protozero/message_handle.cc",
     "src/protozero/proto_decoder.cc",
     "src/protozero/proto_field_descriptor.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/tracing/core/android_log_config.cc",
@@ -88,6 +88,7 @@ cc_binary {
     "src/tracing/core/shared_memory_abi.cc",
     "src/tracing/core/shared_memory_arbiter_impl.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
+    "src/tracing/core/startup_trace_writer.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -136,6 +137,7 @@ cc_binary {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -173,6 +175,9 @@ cc_library_shared {
   ],
   defaults: [
     "perfetto_defaults",
+  ],
+  cflags: [
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
   include_dirs: [
     "bionic/libc",
@@ -224,7 +229,7 @@ cc_library_shared {
     "src/protozero/message_handle.cc",
     "src/protozero/proto_decoder.cc",
     "src/protozero/proto_field_descriptor.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/traced/probes/android_log/android_log_data_source.cc",
@@ -273,6 +278,7 @@ cc_library_shared {
     "src/tracing/core/shared_memory_abi.cc",
     "src/tracing/core/shared_memory_arbiter_impl.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
+    "src/tracing/core/startup_trace_writer.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -315,6 +321,7 @@ cc_library_shared {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -335,6 +342,9 @@ cc_library_shared {
   ],
   defaults: [
     "perfetto_defaults",
+  ],
+  cflags: [
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
   static_libs: [
     "libhealthhalutils",
@@ -393,7 +403,7 @@ cc_binary {
     "src/protozero/message_handle.cc",
     "src/protozero/proto_decoder.cc",
     "src/protozero/proto_field_descriptor.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/tracing/core/android_log_config.cc",
@@ -412,6 +422,7 @@ cc_binary {
     "src/tracing/core/shared_memory_abi.cc",
     "src/tracing/core/shared_memory_arbiter_impl.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
+    "src/tracing/core/startup_trace_writer.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -560,7 +571,7 @@ cc_test {
     "src/protozero/message_handle.cc",
     "src/protozero/proto_decoder.cc",
     "src/protozero/proto_field_descriptor.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/traced/probes/android_log/android_log_data_source.cc",
@@ -608,6 +619,7 @@ cc_test {
     "src/tracing/core/shared_memory_abi.cc",
     "src/tracing/core/shared_memory_arbiter_impl.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
+    "src/tracing/core/startup_trace_writer.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -1188,6 +1200,7 @@ genrule {
     "protos/perfetto/trace/ftrace/kmem.proto",
     "protos/perfetto/trace/ftrace/lowmemorykiller.proto",
     "protos/perfetto/trace/ftrace/mdss.proto",
+    "protos/perfetto/trace/ftrace/mm_event.proto",
     "protos/perfetto/trace/ftrace/oom.proto",
     "protos/perfetto/trace/ftrace/power.proto",
     "protos/perfetto/trace/ftrace/regulator.proto",
@@ -1224,6 +1237,7 @@ genrule {
     "external/perfetto/protos/perfetto/trace/ftrace/kmem.pb.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/lowmemorykiller.pb.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/mdss.pb.cc",
+    "external/perfetto/protos/perfetto/trace/ftrace/mm_event.pb.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/oom.pb.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/power.pb.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/regulator.pb.cc",
@@ -1261,6 +1275,7 @@ genrule {
     "protos/perfetto/trace/ftrace/kmem.proto",
     "protos/perfetto/trace/ftrace/lowmemorykiller.proto",
     "protos/perfetto/trace/ftrace/mdss.proto",
+    "protos/perfetto/trace/ftrace/mm_event.proto",
     "protos/perfetto/trace/ftrace/oom.proto",
     "protos/perfetto/trace/ftrace/power.proto",
     "protos/perfetto/trace/ftrace/regulator.proto",
@@ -1297,6 +1312,7 @@ genrule {
     "external/perfetto/protos/perfetto/trace/ftrace/kmem.pb.h",
     "external/perfetto/protos/perfetto/trace/ftrace/lowmemorykiller.pb.h",
     "external/perfetto/protos/perfetto/trace/ftrace/mdss.pb.h",
+    "external/perfetto/protos/perfetto/trace/ftrace/mm_event.pb.h",
     "external/perfetto/protos/perfetto/trace/ftrace/oom.pb.h",
     "external/perfetto/protos/perfetto/trace/ftrace/power.pb.h",
     "external/perfetto/protos/perfetto/trace/ftrace/regulator.pb.h",
@@ -1337,6 +1353,7 @@ genrule {
     "protos/perfetto/trace/ftrace/kmem.proto",
     "protos/perfetto/trace/ftrace/lowmemorykiller.proto",
     "protos/perfetto/trace/ftrace/mdss.proto",
+    "protos/perfetto/trace/ftrace/mm_event.proto",
     "protos/perfetto/trace/ftrace/oom.proto",
     "protos/perfetto/trace/ftrace/power.proto",
     "protos/perfetto/trace/ftrace/regulator.proto",
@@ -1374,6 +1391,7 @@ genrule {
     "external/perfetto/protos/perfetto/trace/ftrace/kmem.pbzero.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/lowmemorykiller.pbzero.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/mdss.pbzero.cc",
+    "external/perfetto/protos/perfetto/trace/ftrace/mm_event.pbzero.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/oom.pbzero.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/power.pbzero.cc",
     "external/perfetto/protos/perfetto/trace/ftrace/regulator.pbzero.cc",
@@ -1411,6 +1429,7 @@ genrule {
     "protos/perfetto/trace/ftrace/kmem.proto",
     "protos/perfetto/trace/ftrace/lowmemorykiller.proto",
     "protos/perfetto/trace/ftrace/mdss.proto",
+    "protos/perfetto/trace/ftrace/mm_event.proto",
     "protos/perfetto/trace/ftrace/oom.proto",
     "protos/perfetto/trace/ftrace/power.proto",
     "protos/perfetto/trace/ftrace/regulator.proto",
@@ -1448,6 +1467,7 @@ genrule {
     "external/perfetto/protos/perfetto/trace/ftrace/kmem.pbzero.h",
     "external/perfetto/protos/perfetto/trace/ftrace/lowmemorykiller.pbzero.h",
     "external/perfetto/protos/perfetto/trace/ftrace/mdss.pbzero.h",
+    "external/perfetto/protos/perfetto/trace/ftrace/mm_event.pbzero.h",
     "external/perfetto/protos/perfetto/trace/ftrace/oom.pbzero.h",
     "external/perfetto/protos/perfetto/trace/ftrace/power.pbzero.h",
     "external/perfetto/protos/perfetto/trace/ftrace/regulator.pbzero.h",
@@ -1955,6 +1975,7 @@ cc_binary_host {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -2093,6 +2114,7 @@ cc_binary_host {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -2301,7 +2323,7 @@ cc_library_static {
     "src/protozero/message_handle.cc",
     "src/protozero/proto_decoder.cc",
     "src/protozero/proto_field_descriptor.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/tracing/core/android_log_config.cc",
@@ -2320,6 +2342,7 @@ cc_library_static {
     "src/tracing/core/shared_memory_abi.cc",
     "src/tracing/core/shared_memory_arbiter_impl.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
+    "src/tracing/core/startup_trace_writer.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -2390,6 +2413,7 @@ cc_library_static {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -2550,6 +2574,7 @@ cc_test {
     "src/profiling/memory/heapprofd_producer.cc",
     "src/profiling/memory/interner_unittest.cc",
     "src/profiling/memory/proc_utils.cc",
+    "src/profiling/memory/proc_utils_unittest.cc",
     "src/profiling/memory/process_matcher.cc",
     "src/profiling/memory/process_matcher_unittest.cc",
     "src/profiling/memory/record_reader.cc",
@@ -2572,7 +2597,7 @@ cc_test {
     "src/protozero/proto_decoder_unittest.cc",
     "src/protozero/proto_field_descriptor.cc",
     "src/protozero/proto_utils_unittest.cc",
-    "src/protozero/scattered_stream_memory_delegate.cc",
+    "src/protozero/scattered_heap_buffer.cc",
     "src/protozero/scattered_stream_null_delegate.cc",
     "src/protozero/scattered_stream_writer.cc",
     "src/protozero/scattered_stream_writer_unittest.cc",
@@ -2649,6 +2674,8 @@ cc_test {
     "src/tracing/core/shared_memory_arbiter_impl_unittest.cc",
     "src/tracing/core/sliced_protobuf_input_stream.cc",
     "src/tracing/core/sliced_protobuf_input_stream_unittest.cc",
+    "src/tracing/core/startup_trace_writer.cc",
+    "src/tracing/core/startup_trace_writer_unittest.cc",
     "src/tracing/core/sys_stats_config.cc",
     "src/tracing/core/test_config.cc",
     "src/tracing/core/trace_buffer.cc",
@@ -2680,11 +2707,14 @@ cc_test {
   shared_libs: [
     "libandroid",
     "libbase",
+    "libbinder",
     "liblog",
     "libprocinfo",
     "libprotobuf-cpp-full",
     "libprotobuf-cpp-lite",
+    "libservices",
     "libunwindstack",
+    "libutils",
   ],
   static_libs: [
     "libgmock",
@@ -2731,6 +2761,7 @@ cc_test {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
   product_variables: {
     pdk: {
@@ -2770,7 +2801,6 @@ cc_binary_host {
     "src/base/virtual_destructors.cc",
     "src/base/watchdog_posix.cc",
     "tools/trace_to_text/ftrace_event_formatter.cc",
-    "tools/trace_to_text/ftrace_inode_handler.cc",
     "tools/trace_to_text/main.cc",
     "tools/trace_to_text/proto_full_utils.cc",
     "tools/trace_to_text/trace_to_profile.cc",
@@ -2807,6 +2837,7 @@ cc_binary_host {
   cflags: [
     "-DGOOGLE_PROTOBUF_NO_RTTI",
     "-DGOOGLE_PROTOBUF_NO_STATIC_INITIALIZER",
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
 }
 
@@ -2826,6 +2857,9 @@ cc_binary {
   defaults: [
     "perfetto_defaults",
   ],
+  cflags: [
+    "-DPERFETTO_BUILD_WITH_ANDROID",
+  ],
 }
 
 // GN target: //:traced_probes
@@ -2840,6 +2874,9 @@ cc_binary {
   ],
   defaults: [
     "perfetto_defaults",
+  ],
+  cflags: [
+    "-DPERFETTO_BUILD_WITH_ANDROID",
   ],
   required: [
     "libperfetto_android_internal",
@@ -2871,6 +2908,7 @@ cc_library_static {
     "libprotobuf-cpp-lite",
   ],
   static_libs: [
+    "libgmock",
     "libgtest",
     "perfetto_src_tracing_ipc",
     "perfetto_trace_protos",

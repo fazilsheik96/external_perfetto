@@ -36,6 +36,7 @@
 #include "perfetto/base/utils.h"
 #include "perfetto/protozero/proto_utils.h"
 #include "perfetto/traced/traced.h"
+#include "perfetto/tracing/core/basic_types.h"
 #include "perfetto/tracing/core/data_source_config.h"
 #include "perfetto/tracing/core/data_source_descriptor.h"
 #include "perfetto/tracing/core/trace_config.h"
@@ -57,8 +58,6 @@
 
 namespace perfetto {
 namespace {
-
-constexpr uint32_t kFlushTimeoutMs = 5000;
 
 perfetto::PerfettoCmd* g_consumer_cmd;
 
@@ -155,10 +154,12 @@ statsd-specific flags:
   --alert-id           : ID of the alert that triggered this trace.
   --config-id          : ID of the triggering config.
   --config-uid         : UID of app which registered the config.
+  --subscription-id    : ID of the subscription that triggered this trace.
 
 Detach mode. DISCOURAGED, read https://docs.perfetto.dev/#/detached-mode :
   --detach=key          : Detach from the tracing session with the given key.
   --attach=key [--stop] : Re-attach to the session (optionally stop tracing once reattached).
+  --is_detached=key     : Check if the session can be re-attached (0:Yes, 2:No, 1:Error).
 )",
                 argv0);
   return 1;
@@ -169,6 +170,7 @@ int PerfettoCmd::Main(int argc, char** argv) {
     OPT_ALERT_ID = 1000,
     OPT_CONFIG_ID,
     OPT_CONFIG_UID,
+    OPT_SUBSCRIPTION_ID,
     OPT_RESET_GUARDRAILS,
     OPT_PBTXT_CONFIG,
     OPT_DROPBOX,
@@ -176,10 +178,10 @@ int PerfettoCmd::Main(int argc, char** argv) {
     OPT_IGNORE_GUARDRAILS,
     OPT_DETACH,
     OPT_ATTACH,
+    OPT_IS_DETACHED,
     OPT_STOP,
   };
   static const struct option long_options[] = {
-      // |option_index| relies on the order of options, don't reshuffle them.
       {"help", required_argument, nullptr, 'h'},
       {"config", required_argument, nullptr, 'c'},
       {"out", required_argument, nullptr, 'o'},
@@ -193,9 +195,11 @@ int PerfettoCmd::Main(int argc, char** argv) {
       {"alert-id", required_argument, nullptr, OPT_ALERT_ID},
       {"config-id", required_argument, nullptr, OPT_CONFIG_ID},
       {"config-uid", required_argument, nullptr, OPT_CONFIG_UID},
+      {"subscription-id", required_argument, nullptr, OPT_SUBSCRIPTION_ID},
       {"reset-guardrails", no_argument, nullptr, OPT_RESET_GUARDRAILS},
       {"detach", required_argument, nullptr, OPT_DETACH},
       {"attach", required_argument, nullptr, OPT_ATTACH},
+      {"is_detached", required_argument, nullptr, OPT_IS_DETACHED},
       {"stop", no_argument, nullptr, OPT_STOP},
       {"app", required_argument, nullptr, OPT_ATRACE_APP},
       {nullptr, 0, nullptr, 0}};
@@ -315,6 +319,11 @@ int PerfettoCmd::Main(int argc, char** argv) {
       continue;
     }
 
+    if (option == OPT_SUBSCRIPTION_ID) {
+      statsd_metadata.set_triggering_subscription_id(atoll(optarg));
+      continue;
+    }
+
     if (option == OPT_ATRACE_APP) {
       config_options.atrace_apps.push_back(std::string(optarg));
       has_config_options = true;
@@ -329,6 +338,13 @@ int PerfettoCmd::Main(int argc, char** argv) {
 
     if (option == OPT_ATTACH) {
       attach_key_ = std::string(optarg);
+      PERFETTO_CHECK(!attach_key_.empty());
+      continue;
+    }
+
+    if (option == OPT_IS_DETACHED) {
+      attach_key_ = std::string(optarg);
+      redetach_once_attached_ = true;
       PERFETTO_CHECK(!attach_key_.empty());
       continue;
     }
@@ -397,9 +413,9 @@ int PerfettoCmd::Main(int argc, char** argv) {
     }
   }
 
+  trace_config_.reset(new TraceConfig());
   if (parsed) {
     *trace_config_proto.mutable_statsd_metadata() = std::move(statsd_metadata);
-    trace_config_.reset(new TraceConfig());
     trace_config_->FromProto(trace_config_proto);
     trace_config_raw.clear();
   } else if (!is_attach()) {
@@ -466,7 +482,8 @@ int PerfettoCmd::Main(int argc, char** argv) {
   args.is_dropbox = !dropbox_tag_.empty();
   args.current_time = base::GetWallTimeS();
   args.ignore_guardrails = ignore_guardrails;
-#if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_USERDEBUG_BUILD)
+#if PERFETTO_BUILDFLAG(PERFETTO_ANDROID_USERDEBUG_BUILD) || \
+    PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD)
   args.max_upload_bytes_override =
       trace_config_->guardrail_overrides().max_upload_per_day_bytes();
 #endif
@@ -507,8 +524,10 @@ void PerfettoCmd::OnConnect() {
 
   // Failsafe mechanism to avoid waiting indefinitely if the service hangs.
   if (trace_config_->duration_ms()) {
+    uint32_t trace_timeout = trace_config_->duration_ms() + 10000 +
+                             trace_config_->flush_timeout_ms();
     task_runner_.PostDelayedTask(std::bind(&PerfettoCmd::OnTimeout, this),
-                                 trace_config_->duration_ms() + 10000);
+                                 trace_timeout);
   }
 }
 
@@ -639,9 +658,11 @@ void PerfettoCmd::SetupCtrlCSignalHandler() {
   sigaction(SIGTERM, &sa, nullptr);
 
   task_runner_.AddFileDescriptorWatch(ctrl_c_evt_.fd(), [this] {
-    PERFETTO_LOG("SIGINT/SIGTERM received: disabling tracing");
+    PERFETTO_LOG("SIGINT/SIGTERM received: disabling tracing.");
     ctrl_c_evt_.Clear();
-    consumer_endpoint_->Flush(kFlushTimeoutMs, [this](bool) {
+    consumer_endpoint_->Flush(0, [this](bool flush_success) {
+      if (!flush_success)
+        PERFETTO_ELOG("Final flush unsuccessful.");
       consumer_endpoint_->DisableTracing();
     });
   });
@@ -657,15 +678,29 @@ void PerfettoCmd::OnDetach(bool success) {
 
 void PerfettoCmd::OnAttach(bool success, const TraceConfig& trace_config) {
   if (!success) {
-    PERFETTO_ELOG("Session re-attach failed. Check service logs for details");
-    exit(1);
+    if (!redetach_once_attached_) {
+      // Print an error message if attach fails, with the exception of the
+      // --is_detached case, where we want to silently return.
+      PERFETTO_ELOG("Session re-attach failed. Check service logs for details");
+    }
+    // Keep this exit code distinguishable from the general error code so
+    // --is_detached can tell the difference between a general error and the
+    // not-detached case.
+    exit(2);
+  }
+
+  if (redetach_once_attached_) {
+    consumer_endpoint_->Detach(attach_key_);  // Will invoke OnDetach() soon.
+    return;
   }
 
   trace_config_.reset(new TraceConfig(trace_config));
   PERFETTO_DCHECK(trace_config_->write_into_file());
 
   if (stop_trace_once_attached_) {
-    consumer_endpoint_->Flush(kFlushTimeoutMs, [this](bool) {
+    consumer_endpoint_->Flush(0, [this](bool flush_success) {
+      if (!flush_success)
+        PERFETTO_ELOG("Final flush unsuccessful.");
       consumer_endpoint_->DisableTracing();
     });
   }

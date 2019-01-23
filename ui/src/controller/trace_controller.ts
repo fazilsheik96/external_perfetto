@@ -27,6 +27,7 @@ import {TimeSpan} from '../common/time';
 import {QuantizedLoad, ThreadDesc} from '../frontend/globals';
 import {SLICE_TRACK_KIND} from '../tracks/chrome_slices/common';
 import {CPU_SLICE_TRACK_KIND} from '../tracks/cpu_slices/common';
+import {CPU_FREQ_TRACK_KIND} from '../tracks/cpu_freq/common';
 import {PROCESS_SUMMARY_TRACK} from '../tracks/process_summary/common';
 
 import {Child, Children, Controller} from './controller';
@@ -169,15 +170,17 @@ export class TraceController extends Controller<States> {
     const traceTimeState = {
       startSec: traceTime.start,
       endSec: traceTime.end,
-      lastUpdate: Date.now() / 1000,
     };
-    const actions = [
+    const actions: DeferredAction[] = [
       Actions.setTraceTime(traceTimeState),
       Actions.navigate({route: '/viewer'}),
     ];
 
-    if (globals.state.visibleTraceTime.lastUpdate === 0) {
-      actions.push(Actions.setVisibleTraceTime(traceTimeState));
+    if (globals.state.frontendLocalState.lastUpdate === 0) {
+      actions.push(Actions.setVisibleTraceTime({
+        time: traceTimeState,
+        lastUpdate: Date.now() / 1000,
+      }));
     }
 
     globals.dispatchMultiple(actions);
@@ -220,6 +223,11 @@ export class TraceController extends Controller<States> {
     //    }
     //  }));
     //}
+    const maxFreq = await engine.query(`
+     select max(value)
+     from counters
+     where name = 'cpufreq';
+    `);
 
     for (let cpu = 0; cpu < numCpus; cpu++) {
       addToTrackActions.push(Actions.addTrack({
@@ -231,14 +239,34 @@ export class TraceController extends Controller<States> {
           cpu,
         }
       }));
+
+      // Only add a cpu freq track if we have
+      // cpu freq data.
+      const freqExists = await engine.query(`
+        select value
+        from counters
+        where name = 'cpufreq' and ref = ${cpu}
+        limit 1;
+      `);
+      if (freqExists.numRecords > 0) {
+        addToTrackActions.push(Actions.addTrack({
+          engineId: this.engineId,
+          kind: CPU_FREQ_TRACK_KIND,
+          name: `Cpu ${cpu} frequency`,
+          trackGroup: SCROLLING_TRACK_GROUP,
+          config: {
+            cpu,
+            maximumValue: maxFreq.columns[0].longValues![0],
+          }
+        }));
+      }
     }
 
-    // TODO(b/120605557): Replace with is not null when b/120605557 fixed.
     const counters = await engine.query(`
-      select name, ifnull(ref, -1) as numeric_ref, ref_type, count(ref_type)
+      select name, ref, ref_type, count(ref_type)
       from counters
-      where numeric_ref != -1
-      group by name, numeric_ref, ref_type
+      where ref is not null
+      group by name, ref, ref_type
       order by ref_type desc
     `);
     const counterUpids = new Set<number>();
@@ -294,9 +322,21 @@ export class TraceController extends Controller<States> {
       utidToMaxDepth.set(utid, maxDepth);
     }
 
-    const threadQuery = await engine.query(
-        'select utid, tid, upid, pid, thread.name, process.name ' +
-        'from thread inner join process using(upid)');
+    // Return all threads with parent process information
+    // sorted by:
+    //  total cpu time *for the whole parent process*
+    //  upid
+    //  utid
+    const threadQuery = await engine.query(`
+        select utid, tid, upid, pid, thread.name, process.name, total_dur
+        from
+          thread
+          inner join process using(upid)
+          left join (select upid, sum(dur) as total_dur
+              from sched join thread using(utid)
+              group by upid
+            ) using(upid) group by utid, upid
+        order by total_dur desc, upid, utid`);
 
     const upidToUuid = new Map<number, string>();
     const addSummaryTrackActions: DeferredAction[] = [];
