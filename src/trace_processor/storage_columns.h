@@ -41,11 +41,7 @@ class StorageColumn {
   virtual ~StorageColumn();
 
   // Implements StorageCursor::ColumnReporter.
-  virtual void ReportResult(sqlite3_context*, uint32_t) const = 0;
-
-  // Bounds a filter on this column between a minimum and maximum index.
-  // Generally this is only possible if the column is sorted.
-  virtual Bounds BoundFilter(int op, sqlite3_value* value) const = 0;
+  virtual void ReportResult(sqlite3_context*, uint32_t row) const = 0;
 
   // Given a SQLite operator and value for the comparision, returns a
   // predicate which takes in a row index and returns whether the row should
@@ -59,8 +55,12 @@ class StorageColumn {
   // Returns the type of this column.
   virtual Table::ColumnType GetType() const = 0;
 
+  // Bounds a filter on this column between a minimum and maximum index.
+  // Generally this is only possible if the column is sorted.
+  virtual Bounds BoundFilter(int, sqlite3_value*) const { return Bounds{}; }
+
   // Returns whether this column is sorted in the storage.
-  virtual bool IsNaturallyOrdered() const = 0;
+  virtual bool IsNaturallyOrdered() const { return false; }
 
   const std::string& name() const { return col_name_; }
   bool hidden() const { return hidden_; }
@@ -78,7 +78,7 @@ class NumericColumn : public StorageColumn {
   // to the rows they are located at.
   NumericColumn(std::string col_name,
                 const std::deque<T>* deque,
-                const std::multimap<T, uint32_t>* index,
+                const std::deque<std::vector<uint32_t>>* index,
                 bool hidden,
                 bool is_naturally_ordered)
       : StorageColumn(col_name, hidden),
@@ -178,7 +178,7 @@ class NumericColumn : public StorageColumn {
 
  protected:
   const std::deque<T>* deque_ = nullptr;
-  const std::multimap<T, uint32_t>* index_ = nullptr;
+  const std::deque<std::vector<uint32_t>>* index_ = nullptr;
 
  private:
   T kTMin = std::numeric_limits<T>::lowest();
@@ -187,22 +187,11 @@ class NumericColumn : public StorageColumn {
   void FilterIntegerIndexEq(sqlite3_value* value,
                             FilteredRowIndex* index) const {
     auto raw = sqlite_utils::ExtractSqliteValue<int64_t>(value);
-    if (raw < kTMin || raw > kTMax) {
-      // If the compared value is out of bounds for T, we will never match any
-      // rows. Just return an empty result set.
+    if (raw < 0 || raw >= static_cast<int64_t>(index_->size())) {
       index->IntersectRows({});
       return;
     }
-
-    // Otherwise, lookup the cast value in the index and return the results.
-    auto pair = index_->equal_range(static_cast<T>(raw));
-    auto size = static_cast<size_t>(std::distance(pair.first, pair.second));
-    std::vector<uint32_t> rows(size);
-    size_t i = 0;
-    for (auto it = pair.first; it != pair.second; it++) {
-      rows[i++] = it->second;
-    }
-    index->IntersectRows(std::move(rows));
+    index->IntersectRows((*index_)[static_cast<size_t>(raw)]);
   }
 
   template <typename C>

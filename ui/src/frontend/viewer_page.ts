@@ -22,6 +22,7 @@ import {DragGestureHandler} from './drag_gesture_handler';
 import {globals} from './globals';
 import {HeaderPanel} from './header_panel';
 import {NotesEditorPanel, NotesPanel} from './notes_panel';
+import {SliceDetailsPanel} from './slice_panel';
 import {OverviewTimelinePanel} from './overview_timeline_panel';
 import {createPage} from './pages';
 import {PanAndZoomHandler} from './pan_and_zoom_handler';
@@ -29,8 +30,8 @@ import {Panel} from './panel';
 import {AnyAttrsVnode, PanelContainer} from './panel_container';
 import {TimeAxisPanel} from './time_axis_panel';
 import {computeZoom} from './time_scale';
+import {TRACK_SHELL_WIDTH} from './track_constants';
 import {TrackGroupPanel} from './track_group_panel';
-import {TRACK_SHELL_WIDTH} from './track_panel';
 import {TrackPanel} from './track_panel';
 
 const DRAG_HANDLE_HEIGHT_PX = 12;
@@ -238,6 +239,13 @@ class TraceViewer implements m.ClassComponent {
       detailsPanels.push(m(NotesEditorPanel, {
         key: 'notes',
         id: globals.state.selectedNote,
+      }));
+    }
+
+    if (globals.state.selectedSlice) {
+      detailsPanels.push(m(SliceDetailsPanel, {
+        key: 'slice',
+        selection: globals.state.selectedSlice,
       }));
     }
 

@@ -171,10 +171,14 @@ bool DoUnwind(WireMessage* msg, UnwindingMetadata* metadata, AllocRecord* out) {
   std::unique_ptr<unwindstack::Regs> regs(
       CreateFromRawData(alloc_metadata->arch, alloc_metadata->register_data));
   if (regs == nullptr) {
+    unwindstack::FrameData frame_data{};
+    frame_data.function_name = "ERROR READING REGISTERS";
+    frame_data.map_name = "ERROR";
+
+    out->frames.emplace_back(frame_data, "");
     PERFETTO_DLOG("regs");
     return false;
   }
-  out->alloc_metadata = *alloc_metadata;
   uint8_t* stack = reinterpret_cast<uint8_t*>(msg->payload);
   std::shared_ptr<unwindstack::Memory> mems =
       std::make_shared<StackOverlayMemory>(metadata->fd_mem,
@@ -202,20 +206,29 @@ bool DoUnwind(WireMessage* msg, UnwindingMetadata* metadata, AllocRecord* out) {
     if (error_code != unwindstack::ERROR_INVALID_MAP)
       break;
   }
-  out->frames = unwinder.frames();
+  std::vector<unwindstack::FrameData> frames = unwinder.ConsumeFrames();
+  for (unwindstack::FrameData& fd : frames) {
+    std::string build_id;
+    if (fd.map_name != "") {
+      unwindstack::MapInfo* map_info = metadata->maps.Find(fd.pc);
+      if (map_info)
+        build_id = map_info->GetBuildID();
+    }
+
+    if (base::EndsWith(fd.map_name, ".so"))
+      MaybeDemangle(&fd.function_name);
+    out->frames.emplace_back(std::move(fd), std::move(build_id));
+  }
+
   if (error_code != 0) {
     unwindstack::FrameData frame_data{};
     frame_data.function_name = "ERROR " + std::to_string(error_code);
     frame_data.map_name = "ERROR";
 
-    out->frames.emplace_back(frame_data);
+    out->frames.emplace_back(frame_data, "");
     PERFETTO_DLOG("unwinding failed %" PRIu8, error_code);
   }
 
-  for (unwindstack::FrameData& fd : out->frames) {
-    if (base::EndsWith(fd.map_name, ".so"))
-      MaybeDemangle(&fd.function_name);
-  }
   return true;
 }
 
@@ -231,12 +244,16 @@ bool HandleUnwindingRecord(UnwindingRecord* rec, BookkeepingRecord* out) {
       return false;
     }
 
+    out->alloc_record.alloc_metadata = *msg.alloc_header;
     out->pid = rec->pid;
+    out->client_generation = msg.alloc_header->client_generation;
     out->record_type = BookkeepingRecord::Type::Malloc;
-    return DoUnwind(&msg, metadata.get(), &out->alloc_record);
+    DoUnwind(&msg, metadata.get(), &out->alloc_record);
+    return true;
   } else if (msg.record_type == RecordType::Free) {
     out->record_type = BookkeepingRecord::Type::Free;
     out->pid = rec->pid;
+    out->client_generation = msg.free_header->client_generation;
     // We need to keep this alive, because msg.free_header is a pointer into
     // this.
     out->free_record.free_data = std::move(rec->data);
