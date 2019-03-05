@@ -20,7 +20,6 @@ import {TimeSpan} from '../common/time';
 import {copyToClipboard} from './clipboard';
 import {DragGestureHandler} from './drag_gesture_handler';
 import {globals} from './globals';
-import {HeaderPanel} from './header_panel';
 import {NotesEditorPanel, NotesPanel} from './notes_panel';
 import {SliceDetailsPanel} from './slice_panel';
 import {OverviewTimelinePanel} from './overview_timeline_panel';
@@ -37,7 +36,7 @@ import {TrackPanel} from './track_panel';
 import {Actions} from '../common/actions';
 
 const DRAG_HANDLE_HEIGHT_PX = 12;
-const DEFAULT_DETAILS_HEIGHT_PX = 250 + DRAG_HANDLE_HEIGHT_PX;
+const DEFAULT_DETAILS_HEIGHT_PX = 230 + DRAG_HANDLE_HEIGHT_PX;
 
 class QueryTable extends Panel {
   view() {
@@ -212,6 +211,7 @@ class TraceViewer implements m.ClassComponent {
       onDragSelect: (selectStartPx: number|null, selectEndPx: number) => {
         if (!selectStartPx) return;
         this.keepCurrentSelection = true;
+        globals.frontendLocalState.setShowTimeSelectPreview(false);
         const traceTime = globals.state.traceTime;
         const scale = frontendLocalState.timeScale;
         const startPx = Math.min(selectStartPx, selectEndPx);
@@ -233,13 +233,7 @@ class TraceViewer implements m.ClassComponent {
 
   view() {
     const scrollingPanels: AnyAttrsVnode[] =
-        globals.state.scrollingTracks.length > 0 ?
-        [
-          m(HeaderPanel, {title: 'Tracks', key: 'tracksheader'}),
-          ...globals.state.scrollingTracks.map(
-              id => m(TrackPanel, {key: id, id})),
-        ] :
-        [];
+        globals.state.scrollingTracks.map(id => m(TrackPanel, {key: id, id}));
 
     for (const group of Object.values(globals.state.trackGroups)) {
       scrollingPanels.push(m(TrackGroupPanel, {
@@ -304,10 +298,10 @@ class TraceViewer implements m.ClassComponent {
               panels: [
                 m(OverviewTimelinePanel, {key: 'overview'}),
                 m(TimeAxisPanel, {key: 'timeaxis'}),
+                m(TimeSelectionPanel, {key: 'timeselection'}),
                 m(NotesPanel, {key: 'notes'}),
                 ...globals.state.pinnedTracks.map(
                     id => m(TrackPanel, {key: id, id})),
-                m(TimeSelectionPanel, {key: 'timeselection'})
               ],
             })),
           m('.scrolling-panel-container', m(PanelContainer, {

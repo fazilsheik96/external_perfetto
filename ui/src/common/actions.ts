@@ -231,11 +231,15 @@ export const StateActions = {
   },
 
   // TODO(hjd): Remove setState - it causes problems due to reuse of ids.
-  setState(_state: StateDraft, _args: {newState: State}): void {
-    // This has to be handled at a higher level since we can't
-    // replace the whole tree here however we still need a method here
-    // so it appears on the proxy Actions class.
-    throw new Error('Called setState on StateActions.');
+  setState(state: StateDraft, args: {newState: State}): void {
+    for (const key of Object.keys(state)) {
+      // tslint:disable-next-line no-any
+      delete (state as any)[key];
+    }
+    for (const key of Object.keys(args.newState)) {
+      // tslint:disable-next-line no-any
+      (state as any)[key] = (args.newState as any)[key];
+    }
   },
 
   setRecordConfig(state: StateDraft, args: {config: RecordConfig;}): void {
@@ -251,12 +255,12 @@ export const StateActions = {
     }
   },
 
-  addNote(state: StateDraft, args: {timestamp: number}): void {
+  addNote(state: StateDraft, args: {timestamp: number, color: string}): void {
     const id = `${state.nextId++}`;
     state.notes[id] = {
       id,
       timestamp: args.timestamp,
-      color: '#000000',
+      color: args.color,
       text: '',
     };
     this.selectNote(state, {id});
@@ -292,8 +296,8 @@ export const StateActions = {
     };
   },
 
-  selectTimeSpan(state: StateDraft,
-                 args: {startTs: number, endTs: number}): void {
+  selectTimeSpan(
+      state: StateDraft, args: {startTs: number, endTs: number}): void {
     state.currentSelection = {
       kind: 'TIMESPAN',
       startTs: args.startTs,
