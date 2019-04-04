@@ -33,6 +33,7 @@
 #include "src/trace_processor/ftrace_descriptors.h"
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/slice_tracker.h"
+#include "src/trace_processor/syscall_tracker.h"
 #include "src/trace_processor/trace_processor_context.h"
 
 #include "perfetto/common/android_log_constants.pbzero.h"
@@ -53,10 +54,12 @@
 #include "perfetto/trace/ftrace/signal.pbzero.h"
 #include "perfetto/trace/ftrace/task.pbzero.h"
 #include "perfetto/trace/power/battery_counters.pbzero.h"
+#include "perfetto/trace/power/power_rails.pbzero.h"
 #include "perfetto/trace/profiling/profile_packet.pbzero.h"
 #include "perfetto/trace/ps/process_stats.pbzero.h"
 #include "perfetto/trace/ps/process_tree.pbzero.h"
 #include "perfetto/trace/sys_stats/sys_stats.pbzero.h"
+#include "perfetto/trace/system_info.pbzero.h"
 #include "perfetto/trace/trace.pbzero.h"
 #include "perfetto/trace/trace_packet.pbzero.h"
 
@@ -245,21 +248,6 @@ ProtoTraceParser::ProtoTraceParser(TraceProcessorContext* context)
            context->storage->InternString("mem.mm.kern_alloc.max_lat"),
            context->storage->InternString("mem.mm.kern_alloc.avg_lat"))}};
 
-  // TODO(hjd): Add the missing syscalls + fix on over arch.
-  sys_name_ids_ = {{context->storage->InternString("sys_restart_syscall"),
-                    context->storage->InternString("sys_exit"),
-                    context->storage->InternString("sys_fork"),
-                    context->storage->InternString("sys_read"),
-                    context->storage->InternString("sys_write"),
-                    context->storage->InternString("sys_open"),
-                    context->storage->InternString("sys_close"),
-                    context->storage->InternString("sys_creat"),
-                    context->storage->InternString("sys_link"),
-                    context->storage->InternString("sys_unlink"),
-                    context->storage->InternString("sys_execve"),
-                    context->storage->InternString("sys_chdir"),
-                    context->storage->InternString("sys_time")}};
-
   // Build the lookup table for the strings inside ftrace events (e.g. the
   // name of ftrace event fields and the names of their args).
   for (size_t i = 0; i < GetDescriptorsSize(); i++) {
@@ -286,7 +274,12 @@ ProtoTraceParser::ProtoTraceParser(TraceProcessorContext* context)
 
 ProtoTraceParser::~ProtoTraceParser() = default;
 
-void ProtoTraceParser::ParseTracePacket(int64_t ts, TraceBlobView blob) {
+void ProtoTraceParser::ParseTracePacket(
+    int64_t ts,
+    TraceSorter::TimestampedTracePiece ttp) {
+  PERFETTO_DCHECK(ttp.json_value == nullptr);
+  const TraceBlobView& blob = ttp.blob_view;
+
   protos::pbzero::TracePacket::Decoder packet(blob.data(), blob.length());
 
   if (packet.has_process_tree())
@@ -300,6 +293,9 @@ void ProtoTraceParser::ParseTracePacket(int64_t ts, TraceBlobView blob) {
 
   if (packet.has_battery())
     ParseBatteryCounters(ts, packet.battery());
+
+  if (packet.has_power_rails())
+    ParsePowerRails(packet.power_rails());
 
   if (packet.has_trace_stats())
     ParseTraceStats(packet.trace_stats());
@@ -315,6 +311,9 @@ void ProtoTraceParser::ParseTracePacket(int64_t ts, TraceBlobView blob) {
 
   if (packet.has_profile_packet())
     ParseProfilePacket(packet.profile_packet());
+
+  if (packet.has_system_info())
+    ParseSystemInfo(packet.system_info());
 
   // TODO(lalitm): maybe move this to the flush method in the trace processor
   // once we have it. This may reduce performance in the ArgsTracker though so
@@ -481,9 +480,13 @@ void ProtoTraceParser::ParseProcessStats(int64_t ts, ConstBytes blob) {
   }
 }
 
-void ProtoTraceParser::ParseFtracePacket(uint32_t cpu,
-                                         int64_t ts,
-                                         TraceBlobView ftrace) {
+void ProtoTraceParser::ParseFtracePacket(
+    uint32_t cpu,
+    int64_t ts,
+    TraceSorter::TimestampedTracePiece ttp) {
+  PERFETTO_DCHECK(ttp.json_value == nullptr);
+  const TraceBlobView& ftrace = ttp.blob_view;
+
   ProtoDecoder decoder(ftrace.data(), ftrace.length());
   uint64_t raw_pid = 0;
   if (auto pid_field =
@@ -627,7 +630,8 @@ void ProtoTraceParser::ParseLowmemoryKill(int64_t ts, ConstBytes blob) {
 
   // Store the comm as an arg.
   RowId row_id = TraceStorage::CreateRowId(TableId::kInstants, row);
-  auto comm_id = context_->storage->InternString(lmk.comm());
+  auto comm_id = context_->storage->InternString(
+      lmk.has_comm() ? lmk.comm() : base::StringView());
   context_->args_tracker->AddArg(row_id, comm_name_id_, comm_name_id_,
                                  Variadic::String(comm_id));
 }
@@ -779,8 +783,10 @@ void ProtoTraceParser::ParsePrint(uint32_t,
                                   ConstBytes blob) {
   protos::pbzero::PrintFtraceEvent::Decoder evt(blob.data, blob.size);
   SystraceTracePoint point{};
-  if (!ParseSystraceTracePoint(evt.buf(), &point))
+  if (!ParseSystraceTracePoint(evt.buf(), &point)) {
+    context_->storage->IncrementStats(stats::systrace_parse_failure);
     return;
+  }
 
   switch (point.phase) {
     case 'B': {
@@ -843,6 +849,43 @@ void ProtoTraceParser::ParseBatteryCounters(int64_t ts, ConstBytes blob) {
   }
 }
 
+void ProtoTraceParser::ParsePowerRails(ConstBytes blob) {
+  protos::pbzero::PowerRails::Decoder evt(blob.data, blob.size);
+  if (evt.has_rail_descriptor()) {
+    for (auto it = evt.rail_descriptor(); it; ++it) {
+      protos::pbzero::PowerRails::RailDescriptor::Decoder desc(it->data(),
+                                                               it->size());
+      uint32_t idx = desc.index();
+      if (PERFETTO_UNLIKELY(idx > 256)) {
+        PERFETTO_DLOG("Skipping excessively large power_rail index %" PRIu32,
+                      idx);
+        continue;
+      }
+      if (power_rails_strs_id_.size() <= idx)
+        power_rails_strs_id_.resize(idx + 1);
+      char counter_name[255];
+      snprintf(counter_name, sizeof(counter_name), "power.%.*s_uws",
+               int(desc.rail_name().size), desc.rail_name().data);
+      power_rails_strs_id_[idx] = context_->storage->InternString(counter_name);
+    }
+  }
+
+  if (evt.has_energy_data()) {
+    for (auto it = evt.energy_data(); it; ++it) {
+      protos::pbzero::PowerRails::EnergyData::Decoder desc(it->data(),
+                                                           it->size());
+      if (desc.index() < power_rails_strs_id_.size()) {
+        int64_t ts = static_cast<int64_t>(desc.timestamp_ms()) * 1000000;
+        context_->event_tracker->PushCounter(ts, desc.energy(),
+                                             power_rails_strs_id_[desc.index()],
+                                             0, RefType::kRefNoRef);
+      } else {
+        context_->storage->IncrementStats(stats::power_rail_unknown_index);
+      }
+    }
+  }
+}
+
 void ProtoTraceParser::ParseOOMScoreAdjUpdate(int64_t ts, ConstBytes blob) {
   protos::pbzero::OomScoreAdjUpdateFtraceEvent::Decoder evt(blob.data,
                                                             blob.size);
@@ -882,24 +925,12 @@ void ProtoTraceParser::ParseSysEvent(int64_t ts,
                                      ConstBytes blob) {
   protos::pbzero::SysEnterFtraceEvent::Decoder evt(blob.data, blob.size);
   uint32_t syscall_num = static_cast<uint32_t>(evt.id());
-  if (syscall_num >= sys_name_ids_.size()) {
-    context_->storage->IncrementStats(stats::sys_unknown_syscall);
-    return;
-  }
-
-  // We see two write sys calls around each userspace slice that is going via
-  // trace_marker, this violates the assumption that userspace slices are
-  // perfectly nested. For the moment ignore all write sys calls.
-  // TODO(hjd): Remove this limitation.
-  if (syscall_num == 4 /*sys_write*/)
-    return;
-
-  StringId sys_name_id = sys_name_ids_[syscall_num];
   UniqueTid utid = context_->process_tracker->UpdateThread(ts, pid, 0);
+
   if (is_enter) {
-    context_->slice_tracker->Begin(ts, utid, 0 /* cat */, sys_name_id);
+    context_->syscall_tracker->Enter(ts, utid, syscall_num);
   } else {
-    context_->slice_tracker->End(ts, utid, 0 /* cat */, sys_name_id);
+    context_->syscall_tracker->Exit(ts, utid, syscall_num);
   }
 
   // We are reusing the same function for sys_enter and sys_exit.
@@ -1066,8 +1097,10 @@ void ProtoTraceParser::ParseAndroidLogEvent(ConstBytes blob) {
   uint32_t pid = static_cast<uint32_t>(evt.pid());
   uint32_t tid = static_cast<uint32_t>(evt.tid());
   uint8_t prio = static_cast<uint8_t>(evt.prio());
-  StringId tag_id = context_->storage->InternString(evt.tag());
-  StringId msg_id = context_->storage->InternString(evt.message());
+  StringId tag_id = context_->storage->InternString(
+      evt.has_tag() ? evt.tag() : base::StringView());
+  StringId msg_id = context_->storage->InternString(
+      evt.has_message() ? evt.message() : base::StringView());
 
   char arg_msg[4096];
   char* arg_str = &arg_msg[0];
@@ -1219,9 +1252,19 @@ void ProtoTraceParser::ParseFtraceStats(ConstBytes blob) {
                              static_cast<int64_t>(cpu_stats.commit_overrun()));
     storage->SetIndexedStats(stats::ftrace_cpu_bytes_read_begin + phase, cpu,
                              static_cast<int64_t>(cpu_stats.bytes_read()));
-    storage->SetIndexedStats(
-        stats::ftrace_cpu_oldest_event_ts_begin + phase, cpu,
-        static_cast<int64_t>(cpu_stats.oldest_event_ts() * 1e9));
+
+    // oldest_event_ts can often be set to very high values, possibly because
+    // of wrapping. Ensure that we are not overflowing to avoid ubsan
+    // complaining.
+    double oldest_event_ts = cpu_stats.oldest_event_ts() * 1e9;
+    if (oldest_event_ts >= std::numeric_limits<int64_t>::max()) {
+      storage->SetIndexedStats(stats::ftrace_cpu_oldest_event_ts_begin + phase,
+                               cpu, std::numeric_limits<int64_t>::max());
+    } else {
+      storage->SetIndexedStats(stats::ftrace_cpu_oldest_event_ts_begin + phase,
+                               cpu, static_cast<int64_t>(oldest_event_ts));
+    }
+
     storage->SetIndexedStats(stats::ftrace_cpu_now_ts_begin + phase, cpu,
                              static_cast<int64_t>(cpu_stats.now_ts() * 1e9));
     storage->SetIndexedStats(stats::ftrace_cpu_dropped_events_begin + phase,
@@ -1240,6 +1283,23 @@ void ProtoTraceParser::ParseProfilePacket(ConstBytes blob) {
 
     const char* str = reinterpret_cast<const char*>(entry.str().data);
     context_->storage->InternString(base::StringView(str, entry.str().size));
+  }
+}
+
+void ProtoTraceParser::ParseSystemInfo(ConstBytes blob) {
+  protos::pbzero::SystemInfo::Decoder packet(blob.data, blob.size);
+  if (packet.has_utsname()) {
+    ConstBytes utsname_blob = packet.utsname();
+    protos::pbzero::Utsname::Decoder utsname(utsname_blob.data,
+                                             utsname_blob.size);
+    base::StringView machine = utsname.machine();
+    if (machine == "aarch64" || machine == "armv8l") {
+      context_->syscall_tracker->SetArchitecture(kAarch64);
+    } else if (machine == "x86_64") {
+      context_->syscall_tracker->SetArchitecture(kX86_64);
+    } else {
+      PERFETTO_ELOG("Unknown architecture %s", machine.ToStdString().c_str());
+    }
   }
 }
 

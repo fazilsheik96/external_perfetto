@@ -26,6 +26,7 @@
 #include "perfetto/protozero/field.h"
 #include "src/trace_processor/ftrace_descriptors.h"
 #include "src/trace_processor/trace_blob_view.h"
+#include "src/trace_processor/trace_parser.h"
 #include "src/trace_processor/trace_storage.h"
 
 namespace perfetto {
@@ -52,17 +53,18 @@ inline bool operator==(const SystraceTracePoint& x,
 
 bool ParseSystraceTracePoint(base::StringView, SystraceTracePoint* out);
 
-class ProtoTraceParser {
+class ProtoTraceParser : public TraceParser {
  public:
   using ConstBytes = protozero::ConstBytes;
   explicit ProtoTraceParser(TraceProcessorContext*);
   virtual ~ProtoTraceParser();
 
-  // virtual for testing.
-  virtual void ParseTracePacket(int64_t timestamp, TraceBlobView);
+  // TraceParser implementation.
+  virtual void ParseTracePacket(int64_t timestamp,
+                                TraceSorter::TimestampedTracePiece);
   virtual void ParseFtracePacket(uint32_t cpu,
                                  int64_t timestamp,
-                                 TraceBlobView);
+                                 TraceSorter::TimestampedTracePiece);
   void ParseProcessTree(ConstBytes);
   void ParseProcessStats(int64_t timestamp, ConstBytes);
   void ParseSchedSwitch(uint32_t cpu, int64_t timestamp, ConstBytes);
@@ -82,6 +84,7 @@ class ProtoTraceParser {
   void ParseSignalGenerate(int64_t ts, ConstBytes);
   void ParseLowmemoryKill(int64_t ts, ConstBytes);
   void ParseBatteryCounters(int64_t ts, ConstBytes);
+  void ParsePowerRails(ConstBytes);
   void ParseOOMScoreAdjUpdate(int64_t ts, ConstBytes);
   void ParseMmEventRecord(int64_t ts, uint32_t pid, ConstBytes);
   void ParseSysEvent(int64_t ts, uint32_t pid, bool is_enter, ConstBytes);
@@ -101,6 +104,7 @@ class ProtoTraceParser {
   void ParseTraceStats(ConstBytes);
   void ParseFtraceStats(ConstBytes);
   void ParseProfilePacket(ConstBytes);
+  void ParseSystemInfo(ConstBytes);
 
  private:
   TraceProcessorContext* context_;
@@ -134,6 +138,7 @@ class ProtoTraceParser {
   std::vector<StringId> meminfo_strs_id_;
   std::vector<StringId> vmstat_strs_id_;
   std::vector<StringId> rss_members_;
+  std::vector<StringId> power_rails_strs_id_;
 
   struct FtraceMessageStrings {
     // The string id of name of the event field (e.g. sched_switch's id).
@@ -162,9 +167,6 @@ class ProtoTraceParser {
   static constexpr size_t kMmEventCounterSize = 7;
   std::array<MmEventCounterNames, kMmEventCounterSize> mm_event_counter_names_;
 
-  // Keep this in sync with the Linux syscall count.
-  static constexpr size_t kSysNameIdSize = 13;
-  std::array<StringId, kSysNameIdSize> sys_name_ids_;
 };
 
 }  // namespace trace_processor
