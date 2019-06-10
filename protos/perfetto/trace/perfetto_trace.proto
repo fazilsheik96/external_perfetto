@@ -2706,6 +2706,15 @@ message ProcessStats {
     optional int64 oom_score_adj = 10;
   }
   repeated Process processes = 1;
+
+  // The time at which we finish collecting this batch of samples;
+  // the top-level packet timestamp is the time at which
+  // we begin collection.
+  // TODO(dancol): analysis might be improved by
+  // time-bracketing each sample as well as the whole
+  // ProcessStats, but doing that is probably gated on
+  // a vdso for CLOCK_BOOTTIME.
+  optional uint64 collection_end_timestamp = 2;
 }
 
 // End of protos/perfetto/trace/ps/process_stats.proto
@@ -2752,6 +2761,11 @@ message ProcessTree {
   // #2 { processes: [{pid: 20, ...}], threads: [{pid: 13, tgid: 10}] }
   repeated Process processes = 1;
   repeated Thread threads = 2;
+
+  // The time at which we finish collecting this process tree;
+  // the top-level packet timestamp is the time at which
+  // we begin collection.
+  optional uint64 collection_end_timestamp = 3;
 }
 
 // End of protos/perfetto/trace/ps/process_tree.proto
@@ -2807,6 +2821,11 @@ message SysStats {
   // Populated only if SOFTIRQ_COUNTS in config.stat_counters.
   optional uint64 num_softirq_total = 7;    // Total num of softirqs since boot.
   repeated InterruptCount num_softirq = 8;  // Per-softirq count.
+
+  // The time at which we finish collecting this set of samples;
+  // the top-level packet timestamp is the time at which
+  // we begin collection.
+  optional uint64 collection_end_timestamp = 9;
 }
 
 // End of protos/perfetto/trace/sys_stats/sys_stats.proto
@@ -2846,7 +2865,7 @@ message Trace {
 // TracePacket(s).
 //
 // Next reserved id: 13 (up to 15).
-// Next id: 49.
+// Next id: 51.
 message TracePacket {
   // TODO(primiano): in future we should add a timestamp_clock_domain field to
   // allow mixing timestamps from different clock domains.
@@ -2885,6 +2904,11 @@ message TracePacket {
     // {82477a76-b28d-42ba-81dc-33326d57a079}. This is used to be able to
     // efficiently partition long traces without having to fully parse them.
     bytes synchronization_marker = 36;
+
+    // Zero or more proto encoded trace packets compressed using deflate.
+    // Each compressed_packets TracePacket (including the two field ids and
+    // sizes) should be less than 512KB.
+    bytes compressed_packets = 50;
 
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455
@@ -3557,7 +3581,7 @@ message TestConfig {
 // It contains the general config for the logging buffer(s) and the configs for
 // all the data source being enabled.
 //
-// Next id: 23.
+// Next id: 25.
 message TraceConfig {
   message BufferConfig {
     optional uint32 size_kb = 1;
@@ -3806,6 +3830,13 @@ message TraceConfig {
   // If set the tracing service will ensure there is at most one tracing session
   // with this key.
   optional string unique_session_name = 22;
+
+  // Compress trace with the given method. Best effort.
+  enum CompressionType {
+    COMPRESSION_TYPE_UNSPECIFIED = 0;
+    COMPRESSION_TYPE_DEFLATE = 1;
+  };
+  optional CompressionType compression_type = 24;
 }
 
 // End of protos/perfetto/config/trace_config.proto
