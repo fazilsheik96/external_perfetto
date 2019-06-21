@@ -37,6 +37,7 @@ CONFIG_PROTOS = (
   'protos/perfetto/config/test_config.proto',
   'protos/perfetto/config/trace_config.proto',
   'protos/perfetto/config/profiling/heapprofd_config.proto',
+  'protos/perfetto/config/android/packages_list_config.proto',
 )
 
 MERGED_CONFIG_PROTO = 'protos/perfetto/config/perfetto_config.proto'
@@ -65,6 +66,7 @@ TRACE_PROTOS = (
   'protos/perfetto/trace/ftrace/raw_syscalls.proto',
   'protos/perfetto/trace/ftrace/sched.proto',
   'protos/perfetto/trace/ftrace/signal.proto',
+  'protos/perfetto/trace/ftrace/systrace.proto',
   'protos/perfetto/trace/ftrace/task.proto',
   'protos/perfetto/trace/ftrace/vmscan.proto',
   'protos/perfetto/trace/interned_data/interned_data.proto',
