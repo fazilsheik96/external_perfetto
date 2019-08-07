@@ -29,6 +29,7 @@
 #include "src/trace_processor/trace_sorter.h"
 #include "src/trace_processor/trace_storage.h"
 
+#include "perfetto/config/trace_config.pbzero.h"
 #include "perfetto/trace/ftrace/ftrace_event.pbzero.h"
 #include "perfetto/trace/ftrace/ftrace_event_bundle.pbzero.h"
 #include "perfetto/trace/interned_data/interned_data.pbzero.h"
@@ -81,30 +82,12 @@ void InternMessage(TraceProcessorContext* context,
 
 }  // namespace
 
-// static
-TraceType ProtoTraceTokenizer::GuessProtoTraceType(const uint8_t* data,
-                                                   size_t size) {
-  // Scan at most the first 128MB for a track event packet.
-  constexpr size_t kMaxScanSize = 128 * 1024 * 1024;
-  protos::pbzero::Trace::Decoder decoder(data, std::min(size, kMaxScanSize));
-  if (!decoder.has_packet())
-    return TraceType::kUnknownTraceType;
-  for (auto it = decoder.packet(); it; ++it) {
-    ProtoDecoder packet_decoder(it->data(), it->size());
-    if (PERFETTO_UNLIKELY(packet_decoder.FindField(
-            protos::pbzero::TracePacket::kTrackEventFieldNumber))) {
-      return TraceType::kProtoWithTrackEventsTraceType;
-    }
-  }
-  return TraceType::kProtoTraceType;
-}
-
 ProtoTraceTokenizer::ProtoTraceTokenizer(TraceProcessorContext* ctx)
     : context_(ctx) {}
 ProtoTraceTokenizer::~ProtoTraceTokenizer() = default;
 
-bool ProtoTraceTokenizer::Parse(std::unique_ptr<uint8_t[]> owned_buf,
-                                size_t size) {
+util::Status ProtoTraceTokenizer::Parse(std::unique_ptr<uint8_t[]> owned_buf,
+                                        size_t size) {
   uint8_t* data = &owned_buf[0];
   if (!partial_buf_.empty()) {
     // It takes ~5 bytes for a proto preamble + the varint size.
@@ -113,7 +96,7 @@ bool ProtoTraceTokenizer::Parse(std::unique_ptr<uint8_t[]> owned_buf,
       size_t missing_len = std::min(kHeaderBytes - partial_buf_.size(), size);
       partial_buf_.insert(partial_buf_.end(), &data[0], &data[missing_len]);
       if (partial_buf_.size() < kHeaderBytes)
-        return true;
+        return util::OkStatus();
       data += missing_len;
       size -= missing_len;
     }
@@ -129,8 +112,8 @@ bool ProtoTraceTokenizer::Parse(std::unique_ptr<uint8_t[]> owned_buf,
     bool parse_failed = next == pos;
     pos = next;
     if (proto_field_tag != kTracePacketTag || field_size == 0 || parse_failed) {
-      PERFETTO_ELOG("Failed parsing a TracePacket from the partial buffer");
-      return false;  // Unrecoverable error, stop parsing.
+      return util::ErrStatus(
+          "Failed parsing a TracePacket from the partial buffer");
     }
 
     // At this point we know how big the TracePacket is.
@@ -157,19 +140,22 @@ bool ProtoTraceTokenizer::Parse(std::unique_ptr<uint8_t[]> owned_buf,
       size -= size_missing;
       partial_buf_.clear();
       uint8_t* buf_start = &buf[0];  // Note that buf is std::moved below.
-      ParseInternal(std::move(buf), buf_start, size_incl_header);
+      util::Status status =
+          ParseInternal(std::move(buf), buf_start, size_incl_header);
+      if (PERFETTO_UNLIKELY(!status.ok()))
+        return status;
     } else {
       partial_buf_.insert(partial_buf_.end(), data, &data[size]);
-      return true;
+      return util::OkStatus();
     }
   }
-  ParseInternal(std::move(owned_buf), data, size);
-  return true;
+  return ParseInternal(std::move(owned_buf), data, size);
 }
 
-void ProtoTraceTokenizer::ParseInternal(std::unique_ptr<uint8_t[]> owned_buf,
-                                        uint8_t* data,
-                                        size_t size) {
+util::Status ProtoTraceTokenizer::ParseInternal(
+    std::unique_ptr<uint8_t[]> owned_buf,
+    uint8_t* data,
+    size_t size) {
   PERFETTO_DCHECK(data >= &owned_buf[0]);
   const uint8_t* start = &owned_buf[0];
   const size_t data_off = static_cast<size_t>(data - start);
@@ -178,7 +164,10 @@ void ProtoTraceTokenizer::ParseInternal(std::unique_ptr<uint8_t[]> owned_buf,
   protos::pbzero::Trace::Decoder decoder(data, size);
   for (auto it = decoder.packet(); it; ++it) {
     size_t field_offset = whole_buf.offset_of(it->data());
-    ParsePacket(whole_buf.slice(field_offset, it->size()));
+    util::Status status =
+        ParsePacket(whole_buf.slice(field_offset, it->size()));
+    if (PERFETTO_UNLIKELY(!status.ok()))
+      return status;
   }
 
   const size_t bytes_left = decoder.bytes_left();
@@ -187,11 +176,14 @@ void ProtoTraceTokenizer::ParseInternal(std::unique_ptr<uint8_t[]> owned_buf,
     partial_buf_.insert(partial_buf_.end(), &data[decoder.read_offset()],
                         &data[decoder.read_offset() + bytes_left]);
   }
+  return util::OkStatus();
 }
 
-void ProtoTraceTokenizer::ParsePacket(TraceBlobView packet) {
+util::Status ProtoTraceTokenizer::ParsePacket(TraceBlobView packet) {
   protos::pbzero::TracePacket::Decoder decoder(packet.data(), packet.length());
-  PERFETTO_DCHECK(!decoder.bytes_left());
+  if (PERFETTO_UNLIKELY(decoder.bytes_left()))
+    return util::ErrStatus(
+        "Failed to parse proto packet fully; the trace is probably corrupt.");
 
   auto timestamp = decoder.has_timestamp()
                        ? static_cast<int64_t>(decoder.timestamp())
@@ -214,22 +206,49 @@ void ProtoTraceTokenizer::ParsePacket(TraceBlobView packet) {
     auto ftrace_field = decoder.ftrace_events();
     const size_t fld_off = packet.offset_of(ftrace_field.data);
     ParseFtraceBundle(packet.slice(fld_off, ftrace_field.size));
-    return;
+    return util::OkStatus();
   }
 
   if (decoder.has_track_event()) {
     ParseTrackEventPacket(decoder, std::move(packet));
-    return;
+    return util::OkStatus();
   }
 
   if (decoder.has_thread_descriptor()) {
     ParseThreadDescriptorPacket(decoder);
-    return;
+    return util::OkStatus();
+  }
+
+  if (decoder.has_trace_config()) {
+    auto config = decoder.trace_config();
+    protos::pbzero::TraceConfig::Decoder trace_config(config.data, config.size);
+
+    if (trace_config.write_into_file()) {
+      int64_t window_size_ns;
+      if (trace_config.has_flush_period_ms() &&
+          trace_config.flush_period_ms() > 0) {
+        // We use 2x the flush period as a margin of error to allow for any
+        // late flush responses to still be sorted correctly.
+        window_size_ns = static_cast<int64_t>(trace_config.flush_period_ms()) *
+                         2 * 1000 * 1000;
+      } else {
+        constexpr uint64_t kDefaultWindowNs =
+            180 * 1000 * 1000 * 1000ULL;  // 3 minutes.
+        PERFETTO_ELOG(
+            "It is strongly recommended to have flush_period_ms set when "
+            "write_into_file is turned on. You will likely have many dropped "
+            "events because of inability to sort the events correctly.");
+        window_size_ns = static_cast<int64_t>(kDefaultWindowNs);
+      }
+      context_->sorter->SetWindowSizeNs(window_size_ns);
+    }
   }
 
   // Use parent data and length because we want to parse this again
   // later to get the exact type of the packet.
   context_->sorter->PushTracePacket(timestamp, std::move(packet));
+
+  return util::OkStatus();
 }
 
 void ProtoTraceTokenizer::HandleIncrementalStateCleared(

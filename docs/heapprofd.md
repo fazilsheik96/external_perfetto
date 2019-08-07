@@ -122,13 +122,16 @@ Depending on the build of Android that heapprofd is run on, some processes
 are not be eligible to be profiled.
 
 On user builds, only Java applications with either the profileable or the
-debugable manifest flag set can be profiled. Profiling requests for other
+debuggable manifest flag set can be profiled. Profiling requests for other
 processes will result in an empty profile.
 
 On userdebug builds, all processes except for a small blacklist of critical
-services can be profiled. This restriction can be lifted by disabling
-SELinux by running `adb shell su root setenforce 0` or by passing
-`--disable-selinux` to the `heap_profile` script.
+services can be profiled (to find the blacklist, look for
+`never_profile_heap` in [heapprofd.te](
+https://android.googlesource.com/platform/system/sepolicy/+/refs/heads/master/private/heapprofd.te)).
+This restriction can be lifted by disabling SELinux by running
+`adb shell su root setenforce 0` or by passing `--disable-selinux` to the
+`heap_profile` script.
 
 |                         | userdebug setenforce 0 | userdebug | user |
 |-------------------------|------------------------|-----------|------|
@@ -136,7 +139,22 @@ SELinux by running `adb shell su root setenforce 0` or by passing
 | native service          |            y           |     y     |  n   |
 | app                     |            y           |     y     |  n   |
 | profileable app         |            y           |     y     |  y   |
-| debugable app           |            y           |     y     |  y   |
+| debuggable app          |            y           |     y     |  y   |
+
+## DEDUPED frames
+If the name of a Java method includes `[DEDUPED]`, this means that multiple
+methods share the same code. ART only stores the name of a single one in its
+metadata, which is displayed here. This is not necessarily the one that was
+called.
+
+## Manual dumping
+You can trigger a manual dump of all currently profiled processes by running
+`adb killall -USR1 heapprofd`. This can be useful for seeing the current memory
+usage of the target in a specific state.
+
+This dump will show up in addition to the dump at the end of the profile that is
+always produced. You can create multiple of these dumps, and they will be
+enumerated in the output directory.
 
 ## Troubleshooting
 
@@ -152,6 +170,11 @@ accuracy in the resulting profile) by passing `--interval` to heap\_profile.
 Check whether your target process is eligible to be profiled by consulting
 [Target processes](#target-processes) above.
 
+
+## Impossible callstacks
+If you see a callstack that seems to impossible from looking at the code, make
+sure no [DEDUPED frames](#deduped-frames) are involved.
+
 ## Known Issues
 
 * Does not work on x86 platforms (including the Android cuttlefish emulator).
@@ -165,7 +188,7 @@ operating system.
 **heapprofd** gives you the number of bytes the target program
 requested from the allocator. If you are profiling a Java app from startup,
 allocations that happen early in the application's initialization will not be
-visibile to heapprofd. Native services that do not fork from the Zygote
+visible to heapprofd. Native services that do not fork from the Zygote
 are not affected by this.
 
 **malloc\_info** is a libc function that gives you information about the

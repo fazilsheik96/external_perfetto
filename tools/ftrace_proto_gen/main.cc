@@ -162,7 +162,8 @@ int main(int argc, char** argv) {
       if (!event.valid())
         continue;
 
-      std::string proto_name = perfetto::EventNameToProtoName(event.name());
+      std::string proto_name =
+          perfetto::ToCamelCase(event.name()) + "FtraceEvent";
       perfetto::Proto proto;
       proto.name = proto_name;
       proto.event_name = event.name();

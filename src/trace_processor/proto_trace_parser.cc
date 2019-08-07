@@ -36,6 +36,7 @@
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/syscall_tracker.h"
 #include "src/trace_processor/trace_processor_context.h"
+#include "src/trace_processor/variadic.h"
 
 #include "perfetto/common/android_log_constants.pbzero.h"
 #include "perfetto/common/trace_stats.pbzero.h"
@@ -74,7 +75,6 @@ namespace trace_processor {
 namespace {
 
 using protozero::ProtoDecoder;
-using Variadic = TraceStorage::Args::Variadic;
 
 }  // namespace
 
@@ -131,24 +131,23 @@ SystraceParseResult ParseSystraceTracePoint(base::StringView str,
     }
     case 'C': {
       size_t name_index = 2 + tgid_length + 1;
-      size_t name_length = 0;
+      base::Optional<size_t> name_length;
       for (size_t i = name_index; i < len; i++) {
-        if (s[i] == '|' || s[i] == '\n') {
+        if (s[i] == '|') {
           name_length = i - name_index;
           break;
         }
       }
-      out->name = base::StringView(s + name_index, name_length);
-
-      size_t value_index = name_index + name_length + 1;
-      size_t value_len = len - value_index;
-      char value_str[32];
-      if (value_len >= sizeof(value_str)) {
+      if (!name_length.has_value())
         return SystraceParseResult::kFailure;
-      }
-      memcpy(value_str, s + value_index, value_len);
-      value_str[value_len] = 0;
-      out->value = std::stod(value_str);
+      out->name = base::StringView(s + name_index, name_length.value());
+
+      size_t value_index = name_index + name_length.value() + 1;
+      size_t value_len = len - value_index;
+      if (value_len == 0)
+        return SystraceParseResult::kFailure;
+      std::string value_str(s + value_index, value_len);
+      out->value = std::stod(value_str.c_str());
       return SystraceParseResult::kSuccess;
     }
     default:
@@ -319,7 +318,7 @@ void ProtoTraceParser::ParseTracePacket(
     ParseAndroidLogPacket(packet.android_log());
 
   if (packet.has_profile_packet())
-    ParseProfilePacket(packet.profile_packet());
+    ParseProfilePacket(ts, packet.profile_packet());
 
   if (packet.has_system_info())
     ParseSystemInfo(packet.system_info());
@@ -670,8 +669,10 @@ void ProtoTraceParser::ParseIonHeapGrowOrShrink(int64_t ts,
                                                 ConstBytes blob,
                                                 bool grow) {
   protos::pbzero::IonHeapGrowFtraceEvent::Decoder ion(blob.data, blob.size);
-  int64_t total_bytes = ion.total_allocated();
   int64_t change_bytes = static_cast<int64_t>(ion.len()) * (grow ? 1 : -1);
+  // The total_allocated ftrace event reports the value before the
+  // atomic_long_add / sub takes place.
+  int64_t total_bytes = ion.total_allocated() + change_bytes;
   StringId global_name_id = ion_total_unknown_id_;
   StringId change_name_id = ion_change_unknown_id_;
 
@@ -906,10 +907,10 @@ void ProtoTraceParser::ParseOOMScoreAdjUpdate(int64_t ts, ConstBytes blob) {
   // The int16_t static cast is because older version of the on-device tracer
   // had a bug on negative varint encoding (b/120618641).
   int16_t oom_adj = static_cast<int16_t>(evt.oom_score_adj());
-  uint32_t pid = static_cast<uint32_t>(evt.pid());
-  UniquePid upid = context_->process_tracker->GetOrCreateProcess(pid);
-  context_->event_tracker->PushCounter(ts, oom_adj, oom_score_adj_id_, upid,
-                                       RefType::kRefUpid);
+  uint32_t tid = static_cast<uint32_t>(evt.pid());
+  UniqueTid utid = context_->process_tracker->GetOrCreateThread(tid);
+  context_->event_tracker->PushCounter(ts, oom_adj, oom_score_adj_id_, utid,
+                                       RefType::kRefUtid, true);
 }
 
 void ProtoTraceParser::ParseMmEventRecord(int64_t ts,
@@ -1289,8 +1290,8 @@ void ProtoTraceParser::ParseFtraceStats(ConstBytes blob) {
   }
 }
 
-void ProtoTraceParser::ParseProfilePacket(ConstBytes blob) {
-  uint64_t index = 0;
+void ProtoTraceParser::ParseProfilePacket(int64_t ts, ConstBytes blob) {
+  static uint64_t index = 0;
   protos::pbzero::ProfilePacket::Decoder packet(blob.data, blob.size);
 
   for (auto it = packet.strings(); it; ++it) {
@@ -1362,7 +1363,7 @@ void ProtoTraceParser::ParseProfilePacket(ConstBytes blob) {
 
       HeapProfileTracker::SourceAllocation src_allocation;
       src_allocation.pid = entry.pid();
-      src_allocation.timestamp = sample.timestamp();
+      src_allocation.timestamp = ts;
       src_allocation.callstack_id = sample.callstack_id();
       src_allocation.self_allocated = sample.self_allocated();
       src_allocation.self_freed = sample.self_freed();

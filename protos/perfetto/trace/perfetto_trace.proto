@@ -395,6 +395,42 @@ message PackagesList {
 
 // End of protos/perfetto/trace/android/packages_list.proto
 
+// Begin of protos/perfetto/trace/chrome/chrome_benchmark_metadata.proto
+
+// This message is not intended to be written by the chrome on the device.
+// It's emitted on the host by the telemetry benchmark infrastructure (it's a
+// part of the trace that's written by the telemetry tracing agent).
+message ChromeBenchmarkMetadata {
+  // Time when the benchmark execution started (host unixtime in microseconds).
+  optional int64 benchmark_start_time_us = 1;
+
+  // Time when this particular story was run (host unixtime in microseconds).
+  optional int64 story_run_time_us = 2;
+
+  // Name of benchmark.
+  optional string benchmark_name = 3;
+
+  // Description of benchmark.
+  optional string benchmark_description = 4;
+
+  // Optional label.
+  optional string label = 5;
+
+  // Name of story.
+  optional string story_name = 6;
+
+  // List of story tags.
+  repeated string story_tags = 7;
+
+  // Index of the story run (>0 if the same story was run several times).
+  optional int32 story_run_index = 8;
+
+  // Whether this run failed.
+  optional bool had_failures = 9;
+}
+
+// End of protos/perfetto/trace/chrome/chrome_benchmark_metadata.proto
+
 // Begin of protos/perfetto/trace/clock_snapshot.proto
 
 // A snapshot of clock readings to allow for trace alignment.
@@ -1931,8 +1967,6 @@ message FtraceEvent {
     MmEventRecordFtraceEvent mm_event_record = 328;
     SysEnterFtraceEvent sys_enter = 329;
     SysExitFtraceEvent sys_exit = 330;
-    ZeroFtraceEvent zero = 331;
-    GpuFrequencyFtraceEvent gpu_frequency = 332;
   }
 }
 
@@ -2316,10 +2350,6 @@ message SuspendResumeFtraceEvent {
   optional int32 val = 2;
   optional uint32 start = 3;
 }
-message GpuFrequencyFtraceEvent {
-  optional uint32 gpu_id = 1;
-  optional uint32 state = 2;
-}
 
 // End of protos/perfetto/trace/ftrace/power.proto
 
@@ -2428,17 +2458,6 @@ message SignalGenerateFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/signal.proto
-
-// Begin of protos/perfetto/trace/ftrace/systrace.proto
-
-message ZeroFtraceEvent {
-  optional int32 flag = 1;
-  optional string name = 2;
-  optional int32 pid = 3;
-  optional int64 value = 4;
-}
-
-// End of protos/perfetto/trace/ftrace/systrace.proto
 
 // Begin of protos/perfetto/trace/ftrace/task.proto
 
@@ -2578,7 +2597,6 @@ message PowerRails {
 // Begin of protos/perfetto/trace/profiling/profile_packet.proto
 
 message ProfilePacket {
-  // either a function or library name.
   repeated InternedString strings = 1;
   message InternedString {
     optional uint64 id = 1;
@@ -2615,12 +2633,20 @@ message ProfilePacket {
 
   message HeapSample {
     optional uint64 callstack_id = 1;
-    // bytes allocated at this frame.
+    // bytes allocated at this callstack.
     optional uint64 self_allocated = 2;
-    // bytes allocated at this frame that have been freed.
+    // bytes allocated at this callstack that have been freed.
     optional uint64 self_freed = 3;
+    // bytes allocated at this callstack but not used since the last
+    // clear_refs.
+    // See documentation of idle_allocations in HeapprofdConfig for more
+    // details.
+    optional uint64 self_idle = 7;
     optional uint64 timestamp = 4;  // timestamp [opt]
+    // Number of allocations that were sampled at this callstack.
     optional uint64 alloc_count = 5;
+    // Number of allocations that were sampled at this callstack that have been
+    // freed.
     optional uint64 free_count = 6;
   }
 
@@ -2723,15 +2749,6 @@ message ProcessStats {
     optional int64 oom_score_adj = 10;
   }
   repeated Process processes = 1;
-
-  // The time at which we finish collecting this batch of samples;
-  // the top-level packet timestamp is the time at which
-  // we begin collection.
-  // TODO(dancol): analysis might be improved by
-  // time-bracketing each sample as well as the whole
-  // ProcessStats, but doing that is probably gated on
-  // a vdso for CLOCK_BOOTTIME.
-  optional uint64 collection_end_timestamp = 2;
 }
 
 // End of protos/perfetto/trace/ps/process_stats.proto
@@ -2778,11 +2795,6 @@ message ProcessTree {
   // #2 { processes: [{pid: 20, ...}], threads: [{pid: 13, tgid: 10}] }
   repeated Process processes = 1;
   repeated Thread threads = 2;
-
-  // The time at which we finish collecting this process tree;
-  // the top-level packet timestamp is the time at which
-  // we begin collection.
-  optional uint64 collection_end_timestamp = 3;
 }
 
 // End of protos/perfetto/trace/ps/process_tree.proto
@@ -2838,11 +2850,6 @@ message SysStats {
   // Populated only if SOFTIRQ_COUNTS in config.stat_counters.
   optional uint64 num_softirq_total = 7;    // Total num of softirqs since boot.
   repeated InterruptCount num_softirq = 8;  // Per-softirq count.
-
-  // The time at which we finish collecting this set of samples;
-  // the top-level packet timestamp is the time at which
-  // we begin collection.
-  optional uint64 collection_end_timestamp = 9;
 }
 
 // End of protos/perfetto/trace/sys_stats/sys_stats.proto
@@ -2882,7 +2889,7 @@ message Trace {
 // TracePacket(s).
 //
 // Next reserved id: 13 (up to 15).
-// Next id: 51.
+// Next id: 49.
 message TracePacket {
   // TODO(primiano): in future we should add a timestamp_clock_domain field to
   // allow mixing timestamps from different clock domains.
@@ -2911,6 +2918,7 @@ message TracePacket {
     SystemInfo system_info = 45;
     Trigger trigger = 46;
     PackagesList packages_list = 47;
+    ChromeBenchmarkMetadata chrome_benchmark_metadata = 48;
 
     // Only used by TrackEvent.
     ProcessDescriptor process_descriptor = 43;
@@ -2921,11 +2929,6 @@ message TracePacket {
     // {82477a76-b28d-42ba-81dc-33326d57a079}. This is used to be able to
     // efficiently partition long traces without having to fully parse them.
     bytes synchronization_marker = 36;
-
-    // Zero or more proto encoded trace packets compressed using deflate.
-    // Each compressed_packets TracePacket (including the two field ids and
-    // sizes) should be less than 512KB.
-    bytes compressed_packets = 50;
 
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455
@@ -3147,7 +3150,7 @@ message ThreadDescriptor {
 // messages in separate TracePackets instead.
 //
 // Next reserved id: 7 (up to 15).
-// Next id: 20.
+// Next id: 21.
 message TrackEvent {
   // Timestamp in microseconds (usually CLOCK_MONOTONIC).
   oneof timestamp {
@@ -3173,6 +3176,9 @@ message TrackEvent {
     // but shouldn't be required anymore when we split them into begin/end.
     int64 thread_time_absolute_us = 17;
   }
+
+  // Elapsed retired instruction count during the event.
+  optional int64 thread_instruction_delta = 20;
 
   // We intend to add a binary symbol version of this in the future.
   repeated uint32 category_iids = 3;  // interned EventCategoryName.
@@ -3351,15 +3357,21 @@ message DataSourceConfig {
   // Keeep the lower IDs (up to 99) for fields that are *not* specific to
   // data-sources and needs to be processed by the traced daemon.
 
-  optional FtraceConfig ftrace_config = 100;
+  // All data source config fields must be marked as [lazy=true]. This prevents
+  // the proto-to-cpp generator from recursing into those when generating the
+  // cpp classes and polluting tracing/core with data-source-specific classes.
+  // Instead they are treated as opaque strings containing raw proto bytes.
+
+  optional FtraceConfig ftrace_config = 100 [lazy = true];
+  optional InodeFileConfig inode_file_config = 102 [lazy = true];
+  optional ProcessStatsConfig process_stats_config = 103 [lazy = true];
+  optional SysStatsConfig sys_stats_config = 104 [lazy = true];
+  optional HeapprofdConfig heapprofd_config = 105 [lazy = true];
+  optional AndroidPowerConfig android_power_config = 106 [lazy = true];
+  optional AndroidLogConfig android_log_config = 107 [lazy = true];
+
+  // TODO(primiano): Figure out how to deal with this, needs a multi-side patch.
   optional ChromeConfig chrome_config = 101;
-  optional InodeFileConfig inode_file_config = 102;
-  optional ProcessStatsConfig process_stats_config = 103;
-  optional SysStatsConfig sys_stats_config = 104;
-  optional HeapprofdConfig heapprofd_config = 105;
-  optional AndroidPowerConfig android_power_config = 106;
-  optional AndroidLogConfig android_log_config = 107;
-  optional PackagesListConfig packages_list_config = 109;
 
   // This is a fallback mechanism to send a free-form text config to the
   // producer. In theory this should never be needed. All the code that
@@ -3599,7 +3611,7 @@ message TestConfig {
 // It contains the general config for the logging buffer(s) and the configs for
 // all the data source being enabled.
 //
-// Next id: 26.
+// Next id: 23.
 message TraceConfig {
   message BufferConfig {
     optional uint32 size_kb = 1;
@@ -3848,28 +3860,6 @@ message TraceConfig {
   // If set the tracing service will ensure there is at most one tracing session
   // with this key.
   optional string unique_session_name = 22;
-
-  // Compress trace with the given method. Best effort.
-  enum CompressionType {
-    COMPRESSION_TYPE_UNSPECIFIED = 0;
-    COMPRESSION_TYPE_DEFLATE = 1;
-  };
-  optional CompressionType compression_type = 24;
-
-  // Android-only. Debug builds only. Not for general use. If set, saves a
-  // Dropbox trace into an incident. This field is read by perfetto_cmd, rather
-  // than the tracing service. All fields are mandatory.
-  message IncidentReportConfig {
-    optional string destination_package = 1;
-    optional string destination_class = 2;
-    // Level of filtering in the requested incident. See |Destination| in
-    // frameworks/base/core/proto/android/privacy.proto.
-    optional int32 privacy_level = 3;
-    // If true, do not write the trace into dropbox (i.e. incident only).
-    // Otherwise, write to both dropbox and incident.
-    optional bool skip_dropbox = 4;
-  }
-  optional IncidentReportConfig incident_report_config = 25;
 }
 
 // End of protos/perfetto/config/trace_config.proto
@@ -3941,18 +3931,29 @@ message HeapprofdConfig {
   // trace. Use with caution as this will significantly slow down the target
   // process.
   optional bool block_client = 9;
+
+  // Do not profile processes from startup, only match already running
+  // processes.
+  //
+  // Can not be set at the same time as no_running.
+  optional bool no_startup = 10;
+
+  // Do not profile running processes. Only match processes on startup.
+  //
+  // Can not be set at the same time as no_startup.
+  optional bool no_running = 11;
+
+  // Gather information on how many bytes of allocations are on non-referenced
+  // pages. The way to use this generally is:
+  // 1. Start profile of app.
+  // 2. Start app.
+  // 3. echo 1 > /proc/$APP_PID/clear_refs.
+  // 4. Do operations.
+  // 5. End profile.
+  //
+  // You can then find the allocations that were not used for the operations you
+  // did in step 4.
+  optional bool idle_allocations = 12;
 }
 
 // End of protos/perfetto/config/profiling/heapprofd_config.proto
-
-// Begin of protos/perfetto/config/android/packages_list_config.proto
-
-// Data source that lists details (such as version code) about packages on an
-// Android device.
-message PackagesListConfig {
-  // If not empty, emit info about only the following list of package names
-  // (exact match, no regex). Otherwise, emit info about all packages.
-  repeated string package_name_filter = 1;
-}
-
-// End of protos/perfetto/config/android/packages_list_config.proto

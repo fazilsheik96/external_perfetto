@@ -122,7 +122,7 @@ std::shared_ptr<Client> Client::CreateAndHandshake(
     base::UnixSocketRaw sock,
     UnhookedAllocator<Client> unhooked_allocator) {
   if (!sock) {
-    PERFETTO_DFATAL("Socket not connected.");
+    PERFETTO_DFATAL_OR_ELOG("Socket not connected.");
     return nullptr;
   }
 
@@ -144,26 +144,33 @@ std::shared_ptr<Client> Client::CreateAndHandshake(
 
   base::ScopedFile maps(base::OpenFile("/proc/self/maps", O_RDONLY));
   if (!maps) {
-    PERFETTO_DFATAL("Failed to open /proc/self/maps");
+    PERFETTO_DFATAL_OR_ELOG("Failed to open /proc/self/maps");
     return nullptr;
   }
   base::ScopedFile mem(base::OpenFile("/proc/self/mem", O_RDONLY));
   if (!mem) {
-    PERFETTO_DFATAL("Failed to open /proc/self/mem");
+    PERFETTO_DFATAL_OR_ELOG("Failed to open /proc/self/mem");
     return nullptr;
   }
+  base::ScopedFile pagemap(base::OpenFile("/proc/self/pagemap", O_RDONLY));
+  if (!pagemap) {
+    PERFETTO_DFATAL_OR_ELOG("Failed to open /proc/self/pagemap");
+    return nullptr;
+  }
+
   // Restore original dumpability value if we overrode it.
   unset_dumpable.reset();
 
   int fds[kHandshakeSize];
   fds[kHandshakeMaps] = *maps;
   fds[kHandshakeMem] = *mem;
+  fds[kHandshakePageMap] = *pagemap;
 
   // Send an empty record to transfer fds for /proc/self/maps and
   // /proc/self/mem.
   if (sock.Send(kSingleByte, sizeof(kSingleByte), fds, kHandshakeSize) !=
       sizeof(kSingleByte)) {
-    PERFETTO_DFATAL("Failed to send file descriptors.");
+    PERFETTO_DFATAL_OR_ELOG("Failed to send file descriptors.");
     return nullptr;
   }
 
@@ -191,13 +198,13 @@ std::shared_ptr<Client> Client::CreateAndHandshake(
   }
 
   if (!shmem_fd) {
-    PERFETTO_DFATAL("Did not receive shmem fd.");
+    PERFETTO_DFATAL_OR_ELOG("Did not receive shmem fd.");
     return nullptr;
   }
 
   auto shmem = SharedRingBuffer::Attach(std::move(shmem_fd));
   if (!shmem || !shmem->is_valid()) {
-    PERFETTO_DFATAL("Failed to attach to shmem.");
+    PERFETTO_DFATAL_OR_ELOG("Failed to attach to shmem.");
     return nullptr;
   }
 
@@ -263,8 +270,8 @@ bool Client::RecordMalloc(uint64_t alloc_size,
   const char* stacktop = reinterpret_cast<char*>(__builtin_frame_address(0));
   unwindstack::AsmGetRegs(metadata.register_data);
 
-  if (stackbase < stacktop) {
-    PERFETTO_DFATAL("Stackbase >= stacktop.");
+  if (PERFETTO_UNLIKELY(stackbase < stacktop)) {
+    PERFETTO_DFATAL_OR_ELOG("Stackbase >= stacktop.");
     return false;
   }
 

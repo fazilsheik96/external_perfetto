@@ -36,8 +36,8 @@ void ProcessTable::RegisterTable(sqlite3* db, const TraceStorage* storage) {
   Table::Register<ProcessTable>(db, storage, "process");
 }
 
-base::Optional<Table::Schema> ProcessTable::Init(int, const char* const*) {
-  return Schema(
+util::Status ProcessTable::Init(int, const char* const*, Schema* schema) {
+  *schema = Schema(
       {
           Table::Column(Column::kUpid, "upid", ColumnType::kInt),
           Table::Column(Column::kName, "name", ColumnType::kString),
@@ -45,6 +45,7 @@ base::Optional<Table::Schema> ProcessTable::Init(int, const char* const*) {
           Table::Column(Column::kStartTs, "start_ts", ColumnType::kLong),
       },
       {Column::kUpid});
+  return util::OkStatus();
 }
 
 std::unique_ptr<Table::Cursor> ProcessTable::CreateCursor() {
@@ -72,7 +73,6 @@ int ProcessTable::Cursor::Filter(const QueryConstraints& qc,
   min = 0;
   max = static_cast<uint32_t>(storage_->process_count()) - 1;
   desc = false;
-  current = min;
 
   for (size_t j = 0; j < qc.constraints().size(); j++) {
     const auto& cs = qc.constraints()[j];
@@ -91,12 +91,14 @@ int ProcessTable::Cursor::Filter(const QueryConstraints& qc,
       }
     }
   }
+
   for (const auto& ob : qc.order_by()) {
     if (ob.iColumn == Column::kUpid) {
       desc = ob.desc;
-      current = desc ? max : min;
     }
   }
+  current = desc ? max : min;
+
   return SQLITE_OK;
 }
 

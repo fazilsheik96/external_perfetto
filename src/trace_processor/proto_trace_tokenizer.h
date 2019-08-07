@@ -40,28 +40,19 @@ class TraceStorage;
 // (or subfields, for the case of ftrace) with their timestamps.
 class ProtoTraceTokenizer : public ChunkedTraceReader {
  public:
-  // Scans the beginning of the trace for valid TracePackets to determine if the
-  // trace contains TrackEvents.
-  //
-  // TODO(eseckler): This is a pretty bad hack to enable us to choose a
-  // different sorting window size for traces with TrackEvents. We should
-  // reconsider and redesign our sorting strategy, so that we don't need to
-  // change global trace processor options if TrackEvents are present.
-  static TraceType GuessProtoTraceType(const uint8_t* data, size_t size);
-
   // |reader| is the abstract method of getting chunks of size |chunk_size_b|
   // from a trace file with these chunks parsed into |trace|.
   explicit ProtoTraceTokenizer(TraceProcessorContext*);
   ~ProtoTraceTokenizer() override;
 
   // ChunkedTraceReader implementation.
-  bool Parse(std::unique_ptr<uint8_t[]>, size_t size) override;
+  util::Status Parse(std::unique_ptr<uint8_t[]>, size_t size) override;
 
  private:
-  void ParseInternal(std::unique_ptr<uint8_t[]> owned_buf,
-                     uint8_t* data,
-                     size_t size);
-  void ParsePacket(TraceBlobView);
+  util::Status ParseInternal(std::unique_ptr<uint8_t[]> owned_buf,
+                             uint8_t* data,
+                             size_t size);
+  util::Status ParsePacket(TraceBlobView);
   void HandleIncrementalStateCleared(
       const protos::pbzero::TracePacket::Decoder& packet_decoder);
   void HandlePreviousPacketDropped(

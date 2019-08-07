@@ -106,7 +106,7 @@ struct UnwindingMetadata {
             new unwindstack::DexFiles(fd_mem)))
 #endif
   {
-    PERFETTO_CHECK(maps.Parse());
+    PERFETTO_DCHECK(maps.Parse());
   }
   void ReparseMaps() {
     reparses++;
@@ -147,7 +147,8 @@ class UnwindingWorker : public base::UnixSocket::EventListener {
   struct HandoffData {
     DataSourceInstanceID data_source_instance_id;
     base::UnixSocketRaw sock;
-    base::ScopedFile fds[kHandshakeSize];
+    base::ScopedFile maps_fd;
+    base::ScopedFile mem_fd;
     SharedRingBuffer shmem;
     ClientConfiguration client_config;
   };
@@ -165,7 +166,7 @@ class UnwindingWorker : public base::UnixSocket::EventListener {
   void OnDisconnect(base::UnixSocket* self) override;
   void OnNewIncomingConnection(base::UnixSocket*,
                                std::unique_ptr<base::UnixSocket>) override {
-    PERFETTO_DFATAL("This should not happen.");
+    PERFETTO_DFATAL_OR_ELOG("This should not happen.");
   }
   void OnDataAvailable(base::UnixSocket* self) override;
 

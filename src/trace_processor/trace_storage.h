@@ -32,8 +32,10 @@
 #include "perfetto/base/time.h"
 #include "perfetto/base/utils.h"
 #include "src/trace_processor/ftrace_utils.h"
+#include "src/trace_processor/metadata.h"
 #include "src/trace_processor/stats.h"
 #include "src/trace_processor/string_pool.h"
+#include "src/trace_processor/variadic.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -110,39 +112,6 @@ class TraceStorage {
   // Generic key value storage which can be referenced by other tables.
   class Args {
    public:
-    // Variadic type representing the possible values for the args table.
-    struct Variadic {
-      enum Type { kInt, kString, kReal };
-
-      static Variadic Integer(int64_t int_value) {
-        Variadic variadic;
-        variadic.type = Type::kInt;
-        variadic.int_value = int_value;
-        return variadic;
-      }
-
-      static Variadic String(StringId string_id) {
-        Variadic variadic;
-        variadic.type = Type::kString;
-        variadic.string_value = string_id;
-        return variadic;
-      }
-
-      static Variadic Real(double real_value) {
-        Variadic variadic;
-        variadic.type = Type::kReal;
-        variadic.real_value = real_value;
-        return variadic;
-      }
-
-      Type type;
-      union {
-        int64_t int_value;
-        StringId string_value;
-        double real_value;
-      };
-    };
-
     struct Arg {
       StringId flat_key = 0;
       StringId key = 0;
@@ -586,6 +555,8 @@ class TraceStorage {
   };
   using StatsMap = std::array<Stats, stats::kNumKeys>;
 
+  using MetadataMap = std::array<std::vector<Variadic>, metadata::kNumKeys>;
+
   class HeapProfileFrames {
    public:
     struct Row {
@@ -598,6 +569,8 @@ class TraceStorage {
                std::tie(other.name_id, other.mapping_row, other.rel_pc);
       }
     };
+
+    uint32_t size() const { return static_cast<uint32_t>(names_.size()); }
 
     int64_t Insert(const Row& row) {
       names_.emplace_back(row.name_id);
@@ -628,6 +601,8 @@ class TraceStorage {
                std::tie(other.depth, other.parent_id, other.frame_row);
       }
     };
+
+    uint32_t size() const { return static_cast<uint32_t>(frame_ids_.size()); }
 
     int64_t Insert(const Row& row) {
       frame_depths_.emplace_back(row.depth);
@@ -665,6 +640,8 @@ class TraceStorage {
       }
     };
 
+    uint32_t size() const { return static_cast<uint32_t>(names_.size()); }
+
     int64_t Insert(const Row& row) {
       build_ids_.emplace_back(row.build_id);
       offsets_.emplace_back(row.offset);
@@ -695,29 +672,31 @@ class TraceStorage {
    public:
     struct Row {
       int64_t timestamp;
-      int64_t pid;
+      UniquePid upid;
       int64_t callsite_id;
       int64_t count;
       int64_t size;
     };
 
+    uint32_t size() const { return static_cast<uint32_t>(timestamps_.size()); }
+
     void Insert(const Row& row) {
       timestamps_.emplace_back(row.timestamp);
-      pids_.emplace_back(row.pid);
+      upids_.emplace_back(row.upid);
       callsite_ids_.emplace_back(row.callsite_id);
       counts_.emplace_back(row.count);
       sizes_.emplace_back(row.size);
     }
 
     const std::deque<int64_t>& timestamps() const { return timestamps_; }
-    const std::deque<int64_t>& pids() const { return pids_; }
+    const std::deque<UniquePid>& upids() const { return upids_; }
     const std::deque<int64_t>& callsite_ids() const { return callsite_ids_; }
     const std::deque<int64_t>& counts() const { return counts_; }
     const std::deque<int64_t>& sizes() const { return sizes_; }
 
    private:
     std::deque<int64_t> timestamps_;
-    std::deque<int64_t> pids_;
+    std::deque<UniquePid> upids_;
     std::deque<int64_t> callsite_ids_;
     std::deque<int64_t> counts_;
     std::deque<int64_t> sizes_;
@@ -778,6 +757,26 @@ class TraceStorage {
     PERFETTO_DCHECK(key < stats::kNumKeys);
     PERFETTO_DCHECK(stats::kTypes[key] == stats::kIndexed);
     stats_[key].indexed_values[index] = value;
+  }
+
+  // Example usage:
+  // SetMetadata(metadata::benchmark_name,
+  //             Variadic::String(storage->InternString("foo"));
+  void SetMetadata(size_t key, Variadic value) {
+    PERFETTO_DCHECK(key < metadata::kNumKeys);
+    PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kSingle);
+    PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
+    metadata_[key] = {value};
+  }
+
+  // Example usage:
+  // AppendMetadata(metadata::benchmark_story_tags,
+  //                Variadic::String(storage->InternString("bar"));
+  void AppendMetadata(size_t key, Variadic value) {
+    PERFETTO_DCHECK(key < metadata::kNumKeys);
+    PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kMulti);
+    PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
+    metadata_[key].push_back(value);
   }
 
   class ScopedStatsTracer {
@@ -873,6 +872,8 @@ class TraceStorage {
 
   const StatsMap& stats() const { return stats_; }
 
+  const MetadataMap& metadata() const { return metadata_; }
+
   const Args& args() const { return args_; }
   Args* mutable_args() { return &args_; }
 
@@ -937,6 +938,9 @@ class TraceStorage {
 
   // Stats about parsing the trace.
   StatsMap stats_{};
+
+  // Trace metadata from chrome and benchmarking infrastructure.
+  MetadataMap metadata_{};
 
   // One entry for each CPU in the trace.
   Slices slices_;
