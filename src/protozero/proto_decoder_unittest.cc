@@ -16,12 +16,11 @@
 
 #include "perfetto/protozero/proto_decoder.h"
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-#include "perfetto/base/utils.h"
+#include "perfetto/ext/base/utils.h"
 #include "perfetto/protozero/message.h"
 #include "perfetto/protozero/proto_utils.h"
 #include "perfetto/protozero/scattered_heap_buffer.h"
+#include "test/gtest_and_gmock.h"
 
 namespace protozero {
 namespace {
@@ -157,10 +156,10 @@ TEST(ProtoDecoderTest, RepeatedFields) {
   EXPECT_FALSE(++it);
 
   it = tpd.GetRepeated(2);
-  EXPECT_EQ(it->as_int32(), 20);
-  EXPECT_EQ((++it)->as_int32(), 21);
-  EXPECT_EQ((++it)->as_int32(), 22);
-  EXPECT_FALSE(++it);
+  EXPECT_EQ((it++)->as_int32(), 20);
+  EXPECT_EQ((it++)->as_int32(), 21);
+  EXPECT_EQ((it++)->as_int32(), 22);
+  EXPECT_FALSE(it);
 
   it = tpd.GetRepeated(3);
   EXPECT_EQ(it->as_int32(), 30);
@@ -235,6 +234,32 @@ TEST(ProtoDecoderTest, FindField) {
 
   auto field2 = pd.FindField(2);
   EXPECT_FALSE(field2);
+}
+
+TEST(ProtoDecoderTest, MoveTypedDecoder) {
+  HeapBuffered<Message> message;
+  message->AppendVarInt(/*field_id=*/1, 10);
+  std::vector<uint8_t> proto = message.SerializeAsArray();
+
+  // Construct a decoder that uses inline storage (i.e., the fields are stored
+  // within the object itself).
+  using Decoder = TypedProtoDecoder<32, false>;
+  std::unique_ptr<Decoder> decoder(new Decoder(proto.data(), proto.size()));
+  ASSERT_GE(reinterpret_cast<uintptr_t>(&decoder->at<1>()),
+            reinterpret_cast<uintptr_t>(decoder.get()));
+  ASSERT_LT(reinterpret_cast<uintptr_t>(&decoder->at<1>()),
+            reinterpret_cast<uintptr_t>(decoder.get()) + sizeof(Decoder));
+
+  // Move the decoder into another object and deallocate the original object.
+  Decoder decoder2(std::move(*decoder));
+  decoder.reset();
+
+  // Check that the contents got moved correctly.
+  EXPECT_EQ(decoder2.Get(1).as_int32(), 10);
+  ASSERT_GE(reinterpret_cast<uintptr_t>(&decoder2.at<1>()),
+            reinterpret_cast<uintptr_t>(&decoder2));
+  ASSERT_LT(reinterpret_cast<uintptr_t>(&decoder2.at<1>()),
+            reinterpret_cast<uintptr_t>(&decoder2) + sizeof(Decoder));
 }
 
 }  // namespace

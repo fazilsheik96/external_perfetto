@@ -19,12 +19,10 @@
 #include <random>
 #include <vector>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-
 #include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/trace_processor_context.h"
 #include "src/trace_processor/trace_sorter.h"
+#include "test/gtest_and_gmock.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -101,7 +99,7 @@ TEST_F(TraceSorterTest, TestFtrace) {
 TEST_F(TraceSorterTest, TestTracePacket) {
   TraceBlobView view = test_buffer_.slice(0, 1);
   EXPECT_CALL(*parser_, MOCK_ParseTracePacket(1000, view.data(), 1));
-  context_.sorter->PushTracePacket(1000, std::move(view));
+  context_.sorter->PushTracePacket(1000, nullptr, std::move(view));
   context_.sorter->FinalizeFtraceEventBatch(1000);
   context_.sorter->ExtractEventsForced();
 }
@@ -123,8 +121,8 @@ TEST_F(TraceSorterTest, Ordering) {
   context_.sorter->PushFtraceEvent(2 /*cpu*/, 1200 /*timestamp*/,
                                    std::move(view_4));
   context_.sorter->FinalizeFtraceEventBatch(2);
-  context_.sorter->PushTracePacket(1001, std::move(view_2));
-  context_.sorter->PushTracePacket(1100, std::move(view_3));
+  context_.sorter->PushTracePacket(1001, nullptr, std::move(view_2));
+  context_.sorter->PushTracePacket(1100, nullptr, std::move(view_3));
   context_.sorter->PushFtraceEvent(0 /*cpu*/, 1000 /*timestamp*/,
                                    std::move(view_1));
 
@@ -155,8 +153,8 @@ TEST_F(TraceSorterTest, SetWindowSize) {
   context_.sorter->PushFtraceEvent(2 /*cpu*/, 1200 /*timestamp*/,
                                    std::move(view_4));
   context_.sorter->FinalizeFtraceEventBatch(2);
-  context_.sorter->PushTracePacket(1001, std::move(view_2));
-  context_.sorter->PushTracePacket(1100, std::move(view_3));
+  context_.sorter->PushTracePacket(1001, nullptr, std::move(view_2));
+  context_.sorter->PushTracePacket(1100, nullptr, std::move(view_3));
 
   context_.sorter->PushFtraceEvent(0 /*cpu*/, 1000 /*timestamp*/,
                                    std::move(view_1));

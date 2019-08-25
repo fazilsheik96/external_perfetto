@@ -3,6 +3,7 @@
 // Do not edit.
 
 #include "src/traced/probes/ftrace/event_info.h"
+
 #include "perfetto/protozero/proto_utils.h"
 
 namespace perfetto {
@@ -2481,6 +2482,48 @@ std::vector<Event> GetStaticEventInfo() {
   {
     events.emplace_back(Event{});
     Event* event = &events.back();
+    event->name = "gpu_sched_enqueue";
+    event->group = "gpu";
+    event->proto_field_id = 333;
+    event->fields.push_back(MakeField("ctx_id", 1, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("job_id", 2, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("priority", 3, ProtoSchemaType::kUint32));
+    event->fields.push_back(
+        MakeField("submission_id", 4, ProtoSchemaType::kUint32));
+  }
+
+  {
+    events.emplace_back(Event{});
+    Event* event = &events.back();
+    event->name = "gpu_sched_submit";
+    event->group = "gpu";
+    event->proto_field_id = 334;
+    event->fields.push_back(MakeField("ctx_id", 1, ProtoSchemaType::kUint32));
+    event->fields.push_back(
+        MakeField("hwqueue_id", 2, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("job_id", 3, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("priority", 4, ProtoSchemaType::kUint32));
+    event->fields.push_back(
+        MakeField("submission_id", 5, ProtoSchemaType::kUint32));
+  }
+
+  {
+    events.emplace_back(Event{});
+    Event* event = &events.back();
+    event->name = "gpu_sched_complete";
+    event->group = "gpu";
+    event->proto_field_id = 335;
+    event->fields.push_back(MakeField("ctx_id", 1, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("job_id", 2, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("msg", 3, ProtoSchemaType::kString));
+    event->fields.push_back(MakeField("priority", 4, ProtoSchemaType::kUint32));
+    event->fields.push_back(
+        MakeField("submission_id", 5, ProtoSchemaType::kUint32));
+  }
+
+  {
+    events.emplace_back(Event{});
+    Event* event = &events.back();
     event->name = "i2c_read";
     event->group = "i2c";
     event->proto_field_id = 27;
@@ -3615,6 +3658,16 @@ std::vector<Event> GetStaticEventInfo() {
   {
     events.emplace_back(Event{});
     Event* event = &events.back();
+    event->name = "gpu_frequency";
+    event->group = "power";
+    event->proto_field_id = 332;
+    event->fields.push_back(MakeField("gpu_id", 1, ProtoSchemaType::kUint32));
+    event->fields.push_back(MakeField("state", 2, ProtoSchemaType::kUint32));
+  }
+
+  {
+    events.emplace_back(Event{});
+    Event* event = &events.back();
     event->name = "sys_enter";
     event->group = "raw_syscalls";
     event->proto_field_id = 329;
@@ -3904,6 +3957,18 @@ std::vector<Event> GetStaticEventInfo() {
     event->fields.push_back(MakeField("name", 1, ProtoSchemaType::kString));
     event->fields.push_back(MakeField("status", 2, ProtoSchemaType::kInt32));
     event->fields.push_back(MakeField("begin", 3, ProtoSchemaType::kUint32));
+  }
+
+  {
+    events.emplace_back(Event{});
+    Event* event = &events.back();
+    event->name = "0";
+    event->group = "systrace";
+    event->proto_field_id = 331;
+    event->fields.push_back(MakeField("flag", 1, ProtoSchemaType::kInt32));
+    event->fields.push_back(MakeField("name", 2, ProtoSchemaType::kString));
+    event->fields.push_back(MakeField("pid", 3, ProtoSchemaType::kInt32));
+    event->fields.push_back(MakeField("value", 4, ProtoSchemaType::kInt64));
   }
 
   {

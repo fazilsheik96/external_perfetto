@@ -17,15 +17,14 @@
 #include "src/trace_processor/syscall_tracker.h"
 
 #include "src/trace_processor/slice_tracker.h"
-
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
+#include "test/gtest_and_gmock.h"
 
 namespace perfetto {
 namespace trace_processor {
 namespace {
 
 using ::testing::_;
+using ::testing::Return;
 using ::testing::SaveArg;
 
 class MockSliceTracker : public SliceTracker {
@@ -33,19 +32,27 @@ class MockSliceTracker : public SliceTracker {
   MockSliceTracker(TraceProcessorContext* context) : SliceTracker(context) {}
   virtual ~MockSliceTracker() = default;
 
-  MOCK_METHOD4(
-      Begin,
-      void(int64_t timestamp, UniqueTid utid, StringId cat, StringId name));
-  MOCK_METHOD4(
-      End,
-      void(int64_t timestamp, UniqueTid utid, StringId cat, StringId name));
+  MOCK_METHOD6(Begin,
+               base::Optional<uint32_t>(int64_t timestamp,
+                                        int64_t ref,
+                                        RefType ref_type,
+                                        StringId cat,
+                                        StringId name,
+                                        SetArgsCallback args_callback));
+  MOCK_METHOD6(End,
+               base::Optional<uint32_t>(int64_t timestamp,
+                                        int64_t ref,
+                                        RefType ref_type,
+                                        StringId cat,
+                                        StringId name,
+                                        SetArgsCallback args_callback));
 };
 
 class SyscallTrackerTest : public ::testing::Test {
  public:
   SyscallTrackerTest() {
-    slice_tracker = new MockSliceTracker(&context);
     context.storage.reset(new TraceStorage());
+    slice_tracker = new MockSliceTracker(&context);
     context.slice_tracker.reset(slice_tracker);
     context.syscall_tracker.reset(new SyscallTracker(&context));
   }
@@ -58,10 +65,10 @@ class SyscallTrackerTest : public ::testing::Test {
 TEST_F(SyscallTrackerTest, ReportUnknownSyscalls) {
   StringId begin_name = 0;
   StringId end_name = 0;
-  EXPECT_CALL(*slice_tracker, Begin(100, 42, 0, _))
-      .WillOnce(SaveArg<3>(&begin_name));
-  EXPECT_CALL(*slice_tracker, End(110, 42, 0, _))
-      .WillOnce(SaveArg<3>(&end_name));
+  EXPECT_CALL(*slice_tracker, Begin(100, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&begin_name), Return(base::nullopt)));
+  EXPECT_CALL(*slice_tracker, End(110, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&end_name), Return(base::nullopt)));
 
   context.syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 57 /*sys_read*/);
   context.syscall_tracker->Exit(110 /*ts*/, 42 /*utid*/, 57 /*sys_read*/);
@@ -71,8 +78,8 @@ TEST_F(SyscallTrackerTest, ReportUnknownSyscalls) {
 
 TEST_F(SyscallTrackerTest, IgnoreWriteSyscalls) {
   context.syscall_tracker->SetArchitecture(kAarch64);
-  EXPECT_CALL(*slice_tracker, Begin(_, _, _, _)).Times(0);
-  EXPECT_CALL(*slice_tracker, End(_, _, _, _)).Times(0);
+  EXPECT_CALL(*slice_tracker, Begin(_, _, _, _, _, _)).Times(0);
+  EXPECT_CALL(*slice_tracker, End(_, _, _, _, _, _)).Times(0);
 
   context.syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 64 /*sys_write*/);
   context.syscall_tracker->Exit(110 /*ts*/, 42 /*utid*/, 64 /*sys_write*/);
@@ -81,10 +88,10 @@ TEST_F(SyscallTrackerTest, IgnoreWriteSyscalls) {
 TEST_F(SyscallTrackerTest, Aarch64) {
   StringId begin_name = 0;
   StringId end_name = 0;
-  EXPECT_CALL(*slice_tracker, Begin(100, 42, 0, _))
-      .WillOnce(SaveArg<3>(&begin_name));
-  EXPECT_CALL(*slice_tracker, End(110, 42, 0, _))
-      .WillOnce(SaveArg<3>(&end_name));
+  EXPECT_CALL(*slice_tracker, Begin(100, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&begin_name), Return(base::nullopt)));
+  EXPECT_CALL(*slice_tracker, End(110, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&end_name), Return(base::nullopt)));
 
   context.syscall_tracker->SetArchitecture(kAarch64);
   context.syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 63 /*sys_read*/);
@@ -96,10 +103,10 @@ TEST_F(SyscallTrackerTest, Aarch64) {
 TEST_F(SyscallTrackerTest, x8664) {
   StringId begin_name = 0;
   StringId end_name = 0;
-  EXPECT_CALL(*slice_tracker, Begin(100, 42, 0, _))
-      .WillOnce(SaveArg<3>(&begin_name));
-  EXPECT_CALL(*slice_tracker, End(110, 42, 0, _))
-      .WillOnce(SaveArg<3>(&end_name));
+  EXPECT_CALL(*slice_tracker, Begin(100, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&begin_name), Return(base::nullopt)));
+  EXPECT_CALL(*slice_tracker, End(110, 42, RefType::kRefUtid, 0, _, _))
+      .WillOnce(DoAll(SaveArg<4>(&end_name), Return(base::nullopt)));
 
   context.syscall_tracker->SetArchitecture(kX86_64);
   context.syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 0 /*sys_read*/);
@@ -109,8 +116,8 @@ TEST_F(SyscallTrackerTest, x8664) {
 }
 
 TEST_F(SyscallTrackerTest, SyscallNumberTooLarge) {
-  EXPECT_CALL(*slice_tracker, Begin(_, _, _, _)).Times(0);
-  EXPECT_CALL(*slice_tracker, End(_, _, _, _)).Times(0);
+  EXPECT_CALL(*slice_tracker, Begin(_, _, _, _, _, _)).Times(0);
+  EXPECT_CALL(*slice_tracker, End(_, _, _, _, _, _)).Times(0);
   context.syscall_tracker->SetArchitecture(kAarch64);
   context.syscall_tracker->Enter(100 /*ts*/, 42 /*utid*/, 9999);
   context.syscall_tracker->Exit(110 /*ts*/, 42 /*utid*/, 9999);

@@ -22,9 +22,7 @@
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/scoped_db.h"
 #include "src/trace_processor/trace_processor_context.h"
-
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
+#include "test/gtest_and_gmock.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -58,7 +56,10 @@ class ThreadTableUnittest : public ::testing::Test {
     return reinterpret_cast<const char*>(sqlite3_column_text(*stmt_, colId));
   }
 
-  ~ThreadTableUnittest() override { context_.storage->ResetStorage(); }
+  ~ThreadTableUnittest() override {
+    context_.args_tracker->Flush();
+    context_.storage->ResetStorage();
+  }
 
  protected:
   TraceProcessorContext context_;
@@ -81,7 +82,7 @@ TEST_F(ThreadTableUnittest, Select) {
                                           kThreadName1, prio, prev_state,
                                           /*tid=*/1, kThreadName2, prio);
 
-  context_.process_tracker->UpdateProcess(2, base::nullopt, "test");
+  context_.process_tracker->SetProcessMetadata(2, base::nullopt, "test");
   context_.process_tracker->UpdateThread(4 /*tid*/, 2 /*pid*/);
   PrepareValidStatement("SELECT utid, upid, tid, name FROM thread where tid=4");
 
@@ -112,7 +113,7 @@ TEST_F(ThreadTableUnittest, SelectWhere) {
                                           kThreadName2, prio, prev_state,
                                           /*tid=*/4, kThreadName1, prio);
 
-  context_.process_tracker->UpdateProcess(2, base::nullopt, "test");
+  context_.process_tracker->SetProcessMetadata(2, base::nullopt, "test");
   context_.process_tracker->UpdateThread(4 /*tid*/, 2 /*pid*/);
   context_.process_tracker->UpdateThread(1 /*tid*/, 2 /*pid*/);
   PrepareValidStatement(
@@ -143,9 +144,9 @@ TEST_F(ThreadTableUnittest, JoinWithProcess) {
                                           /*tid=*/1, kThreadName2, prio);
 
   // Also create a process for which we haven't seen any thread.
-  context_.process_tracker->UpdateProcess(7, base::nullopt, "pid7");
+  context_.process_tracker->SetProcessMetadata(7, base::nullopt, "pid7");
 
-  context_.process_tracker->UpdateProcess(2, base::nullopt, "pid2");
+  context_.process_tracker->SetProcessMetadata(2, base::nullopt, "pid2");
   context_.process_tracker->UpdateThread(/*tid=*/4, /*pid=*/2);
 
   PrepareValidStatement(

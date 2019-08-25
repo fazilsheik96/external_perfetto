@@ -19,6 +19,17 @@
  */
 export interface ObjectById<Class extends{id: string}> { [id: string]: Class; }
 
+export type Timestamped<T> = {
+  [P in keyof T]: T[P];
+}&{lastUpdate: number};
+
+export type OmniboxState = Timestamped<{omnibox: string;}>;
+
+export type VisibleState =
+    Timestamped<{startSec: number; endSec: number; resolution: number;}>;
+
+export const MAX_TIME = 180;
+
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
 export interface TrackState {
@@ -27,7 +38,6 @@ export interface TrackState {
   kind: string;
   name: string;
   trackGroup?: string;
-  dataReq?: TrackDataRequest;
   config: {};
 }
 
@@ -40,16 +50,10 @@ export interface TrackGroupState {
   summaryTrackId: string;
 }
 
-export interface TrackDataRequest {
-  start: number;
-  end: number;
-  resolution: number;
-}
-
 export interface EngineConfig {
   id: string;
   ready: boolean;
-  source: string|File;
+  source: string|File|ArrayBuffer;
 }
 
 export interface QueryConfig {
@@ -69,8 +73,8 @@ export interface TraceTime {
 }
 
 export interface FrontendLocalState {
-  visibleTraceTime: TraceTime;
-  lastUpdate: number;  // Epoch in seconds (Date.now() / 1000).
+  omniboxState: OmniboxState;
+  visibleState: VisibleState;
 }
 
 export interface Status {
@@ -83,6 +87,7 @@ export interface Note {
   timestamp: number;
   color: string;
   text: string;
+  isMovie: boolean;
 }
 
 export interface NoteSelection {
@@ -93,6 +98,11 @@ export interface NoteSelection {
 export interface SliceSelection {
   kind: 'SLICE';
   utid: number;
+  id: number;
+}
+
+export interface ChromeSliceSelection {
+  kind: 'CHROME_SLICE';
   id: number;
 }
 
@@ -110,8 +120,8 @@ export interface ThreadStateSelection {
   state: string;
 }
 
-type Selection =
-    NoteSelection|SliceSelection|TimeSpanSelection|ThreadStateSelection;
+type Selection = NoteSelection|SliceSelection|ChromeSliceSelection|
+    TimeSpanSelection|ThreadStateSelection;
 
 export interface LogsPagination {
   offset: number;
@@ -119,6 +129,8 @@ export interface LogsPagination {
 }
 
 export interface State {
+  // tslint:disable-next-line:no-any
+  [key: string]: any;
   route: string|null;
   nextId: number;
 
@@ -135,6 +147,7 @@ export interface State {
   traceTime: TraceTime;
   trackGroups: ObjectById<TrackGroupState>;
   tracks: ObjectById<TrackState>;
+  visibleTracks: string[];
   scrollingTracks: string[];
   pinnedTracks: string[];
   queries: ObjectById<QueryConfig>;
@@ -152,6 +165,19 @@ export interface State {
    * key is most up to date.
    */
   frontendLocalState: FrontendLocalState;
+
+  video: string | null;
+  videoEnabled: boolean;
+  videoOffset: number;
+  videoNoteIds: string[];
+  scrubbingEnabled: boolean;
+  flagPauseEnabled: boolean;
+  /**
+   * Trace recording
+   */
+  recordingInProgress: boolean;
+  extensionInstalled: boolean;
+  serialAndroidDeviceConnected: string|undefined;
 }
 
 export const defaultTraceTime = {
@@ -162,11 +188,22 @@ export const defaultTraceTime = {
 export declare type RecordMode =
     'STOP_WHEN_FULL' | 'RING_BUFFER' | 'LONG_TRACE';
 
+// 'Q','P','O' for Android, 'L' for Linux, 'C' for Chrome.
+export declare type TargetOs = 'Q' | 'P' | 'O' | 'C' | 'L';
+
+export function isAndroidTarget(target: TargetOs) {
+  return ['Q', 'P', 'O'].includes(target);
+}
+
+export function isChromeTarget(target: TargetOs) {
+  return target === 'C';
+}
+
 export interface RecordConfig {
   [key: string]: null|number|boolean|string|string[];
 
   // Global settings
-  targetOS: string;  // 'Q','P','O' for Android, 'L' for Linux
+  targetOS: TargetOs;
   mode: RecordMode;
   durationMs: number;
   bufferSizeMb: number;
@@ -178,6 +215,11 @@ export interface RecordConfig {
   cpuFreq: boolean;
   cpuCoarse: boolean;
   cpuCoarsePollMs: number;
+  cpuSyscall: boolean;
+
+  screenRecord: boolean;
+
+  gpuFreq: boolean;
 
   ftrace: boolean;
   atrace: boolean;
@@ -220,6 +262,11 @@ export function createEmptyRecordConfig(): RecordConfig {
     cpuSched: false,
     cpuLatency: false,
     cpuFreq: false,
+    cpuSyscall: false,
+
+    screenRecord: false,
+
+    gpuFreq: false,
 
     ftrace: false,
     atrace: false,
@@ -263,6 +310,7 @@ export function createEmptyState(): State {
     traceTime: {...defaultTraceTime},
     tracks: {},
     trackGroups: {},
+    visibleTracks: [],
     pinnedTracks: [],
     scrollingTracks: [],
     queries: {},
@@ -273,8 +321,16 @@ export function createEmptyState(): State {
     displayConfigAsPbtxt: false,
 
     frontendLocalState: {
-      visibleTraceTime: {...defaultTraceTime},
-      lastUpdate: 0,
+      omniboxState: {
+        lastUpdate: 0,
+        omnibox: '',
+      },
+
+      visibleState: {
+        ...defaultTraceTime,
+        lastUpdate: 0,
+        resolution: 0,
+      },
     },
 
     logsPagination: {
@@ -284,5 +340,15 @@ export function createEmptyState(): State {
 
     status: {msg: '', timestamp: 0},
     currentSelection: null,
+
+    video: null,
+    videoEnabled: false,
+    videoOffset: 0,
+    videoNoteIds: [],
+    scrubbingEnabled: false,
+    flagPauseEnabled: false,
+    recordingInProgress: false,
+    extensionInstalled: false,
+    serialAndroidDeviceConnected: undefined,
   };
 }

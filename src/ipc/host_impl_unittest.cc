@@ -18,18 +18,17 @@
 
 #include <memory>
 
-#include "gmock/gmock.h"
-#include "gtest/gtest.h"
-#include "perfetto/base/file_utils.h"
-#include "perfetto/base/scoped_file.h"
-#include "perfetto/base/temp_file.h"
-#include "perfetto/base/unix_socket.h"
-#include "perfetto/base/utils.h"
-#include "perfetto/ipc/service.h"
-#include "perfetto/ipc/service_descriptor.h"
+#include "perfetto/ext/base/file_utils.h"
+#include "perfetto/ext/base/scoped_file.h"
+#include "perfetto/ext/base/temp_file.h"
+#include "perfetto/ext/base/unix_socket.h"
+#include "perfetto/ext/base/utils.h"
+#include "perfetto/ext/ipc/service.h"
+#include "perfetto/ext/ipc/service_descriptor.h"
 #include "src/base/test/test_task_runner.h"
 #include "src/ipc/buffered_frame_deserializer.h"
 #include "src/ipc/test/test_socket.h"
+#include "test/gtest_and_gmock.h"
 
 #include "src/ipc/test/client_unittest_messages.pb.h"
 #include "src/ipc/wire_protocol.pb.h"
@@ -285,7 +284,7 @@ TEST_F(HostImplTest, InvokeMethodDropReply) {
 
   // OnFakeMethod1 will:
   // - Do nothing on the 1st call, when |drop_reply| == true.
-  // - Reply on the the 2nd call, when |drop_reply| == false.
+  // - Reply on the 2nd call, when |drop_reply| == false.
   EXPECT_CALL(*fake_service, OnFakeMethod1(_, _))
       .Times(2)
       .WillRepeatedly(Invoke([](const RequestProto& req, DeferredBase* reply) {

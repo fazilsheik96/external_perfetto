@@ -12,12 +12,14 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+
 import {produce} from 'immer';
 import * as m from 'mithril';
 
 import {Actions} from '../common/actions';
 import {MeminfoCounters, VmstatCounters} from '../common/protos';
-import {RecordMode} from '../common/state';
+import {isAndroidTarget, isChromeTarget, TargetOs} from '../common/state';
+import {MAX_TIME, RecordMode} from '../common/state';
 
 import {globals} from './globals';
 import {createPage} from './pages';
@@ -33,6 +35,7 @@ import {
   TextareaAttrs
 } from './record_widgets';
 import {Router} from './router';
+
 
 
 const POLL_RATE_MS = [250, 500, 1000, 2500, 5000, 30000, 60000];
@@ -195,6 +198,18 @@ function PowerSettings(cssClass: string) {
       } as ProbeAttrs));
 }
 
+function GpuSettings(cssClass: string) {
+  return m(
+      `.record-section${cssClass}`,
+      m(Probe, {
+        title: 'GPU frequency',
+        img: 'rec_cpu_freq.png',
+        descr: 'Records gpu frequency via ftrace',
+        setEnabled: (cfg, val) => cfg.gpuFreq = val,
+        isEnabled: (cfg) => cfg.gpuFreq
+      } as ProbeAttrs));
+}
+
 function CpuSettings(cssClass: string) {
   return m(
       `.record-section${cssClass}`,
@@ -237,6 +252,13 @@ function CpuSettings(cssClass: string) {
                 task Y that X's transition (e.g. posting a semaphore).`,
         setEnabled: (cfg, val) => cfg.cpuLatency = val,
         isEnabled: (cfg) => cfg.cpuLatency
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'Syscalls',
+        img: null,
+        descr: `Tracks the enter and exit of all syscalls.`,
+        setEnabled: (cfg, val) => cfg.cpuSyscall = val,
+        isEnabled: (cfg) => cfg.cpuSyscall
       } as ProbeAttrs));
 }
 
@@ -384,20 +406,81 @@ function AndroidSettings(cssClass: string) {
           options: LOG_BUFFERS,
           set: (cfg, val) => cfg.androidLogBuffers = val,
           get: (cfg) => cfg.androidLogBuffers
-        } as DropdownAttrs), ));
+        } as DropdownAttrs)));
 }
 
 
+function ChromeSettings(cssClass: string) {
+  return m(
+      `.record-section${cssClass}`,
+      m(Probe, {
+        title: 'Task scheduling',
+        img: null,
+        descr: `Records events about task scheduling and execution on all
+                  threads`,
+        setEnabled: (cfg, val) => cfg.taskScheduling = val,
+        isEnabled: (cfg) => cfg.taskScheduling
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'IPC flows',
+        img: null,
+        descr: `Records flow events for passing of IPC messages between
+                processes.`,
+        setEnabled: (cfg, val) => cfg.ipcFlows = val,
+        isEnabled: (cfg) => cfg.ipcFlows
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'Javascript execution',
+        img: null,
+        descr: `Records events about Javascript execution in the renderer
+                    processes.`,
+        setEnabled: (cfg, val) => cfg.jsExecution = val,
+        isEnabled: (cfg) => cfg.jsExecution
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'Web content rendering',
+        img: null,
+        descr: `Records events about rendering, layout, and compositing of
+        web content in Blink.`,
+        setEnabled: (cfg, val) => cfg.webContentRendering = val,
+        isEnabled: (cfg) => cfg.webContentRendering
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'UI rendering & compositing',
+        img: null,
+        descr: `Records events about rendering of browser UI surfaces and
+        compositing of surfaces.`,
+        setEnabled: (cfg, val) => cfg.uiRendering = val,
+        isEnabled: (cfg) => cfg.uiRendering
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'Input events',
+        img: null,
+        descr: `Records input events and their flow between processes.`,
+        setEnabled: (cfg, val) => cfg.inputEvents = val,
+        isEnabled: (cfg) => cfg.inputEvents
+      } as ProbeAttrs),
+      m(Probe, {
+        title: 'Navigation & Loading',
+        img: null,
+        descr: `Records network events for navigations and resources.`,
+        setEnabled: (cfg, val) => cfg.navigationAndLoading = val,
+        isEnabled: (cfg) => cfg.navigationAndLoading
+      } as ProbeAttrs));
+}
+
 function AdvancedSettings(cssClass: string) {
+  const S = (x: number) => x * 1000;
+  const M = (x: number) => x * 1000 * 60;
   return m(
       `.record-section${cssClass}`,
       m(Probe,
         {
           title: 'Advanced ftrace config',
           img: 'rec_ftrace.png',
-          descr: `Tunes the kernel-tracing (ftrace) module and allows to
-                    enable extra events. The events enabled here are on top
-                    of the ones derived when enabling the other probes.`,
+          descr: `Enable individual events and tune the kernel-tracing (ftrace)
+                  module. The events enabled here are in addition to those from
+                  enabled by other probes.`,
           setEnabled: (cfg, val) => cfg.ftrace = val,
           isEnabled: (cfg) => cfg.ftrace
         } as ProbeAttrs,
@@ -430,25 +513,33 @@ function AdvancedSettings(cssClass: string) {
               'kmem/*',
           set: (cfg, val) => cfg.ftraceExtraEvents = val,
           get: (cfg) => cfg.ftraceExtraEvents
-        } as TextareaAttrs)));
+        } as TextareaAttrs)),
+      globals.state.videoEnabled ?
+          m(Probe,
+            {
+              title: 'Screen recording',
+              img: null,
+              descr: `Records the screen along with running a trace. Max
+                  time of recording is 3 minutes (180 seconds).`,
+          setEnabled: (cfg, val) => cfg.screenRecord = val,
+          isEnabled: (cfg) => cfg.screenRecord,
+        } as ProbeAttrs,
+        m(Slider, {
+          title: 'Max duration',
+          icon: 'timer',
+          values: [S(10), S(15), S(30), S(60), M(2), M(3)],
+          isTime: true,
+          unit: 'm:s',
+          set: (cfg, val) => cfg.durationMs = val,
+          get: (cfg) => cfg.durationMs,
+        } as SliderAttrs),) : null);
 }
 
+
 function Instructions(cssClass: string) {
-  const data = globals.trackDataStore.get('config') as {
-    commandline: string,
-    pbtxt: string,
-  } | null;
-
-  const pbtx = data ? data.pbtxt : '';
-  let cmd = '';
-  cmd += 'adb shell perfetto \\\n';
-  cmd += '  -c - --txt \\\n';
-  cmd += '  -o /data/misc/perfetto-traces/trace \\\n';
-  cmd += '<<EOF\n\n';
-  cmd += pbtx;
-  cmd += '\nEOF\n';
   const docUrl = '//docs.perfetto.dev/#/build-instructions?id=get-the-code';
-
+  const extensionURL = `https://chrome.google.com/webstore/a/google.com/detail/
+      perfetto-ui/lfmkphfpdbjijhpomgecfikhfohaoine`;
 
   const notes: m.Children = [];
   const doc =
@@ -467,9 +558,18 @@ function Instructions(cssClass: string) {
          perfetto. `,
         doc);
 
+  const msgChrome =
+      m('div',
+        `To trace Chrome from the Perfetto UI, you need to install our `,
+        m('a', {href: extensionURL}, 'Chrome extension'),
+        m('div', ' and then reload this page.'));
+
   const msgLinux =
-      m('div', `In order to use perfetto on Linux you need to
-      compile it and run from the standalone build. `, doc);
+      m('div',
+        `In order to use perfetto on Linux you need to
+      compile it and run the following command from the build
+      output directory. `,
+        doc);
 
   switch (globals.state.recordConfig.targetOS) {
     case 'Q':
@@ -485,15 +585,23 @@ function Instructions(cssClass: string) {
     case 'L':
       notes.push(msgLinux);
       break;
+    case 'C':
+      notes.push(msgChrome);
+      break;
     default:
   }
 
-  const onOsChange = (os: string) => {
+  const onOsChange = (os: TargetOs) => {
     const traceCfg = produce(globals.state.recordConfig, draft => {
       draft.targetOS = os;
     });
     globals.dispatch(Actions.setRecordConfig({config: traceCfg}));
   };
+
+  const targetOs = globals.state.recordConfig.targetOS;
+  const commandSnippet = isChromeTarget(targetOs) ?
+      [] :
+      m(CodeSnippet, {text: getRecordCommand(targetOs), hardWhitespace: true});
 
   return m(
       `.record-section.instructions${cssClass}`,
@@ -505,9 +613,99 @@ function Instructions(cssClass: string) {
           m('option', {value: 'Q'}, 'Android Q+'),
           m('option', {value: 'P'}, 'Android P'),
           m('option', {value: 'O'}, 'Android O-'),
+          m('option', {value: 'C'}, 'Chrome'),
           m('option', {value: 'L'}, 'Linux desktop'))),
       notes.length > 0 ? m('.note', notes) : [],
-      m(CodeSnippet, {text: cmd, hardWhitespace: true}), );
+      commandSnippet,
+      recordingButtons(),
+      recordingLog());
+}
+
+function getRecordCommand(targetOs: TargetOs) {
+  const data = globals.trackDataStore.get('config') as
+          {commandline: string, pbtxt: string} |
+      null;
+
+  const cfg = globals.state.recordConfig;
+  let time = cfg.durationMs / 1000;
+
+  if (time > MAX_TIME) {
+    time = MAX_TIME;
+  }
+
+  const pbtx = data ? data.pbtxt : '';
+  let cmd = '';
+  if (cfg.screenRecord) {
+    // Half-second delay to ensure Perfetto starts tracing before screenrecord
+    // starts recording
+    cmd += `(sleep 0.5 && adb shell screenrecord --time-limit ${time}`;
+    cmd += ' "/sdcard/tracescr.mp4") &\\\n';
+  }
+  cmd +=
+      isAndroidTarget(targetOs) ? 'adb shell perfetto \\\n' : 'perfetto \\\n';
+  cmd += '  -c - --txt \\\n';
+  cmd += '  -o /data/misc/perfetto-traces/trace \\\n';
+  cmd += '<<EOF\n\n';
+  cmd += pbtx;
+  cmd += '\nEOF\n';
+
+  return cmd;
+}
+
+function recordingButtons() {
+  const state = globals.state;
+  const deviceConnected = state.serialAndroidDeviceConnected !== undefined;
+
+  const connectAndroidButton =
+      m(`button${deviceConnected ? '.selected' : ''}`,
+        {onclick: async () => connectAndroidDevice()},
+        'Connect Device');
+  const startButton =
+      m(`button${state.recordingInProgress ? '.selected' : ''}`,
+        {onclick: () => globals.dispatch(Actions.startRecording({}))},
+        'Start Recording');
+  const stopButton =
+      m(`button${state.recordingInProgress ? '' : '.disabled'}`,
+        {onclick: () => globals.dispatch(Actions.stopRecording({}))},
+        'Stop Recording');
+
+  const recInProgress = state.recordingInProgress;
+  const bufferUsageStr =
+      ((globals.bufferUsage ? globals.bufferUsage : 0.0) * 100).toFixed(1);
+
+  const buttons: m.Children = [];
+
+  // TODO(nicomazz): make this persistent after page reloads.
+  const targetOs = state.recordConfig.targetOS;
+  if (isAndroidTarget(targetOs)) {
+    if (deviceConnected) {
+      buttons.push(startButton);
+      if (recInProgress) buttons.push(stopButton);
+    } else {
+      buttons.push(connectAndroidButton);
+    }
+  } else if (isChromeTarget(targetOs) && state.extensionInstalled) {
+    buttons.push(startButton);
+    if (recInProgress) buttons.push(stopButton);
+  }
+
+  return [
+    m('.action-button', buttons),
+    recInProgress ? m('label', 'Buffer usage: ' + bufferUsageStr + '%') : []
+  ];
+}
+
+function recordingLog() {
+  const logs = globals.recordingLog;
+  if (logs === undefined) return [];
+  return m('.code-snippet.no-top-bar', m('code', logs));
+}
+
+// The connection must be done in the frontend. After it, the serial ID will be
+// inserted in the state, and the worker will be able to connect to the phone.
+async function connectAndroidDevice() {
+  console.log('This will be implemented soon!');
+  // TODO(nicomazz): This will be implemented in another CL.
 }
 
 export const RecordPage = createPage({
@@ -516,9 +714,11 @@ export const RecordPage = createPage({
       buffers: RecSettings,
       instructions: Instructions,
       cpu: CpuSettings,
+      gpu: GpuSettings,
       power: PowerSettings,
       memory: MemorySettings,
       android: AndroidSettings,
+      chrome: ChromeSettings,
       advanced: AdvancedSettings,
     };
 
@@ -536,45 +736,60 @@ export const RecordPage = createPage({
         '.record-page',
         m('.record-container',
           m('.record-menu',
+            {onclick: () => globals.rafScheduler.scheduleFullRedraw()},
             m('header', 'Trace config'),
-            m('ul',
-              m('a[href="#!/record?p=buffers"]',
-                m(`li${routePage === 'buffers' ? '.active' : ''}`,
-                  m('i.material-icons', 'tune'),
-                  m('.title', 'Recording settings'),
-                  m('.sub', 'Buffer mode, size and duration'))),
-              m('a[href="#!/record?p=instructions"]',
-                m(`li${routePage === 'instructions' ? '.active' : ''}`,
-                  m('i.material-icons.rec', 'fiber_manual_record'),
-                  m('.title', 'Start recording'),
-                  m('.sub', 'Generate config and instructions'))), ),
+            m(
+                'ul',
+                m('a[href="#!/record?p=buffers"]',
+                  m(`li${routePage === 'buffers' ? '.active' : ''}`,
+                    m('i.material-icons', 'tune'),
+                    m('.title', 'Recording settings'),
+                    m('.sub', 'Buffer mode, size and duration'))),
+                m('a[href="#!/record?p=instructions"]',
+                  m(`li${routePage === 'instructions' ? '.active' : ''}`,
+                    m('i.material-icons.rec', 'fiber_manual_record'),
+                    m('.title', 'Start recording'),
+                    m('.sub', 'Generate config and instructions'))),
+                ),
             m('header', 'Probes'),
-            m('ul',
-              m('a[href="#!/record?p=cpu"]',
-                m(`li${routePage === 'cpu' ? '.active' : ''}`,
-                  m('i.material-icons', 'subtitles'),
-                  m('.title', 'CPU'),
-                  m('.sub', 'CPU usage, scheduling, wakeups'))),
-              m('a[href="#!/record?p=power"]',
-                m(`li${routePage === 'power' ? '.active' : ''}`,
-                  m('i.material-icons', 'battery_charging_full'),
-                  m('.title', 'Power'),
-                  m('.sub', 'Battery and other energy counters'))),
-              m('a[href="#!/record?p=memory"]',
-                m(`li${routePage === 'memory' ? '.active' : ''}`,
-                  m('i.material-icons', 'memory'),
-                  m('.title', 'Memory'),
-                  m('.sub', 'Physical mem, VM, LMK'))),
-              m('a[href="#!/record?p=android"]',
-                m(`li${routePage === 'android' ? '.active' : ''}`,
-                  m('i.material-icons', 'android'),
-                  m('.title', 'Android apps & svcs'),
-                  m('.sub', 'atrace and logcat'))),
-              m('a[href="#!/record?p=advanced"]',
-                m(`li${routePage === 'advanced' ? '.active' : ''}`,
-                  m('i.material-icons', 'settings'),
-                  m('.title', 'Advanced settings'),
-                  m('.sub', 'Complicated stuff for wizards'))), )),
+            m(
+                'ul',
+                m('a[href="#!/record?p=cpu"]',
+                  m(`li${routePage === 'cpu' ? '.active' : ''}`,
+                    m('i.material-icons', 'subtitles'),
+                    m('.title', 'CPU'),
+                    m('.sub', 'CPU usage, scheduling, wakeups'))),
+                m('a[href="#!/record?p=gpu"]',
+                  m(`li${routePage === 'gpu' ? '.active' : ''}`,
+                    m('i.material-icons', 'aspect_ratio'),
+                    m('.title', 'GPU'),
+                    m('.sub', 'GPU frequency'))),
+                m('a[href="#!/record?p=power"]',
+                  m(`li${routePage === 'power' ? '.active' : ''}`,
+                    m('i.material-icons', 'battery_charging_full'),
+                    m('.title', 'Power'),
+                    m('.sub', 'Battery and other energy counters'))),
+                m('a[href="#!/record?p=memory"]',
+                  m(`li${routePage === 'memory' ? '.active' : ''}`,
+                    m('i.material-icons', 'memory'),
+                    m('.title', 'Memory'),
+                    m('.sub', 'Physical mem, VM, LMK'))),
+                m('a[href="#!/record?p=android"]',
+                  m(`li${routePage === 'android' ? '.active' : ''}`,
+                    m('i.material-icons', 'android'),
+                    m('.title', 'Android apps & svcs'),
+                    m('.sub', 'atrace and logcat'))),
+                m('a[href="#!/record?p=chrome"]',
+                  m(`li${routePage === 'chrome' ? '.active' : ''}`,
+                    m('i.material-icons', 'laptop_chromebook'),
+                    m('.title', 'Chrome'),
+                    m('.sub', 'Chrome traces'))),
+                m('a[href="#!/record?p=advanced"]',
+                  m(`li${routePage === 'advanced' ? '.active' : ''}`,
+                    m('i.material-icons', 'settings'),
+                    m('.title', 'Advanced settings'),
+                    m('.sub', 'Complicated stuff for wizards'))),
+                )),
           pages));
   }
 });
