@@ -55,9 +55,9 @@
 #include "src/tracing/core/shared_memory_arbiter_impl.h"
 #include "src/tracing/core/trace_buffer.h"
 
-#include "perfetto/trace/clock_snapshot.pb.h"
-#include "perfetto/trace/system_info.pb.h"
-#include "perfetto/trace/trusted_packet.pb.h"
+#include "protos/perfetto/trace/clock_snapshot.pb.h"
+#include "protos/perfetto/trace/system_info.pb.h"
+#include "protos/perfetto/trace/trusted_packet.pb.h"
 
 // General note: this class must assume that Producers are malicious and will
 // try to crash / exploit this class. We can trust pointers because they come
@@ -1924,6 +1924,8 @@ TracingServiceImpl::DataSourceInstance* TracingServiceImpl::SetupDataSource(
     // TODO(primiano): right now Create() will suicide in case of OOM if the
     // mmap fails. We should instead gracefully fail the request and tell the
     // client to go away.
+    PERFETTO_DLOG("Creating SMB of %zu KB for producer \"%s\"", shm_size / 1024,
+                  producer->name_.c_str());
     auto shared_memory = shm_factory_->CreateSharedMemory(shm_size);
     producer->SetSharedMemory(std::move(shared_memory));
     producer->OnTracingSetup();
@@ -2125,8 +2127,7 @@ void TracingServiceImpl::OnStartTriggersTimeout(TracingSessionID tsid) {
 }
 
 void TracingServiceImpl::UpdateMemoryGuardrail() {
-#if !PERFETTO_BUILDFLAG(PERFETTO_EMBEDDER_BUILD) && \
-    !PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX)
+#if PERFETTO_BUILDFLAG(PERFETTO_WATCHDOG)
   uint64_t total_buffer_bytes = 0;
 
   // Sum up all the shared memory buffers.
@@ -2148,7 +2149,7 @@ void TracingServiceImpl::UpdateMemoryGuardrail() {
 }
 
 void TracingServiceImpl::SnapshotSyncMarker(std::vector<TracePacket>* packets) {
-  // The sync markes is used to tokenize large traces efficiently.
+  // The sync marks are used to tokenize large traces efficiently.
   // See description in trace_packet.proto.
   if (sync_marker_packet_size_ == 0) {
     // Serialize the marker and the uid separately to guarantee that the marker
@@ -2216,7 +2217,7 @@ void TracingServiceImpl::SnapshotClocks(std::vector<TracePacket>* packets,
           static_cast<uint64_t>(base::FromPosixTimespec(clock.ts).count()));
     }
     protos::ClockSnapshot::Clock* c = clock_snapshot->add_clocks();
-    c->set_clock_id(clock.type);
+    c->set_clock_id(static_cast<uint32_t>(clock.type));
     c->set_timestamp(
         static_cast<uint64_t>(base::FromPosixTimespec(clock.ts).count()));
   }

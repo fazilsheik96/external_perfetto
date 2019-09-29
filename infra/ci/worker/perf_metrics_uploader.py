@@ -19,7 +19,7 @@ import hashlib
 import sys
 
 from config import DB, PROJECT
-from common_utils import req
+from common_utils import req, SCOPES
 
 '''
 Uploads the performance metrics of the Perfetto tests to StackDriver and
@@ -48,6 +48,9 @@ The expected format of the JSON is as follows:
 
 
 STACKDRIVER_API = 'https://monitoring.googleapis.com/v3/projects/%s' % PROJECT
+SCOPES.append('https://www.googleapis.com/auth/firebase.database')
+SCOPES.append('https://www.googleapis.com/auth/userinfo.email')
+SCOPES.append('https://www.googleapis.com/auth/monitoring.write')
 
 
 def sha1(obj):
@@ -96,13 +99,13 @@ def main():
     raw_metrics = json.loads(metrics_file.read())
 
   job = req('GET', '%s/jobs/%s.json' % (DB, args.job_id))
-  ts = job['time_ended']
-  git_ref = job['env'].get('PERFETTO_TEST_GIT_REF')
+  ts = job['time_started']
 
   metrics = metric_list_to_hash_dict(raw_metrics['metrics'])
   req('PUT', '%s/perf/%s.json' % (DB, args.job_id), body=metrics)
 
   # Only upload Stackdriver metrics for post-submit runs.
+  git_ref = job['env'].get('PERFETTO_TEST_GIT_REF')
   if git_ref == 'refs/heads/master':
     sd_metrics = create_stackdriver_metrics(ts, metrics)
     req('POST', STACKDRIVER_API + '/timeSeries', body=sd_metrics)

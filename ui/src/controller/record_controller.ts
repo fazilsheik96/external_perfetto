@@ -12,9 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {ungzip} from 'pako';
 import {Message, Method, rpc, RPCImplCallback} from 'protobufjs';
 
+import {
+  uint8ArrayToBase64,
+} from '../base/string_utils';
 import {Actions} from '../common/actions';
 import {
   AndroidLogConfig,
@@ -34,11 +36,15 @@ import {
   isAndroidTarget,
   isChromeTarget,
   MAX_TIME,
-  RecordConfig
+  RecordConfig,
+  TargetOs
 } from '../common/state';
+import {perfetto} from '../gen/protos';
 
-import {MockAdb} from './adb_interfaces';
-import {AdbRecordController} from './adb_record_controller';
+import {AdbOverWebUsb} from './adb';
+import {AdbConsumerPort} from './adb_record_controller';
+import {AdbSocketConsumerPort} from './adb_socket_controller';
+import {ChromeExtensionConsumerPort} from './chrome_proxy_record_controller';
 import {
   ConsumerPortResponse,
   GetTraceStatsResponse,
@@ -48,12 +54,9 @@ import {
 } from './consumer_port_types';
 import {Controller} from './controller';
 import {App, globals} from './globals';
+import {Consumer, RpcConsumerPort} from './record_controller_interfaces';
 
 type RPCImplMethod = (Method|rpc.ServiceMethod<Message<{}>, Message<{}>>);
-
-export function uint8ArrayToBase64(buffer: Uint8Array): string {
-  return btoa(String.fromCharCode.apply(null, Array.from(buffer)));
-}
 
 export function genConfigProto(uiCfg: RecordConfig): Uint8Array {
   return TraceConfig.encode(genConfig(uiCfg)).finish();
@@ -101,6 +104,7 @@ export function genConfig(uiCfg: RecordConfig): TraceConfig {
   const atraceCats = new Set<string>(uiCfg.atrace ? uiCfg.atraceCats : []);
   const atraceApps = new Set<string>();
   const chromeCategories = new Set<string>();
+  uiCfg.chromeCategoriesSelected.forEach(it => chromeCategories.add(it));
 
   let procThreadAssociationPolling = false;
   let procThreadAssociationFtrace = false;
@@ -244,6 +248,10 @@ export function genConfig(uiCfg: RecordConfig): TraceConfig {
     });
 
     protoCfg.dataSources.push(ds);
+  }
+
+  if (uiCfg.chromeLogs) {
+    chromeCategories.add('log');
   }
 
   if (uiCfg.taskScheduling) {
@@ -409,25 +417,44 @@ export function toPbtxt(configBuffer: Uint8Array): string {
   return [...message(json, 0)].join('');
 }
 
-export class RecordController extends Controller<'main'> {
+export function extractTraceConfig(enableTracingRequest: Uint8Array):
+    Uint8Array|undefined {
+  try {
+    const enableTracingObject =
+        perfetto.protos.EnableTracingRequest.decode(enableTracingRequest);
+    if (!enableTracingObject.traceConfig) return undefined;
+    return perfetto.protos.TraceConfig.encode(enableTracingObject.traceConfig)
+        .finish();
+  } catch (e) {  // This catch is for possible proto encoding/decoding issues.
+    console.error('Error extracting the config: ', e.message);
+    return undefined;
+  }
+}
+
+export function extractDurationFromTraceConfig(traceConfigProto: Uint8Array) {
+  try {
+    return perfetto.protos.TraceConfig.decode(traceConfigProto).durationMs;
+  } catch (e) {  // This catch is for possible proto encoding/decoding issues.
+    return undefined;
+  }
+}
+export class RecordController extends Controller<'main'> implements Consumer {
   private app: App;
   private config: RecordConfig|null = null;
   private extensionPort: MessagePort;
   private recordingInProgress = false;
   private consumerPort: ConsumerPort;
-  private traceBuffer = '';
+  private traceBuffer: Uint8Array[] = [];
   private bufferUpdateInterval: ReturnType<typeof setTimeout>|undefined;
 
-  // TODO(nicomazz): Replace MockAdb with the true Adb implementation.
-  private adbRecordController = new AdbRecordController(
-      new MockAdb(), this.onConsumerPortMessage.bind(this));
-
+  // We have a different controller for each targetOS. The correct one will be
+  // created when needed, and stored here.
+  private controllers = new Map<TargetOs, RpcConsumerPort>();
   constructor(args: {app: App, extensionPort: MessagePort}) {
     super('main');
     this.app = args.app;
     this.consumerPort = ConsumerPort.create(this.rpcImpl.bind(this));
     this.extensionPort = args.extensionPort;
-    this.extensionPort.onmessage = this.onConsumerPortMessage.bind(this);
   }
 
   run() {
@@ -485,15 +512,14 @@ export class RecordController extends Controller<'main'> {
     this.consumerPort.readBuffers({});
   }
 
-  onConsumerPortMessage({data}: {data: ConsumerPortResponse}) {
+  onConsumerPortResponse(data: ConsumerPortResponse) {
     if (data === undefined) return;
-
-    // TODO(nicomazz): Add error handling.
     if (isReadBuffersResponse(data)) {
-      if (!data.slices) return;
-      this.traceBuffer += data.slices[0].data;
-      // TODO(nicomazz): Stream the chunks directly in the trace processor.
-      if (data.slices[0].lastSliceForPacket) this.openTraceInUI();
+      if (!data.slices || data.slices.length === 0) return;
+      // TODO(nicomazz): handle this as intended by consumer_port.proto.
+      console.assert(data.slices.length === 1);
+      if (data.slices[0].data) this.traceBuffer.push(data.slices[0].data);
+      if (data.slices[0].lastSliceForPacket) this.onTraceComplete();
     } else if (isEnableTracingResponse(data)) {
       this.readBuffers();
     } else if (isGetTraceStatsResponse(data)) {
@@ -501,62 +527,98 @@ export class RecordController extends Controller<'main'> {
       if (percentage) {
         globals.publish('BufferUsage', {percentage});
       }
+    } else {
+      console.error('Unrecognized consumer port response:', data);
     }
   }
 
-  openTraceInUI() {
+  onTraceComplete() {
     this.consumerPort.freeBuffers({});
-    const trace = ungzip(this.stringToArrayBuffer(this.traceBuffer));
+    globals.dispatch(Actions.setRecordingStatus({status: undefined}));
+    const trace = this.generateTrace();
     globals.dispatch(Actions.openTraceFromBuffer({buffer: trace.buffer}));
-    this.traceBuffer = '';
+    this.traceBuffer = [];
   }
 
-  stringToArrayBuffer(str: string): Uint8Array {
-    const buf = new ArrayBuffer(str.length);
-    const bufView = new Uint8Array(buf);
-    for (let i = 0, strLen = str.length; i < strLen; i++) {
-      bufView[i] = str.charCodeAt(i);
+  // TODO(nicomazz): stream each chunk into the trace processor, instead of
+  // creating a big long trace.
+  generateTrace() {
+    let traceLen = 0;
+    for (const chunk of this.traceBuffer) traceLen += chunk.length;
+    const completeTrace = new Uint8Array(traceLen);
+    let written = 0;
+    for (const chunk of this.traceBuffer) {
+      completeTrace.set(chunk, written);
+      written += chunk.length;
     }
-    return bufView;
+    return completeTrace;
   }
-
 
   getBufferUsagePercentage(data: GetTraceStatsResponse): number {
     if (!data.traceStats || !data.traceStats.bufferStats) return 0.0;
-    let used = 0.0, total = 0.0;
+    let maximumUsage = 0;
     for (const buffer of data.traceStats.bufferStats) {
-      used += buffer.bytesWritten as number;
-      total += buffer.bufferSize as number;
+      const used = buffer.bytesWritten as number;
+      const total = buffer.bufferSize as number;
+      maximumUsage = Math.max(maximumUsage, used / total);
     }
-    if (total === 0.0) return 0;
-    return used / total;
+    return maximumUsage;
+  }
+
+  onError(message: string) {
+    globals.dispatch(
+        Actions.setLastRecordingError({error: message.substr(0, 150)}));
+    globals.dispatch(Actions.stopRecording({}));
+  }
+
+  onStatus(message: string) {
+    globals.dispatch(Actions.setRecordingStatus({status: message}));
   }
 
   // Depending on the recording target, different implementation of the
   // consumer_port will be used.
   // - Chrome target: This forwards the messages that have to be sent
-  // to the extension to the frontend. This is necessary because this controller
-  // is running in a separate worker, that can't directly send messages to the
-  // extension.
+  // to the extension to the frontend. This is necessary because this
+  // controller is running in a separate worker, that can't directly send
+  // messages to the extension.
   // - Android device target: WebUSB is used to communicate using the adb
-  // protocol. Actually, there is no full consumer_port implementation, but only
-  // the support to start tracing and fetch the file.
-  private rpcImpl(
+  // protocol. Actually, there is no full consumer_port implementation, but
+  // only the support to start tracing and fetch the file.
+  async getTargetController(target: TargetOs): Promise<RpcConsumerPort> {
+    let controller = this.controllers.get(target);
+    if (controller) return controller;
+
+    if (isChromeTarget(target)) {
+      controller = new ChromeExtensionConsumerPort(this.extensionPort, this);
+    } else if (isAndroidTarget(target)) {
+      // TODO(nicomazz): create the correct controller also based on the
+      // selected android device. TargetOS may be changed from a single char to
+      // something else.
+      const socketAccess = await this.hasSocketAccess();
+      controller = socketAccess ?
+          new AdbSocketConsumerPort(new AdbOverWebUsb(), this) :
+          new AdbConsumerPort(new AdbOverWebUsb(), this);
+    }
+
+    if (!controller) throw Error(`Unknown target: ${target}`);
+
+    this.controllers.set(target, controller);
+    return controller;
+  }
+
+  private hasSocketAccess() {
+    // TODO(nicomazz): implement proper logic
+    return Promise.resolve(false);
+  }
+
+  private async rpcImpl(
       method: RPCImplMethod, requestData: Uint8Array,
       _callback: RPCImplCallback) {
-    const target = this.app.state.recordConfig.targetOS;
-    if (isChromeTarget(target) && method !== null && method.name !== null &&
-        this.config !== null) {
-      this.extensionPort.postMessage(
-          {method: method.name, traceConfig: requestData});
-    } else if (isAndroidTarget(target)) {
-      // TODO(nicomazz): In theory requestData should contain the configuration
-      // proto, but in practice there are missing fields. As a temporary
-      // workaround I'm directly passing the configuration.
-      this.adbRecordController.handleCommand(
-          method.name, genConfigProto(this.config!));
-    } else {
-      console.error(`Target ${target} not supported!`);
+    try {
+      (await this.getTargetController(this.app.state.recordConfig.targetOS))
+          .handleCommand(method.name, requestData);
+    } catch (e) {
+      console.error(`error invoking ${method}: ${e.message}`);
     }
   }
 }

@@ -26,10 +26,10 @@
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/traced/sys_stats_counters.h"
-#include "perfetto/trace/ftrace/ftrace_stats.pb.h"
+#include "protos/perfetto/trace/ftrace/ftrace_stats.pb.h"
 
-#include "perfetto/trace/trace.pb.h"
-#include "perfetto/trace/trace_packet.pb.h"
+#include "protos/perfetto/trace/trace.pb.h"
+#include "protos/perfetto/trace/trace_packet.pb.h"
 
 namespace perfetto {
 namespace trace_to_text {
@@ -103,6 +103,46 @@ std::vector<std::string> GetPerfettoBinaryPath() {
       roots.emplace_back(sp.cur_token(), sp.cur_token_size());
   }
   return roots;
+}
+
+bool ReadTrace(trace_processor::TraceProcessor* tp, std::istream* input) {
+  // 1MB chunk size seems the best tradeoff on a MacBook Pro 2013 - i7 2.8 GHz.
+  constexpr size_t kChunkSize = 1024 * 1024;
+
+// Printing the status update on stderr can be a perf bottleneck. On WASM print
+// status updates more frequently because it can be slower to parse each chunk.
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WASM)
+  constexpr int kStderrRate = 1;
+#else
+  constexpr int kStderrRate = 128;
+#endif
+  uint64_t file_size = 0;
+
+  for (int i = 0;; i++) {
+    if (i % kStderrRate == 0) {
+      fprintf(stderr, "Loading trace %.2f MB%c", file_size / 1.0e6,
+              kProgressChar);
+      fflush(stderr);
+    }
+
+    std::unique_ptr<uint8_t[]> buf(new uint8_t[kChunkSize]);
+    input->read(reinterpret_cast<char*>(buf.get()), kChunkSize);
+    if (input->bad()) {
+      PERFETTO_ELOG("Failed when reading trace");
+      return false;
+    }
+
+    auto rsize = input->gcount();
+    if (rsize <= 0)
+      break;
+    file_size += static_cast<uint64_t>(rsize);
+    tp->Parse(std::move(buf), static_cast<size_t>(rsize));
+  }
+  tp->NotifyEndOfFile();
+
+  fprintf(stderr, "Loaded trace%c", kProgressChar);
+  fflush(stderr);
+  return true;
 }
 
 }  // namespace trace_to_text

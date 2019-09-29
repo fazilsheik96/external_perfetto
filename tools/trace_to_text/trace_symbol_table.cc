@@ -29,6 +29,7 @@
 #include <sys/wait.h>
 #include <unistd.h>
 
+#include "perfetto/profiling/symbolizer.h"
 #include "perfetto/protozero/proto_utils.h"
 
 #include "perfetto/base/logging.h"
@@ -36,15 +37,14 @@
 #include "perfetto/ext/base/pipe.h"
 #include "perfetto/ext/base/utils.h"
 
-#include "tools/trace_to_text/symbolizer.h"
 #include "tools/trace_to_text/utils.h"
 
-#include "perfetto/trace/profiling/profile_common.pb.h"
-#include "perfetto/trace/profiling/profile_packet.pb.h"
-#include "perfetto/trace/trace.pbzero.h"
-#include "perfetto/trace/trace_packet.pb.h"
+#include "protos/perfetto/trace/profiling/profile_common.pb.h"
+#include "protos/perfetto/trace/profiling/profile_packet.pb.h"
+#include "protos/perfetto/trace/trace.pbzero.h"
+#include "protos/perfetto/trace/trace_packet.pb.h"
 
-#include "perfetto/trace/interned_data/interned_data.pb.h"
+#include "protos/perfetto/trace/interned_data/interned_data.pb.h"
 
 namespace perfetto {
 namespace trace_to_text {
@@ -61,16 +61,6 @@ using ::perfetto::protos::InternedString;
 using ::perfetto::protos::Mapping;
 using ::perfetto::protos::ProfiledFrameSymbols;
 using ::perfetto::protos::ProfilePacket;
-
-void WriteTracePacket(const std::string& str, std::ostream* output) {
-  constexpr char kPreamble =
-      MakeTagLengthDelimited(protos::pbzero::Trace::kPacketFieldNumber);
-  uint8_t length_field[10];
-  uint8_t* end = WriteVarInt(str.size(), length_field);
-  *output << kPreamble;
-  *output << std::string(length_field, end);
-  *output << str;
-}
 
 }  // namespace
 
@@ -92,59 +82,6 @@ bool TraceSymbolTable::AddFrame(const Frame& frame) {
     rel_pc_for_frame_[frame.iid()] = frame.rel_pc();
   }
   return true;
-}
-
-void TraceSymbolTable::WriteResult(std::ostream* output,
-                                   uint32_t seq_id) const {
-  protos::TracePacket intern_packet;
-  intern_packet.set_trusted_packet_sequence_id(seq_id);
-  std::vector<protos::TracePacket> frame_symbol_packets;
-  auto max_string_intern_id = max_string_intern_id_;
-  std::map<std::string, uint64_t> new_interned_strings;
-  protos::InternedData* interned_data = intern_packet.mutable_interned_data();
-  for (const auto& p : symbols_for_frame_) {
-    uint64_t frame_iid = p.first;
-    const std::vector<SymbolizedFrame>& frames = p.second;
-    for (const SymbolizedFrame& frame : frames) {
-      uint64_t& function_name_id = new_interned_strings[frame.function_name];
-      if (function_name_id == 0) {
-        function_name_id = ++max_string_intern_id;
-        protos::InternedString* str = interned_data->add_function_names();
-        str->set_iid(function_name_id);
-        str->set_str(
-            reinterpret_cast<const uint8_t*>(frame.function_name.c_str()),
-            frame.function_name.size());
-      }
-
-      uint64_t& source_file_id = new_interned_strings[frame.file_name];
-      if (source_file_id == 0) {
-        source_file_id = ++max_string_intern_id;
-        protos::InternedString* str = interned_data->add_source_paths();
-        str->set_iid(source_file_id);
-        str->set_str(reinterpret_cast<const uint8_t*>(frame.file_name.c_str()),
-                     frame.file_name.size());
-      }
-    }
-
-    protos::TracePacket symbol_packet;
-    symbol_packet.set_trusted_packet_sequence_id(seq_id);
-    protos::ProfiledFrameSymbols* sym =
-        symbol_packet.mutable_profiled_frame_symbols();
-    sym->set_frame_iid(frame_iid);
-    for (const SymbolizedFrame& frame : frames) {
-      sym->add_function_name_id(new_interned_strings[frame.function_name]);
-      sym->add_line_number(frame.line);
-      sym->add_file_name_id(new_interned_strings[frame.file_name]);
-    }
-    // TODO(138725313): Cleanup - this should be outside the interned section.
-    *interned_data->add_profiled_frame_symbols() = *sym;
-
-    frame_symbol_packets.push_back(std::move(symbol_packet));
-  }
-  WriteTracePacket(intern_packet.SerializeAsString(), output);
-  for (const auto& frame_symbol_packet : frame_symbol_packets) {
-    WriteTracePacket(frame_symbol_packet.SerializeAsString(), output);
-  }
 }
 
 bool TraceSymbolTable::AddProfiledFrameSymbols(

@@ -52,6 +52,7 @@ namespace stats {
   F(fuchsia_timestamp_overflow,               kSingle,  kError,    kAnalysis), \
   F(gpu_counters_invalid_spec,                kSingle,  kError,    kAnalysis), \
   F(gpu_counters_missing_spec,                kSingle,  kError,    kAnalysis), \
+  F(graphics_frame_event_parser_errors,       kSingle,  kInfo,     kAnalysis), \
   F(guess_trace_type_duration_ns,             kSingle,  kInfo,     kAnalysis), \
   F(interned_data_tokenizer_errors,           kSingle,  kInfo,     kAnalysis), \
   F(invalid_clock_snapshots,                  kSingle,  kError,    kAnalysis), \
@@ -66,6 +67,11 @@ namespace stats {
   F(rss_stat_negative_size,                   kSingle,  kInfo,     kAnalysis), \
   F(sched_switch_out_of_order,                kSingle,  kError,    kAnalysis), \
   F(slice_out_of_order,                       kSingle,  kError,    kAnalysis), \
+  F(stackprofile_invalid_string_id,           kSingle,  kError,    kTrace),    \
+  F(stackprofile_invalid_mapping_id,          kSingle,  kError,    kTrace),    \
+  F(stackprofile_invalid_frame_id,            kSingle,  kError,    kTrace),    \
+  F(stackprofile_invalid_callstack_id,        kSingle,  kError,    kTrace),    \
+  F(stackprofile_parser_error,                kSingle,  kError,    kTrace),    \
   F(systrace_parse_failure,                   kSingle,  kError,    kAnalysis), \
   F(task_state_invalid,                       kSingle,  kError,    kAnalysis), \
   F(traced_buf_buffer_size,                   kIndexed, kInfo,     kTrace),    \
@@ -104,10 +110,6 @@ namespace stats {
   F(heapprofd_buffer_corrupted,               kIndexed, kError,    kTrace),    \
   F(heapprofd_buffer_overran,                 kIndexed, kDataLoss, kTrace),    \
   F(heapprofd_rejected_concurrent,            kIndexed, kError,    kTrace),    \
-  F(heapprofd_invalid_string_id,              kSingle,  kError,    kTrace),    \
-  F(heapprofd_invalid_mapping_id,             kSingle,  kError,    kTrace),    \
-  F(heapprofd_invalid_frame_id,               kSingle,  kError,    kTrace),    \
-  F(heapprofd_invalid_callstack_id,           kSingle,  kError,    kTrace),    \
   F(metatrace_overruns,                       kSingle,  kError,    kTrace),    \
   F(packages_list_has_parse_errors,           kSingle,  kError,    kTrace),    \
   F(packages_list_has_read_errors,            kSingle,  kError,    kTrace)

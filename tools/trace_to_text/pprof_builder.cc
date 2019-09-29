@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-#include "tools/trace_to_text/pprof_builder.h"
+#include "perfetto/profiling/pprof_builder.h"
 
 #include <cxxabi.h>
 #include <inttypes.h>
@@ -26,18 +26,18 @@
 #include <vector>
 
 #include "tools/trace_to_text/profile_visitor.h"
-#include "tools/trace_to_text/symbolizer.h"
 #include "tools/trace_to_text/trace_symbol_table.h"
 #include "tools/trace_to_text/utils.h"
 
 #include "perfetto/base/logging.h"
+#include "perfetto/ext/base/string_utils.h"
+#include "perfetto/profiling/symbolizer.h"
 
-#include "perfetto/trace/profiling/profile_common.pb.h"
-#include "perfetto/trace/profiling/profile_packet.pb.h"
-#include "perfetto/trace/trace.pb.h"
-#include "perfetto/trace/trace_packet.pb.h"
-
-#include "third_party/pprof/profile.pb.h"
+#include "protos/perfetto/trace/profiling/profile_common.pb.h"
+#include "protos/perfetto/trace/profiling/profile_packet.pb.h"
+#include "protos/perfetto/trace/trace.pb.h"
+#include "protos/perfetto/trace/trace_packet.pb.h"
+#include "protos/third_party/pprof/profile.pb.h"
 
 namespace perfetto {
 namespace trace_to_text {
@@ -67,15 +67,6 @@ using GProfile = ::perfetto::third_party::perftools::profiles::Profile;
 using GValueType = ::perfetto::third_party::perftools::profiles::ValueType;
 using GFunction = ::perfetto::third_party::perftools::profiles::Function;
 using GSample = ::perfetto::third_party::perftools::profiles::Sample;
-
-std::string ToHex(const std::string& build_id) {
-  std::string hex_build_id(2 * build_id.size() + 1, ' ');
-  for (size_t i = 0; i < build_id.size(); ++i)
-    snprintf(&(hex_build_id[2 * i]), 3, "%02hhx", build_id[i]);
-  // Remove the trailing nullbyte.
-  hex_build_id.resize(2 * build_id.size());
-  return hex_build_id;
-}
 
 enum Strings : int64_t {
   kEmpty = 0,
@@ -164,7 +155,7 @@ class GProfileWriter : public ProfileVisitor {
     auto str_it = string_lookup_.find(mapping.build_id());
     if (str_it != string_lookup_.end()) {
       const std::string& build_id = str_it->second;
-      gmapping->set_build_id(InternInGProfile(ToHex(build_id)));
+      gmapping->set_build_id(InternInGProfile(base::ToHex(build_id)));
     }
     return true;
   }
@@ -304,17 +295,17 @@ class GProfileWriter : public ProfileVisitor {
 };
 
 bool DumpProfilePacket(const std::vector<ProfilePacket>& packet_fragments,
-                       const std::vector<InternedData>& interned_data,
+                       const SequencedBundle& bundle,
                        std::vector<SerializedProfile>* output,
                        Symbolizer* symbolizer) {
   TraceSymbolTable symbol_table(symbolizer);
-  if (!symbol_table.Visit(packet_fragments, interned_data))
+  if (!symbol_table.Visit(packet_fragments, bundle))
     return false;
   if (!symbol_table.Finalize())
     return false;
 
   GProfileWriter writer(&symbol_table);
-  if (!writer.Visit(packet_fragments, interned_data))
+  if (!writer.Visit(packet_fragments, bundle))
     return false;
 
   if (!writer.Finalize())
@@ -345,9 +336,8 @@ bool TraceToPprof(std::istream* input,
   return VisitCompletePacket(
       input, [output, symbolizer](
                  uint32_t, const std::vector<ProfilePacket>& packet_fragments,
-                 const std::vector<InternedData>& interned_data) {
-        return DumpProfilePacket(packet_fragments, interned_data, output,
-                                 symbolizer);
+                 const SequencedBundle& bundle) {
+        return DumpProfilePacket(packet_fragments, bundle, output, symbolizer);
       });
 }
 

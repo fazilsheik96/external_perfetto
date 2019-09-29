@@ -33,6 +33,7 @@ import {SLICE_TRACK_KIND} from '../tracks/chrome_slices/common';
 import {CPU_FREQ_TRACK_KIND} from '../tracks/cpu_freq/common';
 import {CPU_SLICE_TRACK_KIND} from '../tracks/cpu_slices/common';
 import {GPU_FREQ_TRACK_KIND} from '../tracks/gpu_freq/common';
+import {HEAP_PROFILE_TRACK_KIND} from '../tracks/heap_profile/common';
 import {
   PROCESS_SCHEDULING_TRACK_KIND
 } from '../tracks/process_scheduling/common';
@@ -162,11 +163,11 @@ export class TraceController extends Controller<States> {
       }
     } else if (engineCfg.source instanceof ArrayBuffer) {
       this.updateStatus(`${statusHeader} 0 %`);
-      const buffer = engineCfg.source;
+      const buffer = new Uint8Array(engineCfg.source);
       const SLICE_SIZE = 1024 * 1024;
       for (let off = 0; off < buffer.byteLength; off += SLICE_SIZE) {
-        const slice = buffer.slice(off, off + SLICE_SIZE);
-        await this.engine.parse(new Uint8Array(slice));
+        const slice = buffer.subarray(off, off + SLICE_SIZE);
+        await this.engine.parse(slice);
         const progress =
             Math.round((off + slice.byteLength) / buffer.byteLength * 100);
         this.updateStatus(`${statusHeader} ${progress} %`);
@@ -217,8 +218,9 @@ export class TraceController extends Controller<States> {
 
     // We don't know the resolution at this point. However this will be
     // replaced in 50ms so a guess is fine.
+    const resolution = (traceTime.end - traceTime.start) / 1000;
     actions.push(Actions.setVisibleTraceTime(
-        {...traceTimeState, lastUpdate: Date.now() / 1000, resolution: 0.008}));
+        {...traceTimeState, lastUpdate: Date.now() / 1000, resolution}));
 
     globals.dispatchMultiple(actions);
 
@@ -238,7 +240,6 @@ export class TraceController extends Controller<States> {
     this.updateStatus('Loading tracks');
 
     const engine = assertExists<Engine>(this.engine);
-    const numCpus = await engine.getNumberOfCpus();
     const numGpus = await engine.getNumberOfGpus();
     const tracksToAdd: AddTrackArgs[] = [];
 
@@ -267,7 +268,9 @@ export class TraceController extends Controller<States> {
      where name = 'cpufreq';
     `);
 
-    for (let cpu = 0; cpu < numCpus; cpu++) {
+    const cpus = await engine.getCpus();
+
+    for (const cpu of cpus) {
       tracksToAdd.push({
         engineId: this.engineId,
         kind: CPU_SLICE_TRACK_KIND,
@@ -279,7 +282,7 @@ export class TraceController extends Controller<States> {
       });
     }
 
-    for (let cpu = 0; cpu < numCpus; cpu++) {
+    for (const cpu of cpus) {
       // Only add a cpu freq track if we have
       // cpu freq data.
       // TODO(taylori): Find a way to display cpu idle
@@ -302,6 +305,15 @@ export class TraceController extends Controller<States> {
           }
         });
       }
+    }
+
+    const heapProfiles = await engine.query(`
+      select distinct(upid) from heap_profile_allocation`);
+
+    const heapUpids: Set<number> = new Set();
+    for (let i = 0; i < heapProfiles.numRecords; i++) {
+      const upid = heapProfiles.columns[0].longValues![i];
+      heapUpids.add(+upid);
     }
 
     const maxGpuFreq = await engine.query(`
@@ -489,6 +501,16 @@ export class TraceController extends Controller<States> {
                   ref: upid,
                 }
               });
+            });
+          }
+
+          if (heapUpids.has(upid)) {
+            tracksToAdd.push({
+              engineId: this.engineId,
+              kind: HEAP_PROFILE_TRACK_KIND,
+              name: `Heap Profile`,
+              trackGroup: pUuid,
+              config: {upid}
             });
           }
         }

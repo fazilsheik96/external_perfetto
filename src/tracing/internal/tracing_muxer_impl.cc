@@ -392,7 +392,7 @@ TracingMuxerImpl::TracingMuxerImpl(const TracingInitArgs& args)
 void TracingMuxerImpl::Initialize(const TracingInitArgs& args) {
   PERFETTO_DCHECK_THREAD(thread_checker_);  // Rebind the thread checker.
 
-  auto add_backend = [this](TracingBackend* backend, BackendType type) {
+  auto add_backend = [this, &args](TracingBackend* backend, BackendType type) {
     TracingBackendId backend_id = backends_.size();
     backends_.emplace_back();
     RegisteredBackend& rb = backends_.back();
@@ -404,18 +404,13 @@ void TracingMuxerImpl::Initialize(const TracingInitArgs& args) {
     conn_args.producer = rb.producer.get();
     conn_args.producer_name = platform_->GetCurrentProcessName();
     conn_args.task_runner = task_runner_.get();
+    conn_args.shmem_size_hint_bytes = args.shmem_size_hint_kb * 1024;
+    conn_args.shmem_page_size_hint_bytes = args.shmem_page_size_hint_kb * 1024;
     rb.producer->Initialize(rb.backend->ConnectProducer(conn_args));
   };
 
   if (args.backends & kSystemBackend) {
-// These buildflags match the |perfetto_build_with_ipc_layer| condition in
-// the //src/tracing:client_api target.
-#if (PERFETTO_BUILDFLAG(PERFETTO_ANDROID_BUILD) ||     \
-     PERFETTO_BUILDFLAG(PERFETTO_CHROMIUM_BUILD) ||    \
-     PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD)) && \
-    (PERFETTO_BUILDFLAG(PERFETTO_OS_LINUX) ||          \
-     PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) ||        \
-     PERFETTO_BUILDFLAG(PERFETTO_OS_MACOSX))
+#if (PERFETTO_BUILDFLAG(PERFETTO_IPC))
     add_backend(SystemTracingBackend::GetInstance(), kSystemBackend);
 #else
     PERFETTO_ELOG("System backend not supporteed in the current configuration");

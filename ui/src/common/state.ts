@@ -23,7 +23,8 @@ export type Timestamped<T> = {
   [P in keyof T]: T[P];
 }&{lastUpdate: number};
 
-export type OmniboxState = Timestamped<{omnibox: string;}>;
+export type OmniboxState =
+    Timestamped<{omnibox: string; mode: 'SEARCH' | 'COMMAND'}>;
 
 export type VisibleState =
     Timestamped<{startSec: number; endSec: number; resolution: number;}>;
@@ -101,6 +102,20 @@ export interface SliceSelection {
   id: number;
 }
 
+export interface CounterSelection {
+  kind: 'COUNTER';
+  leftTs: number;
+  rightTs: number;
+  id: number;
+}
+
+export interface HeapDumpSelection {
+  kind: 'HEAP_DUMP';
+  id: number;
+  upid: number;
+  ts: number;
+}
+
 export interface ChromeSliceSelection {
   kind: 'CHROME_SLICE';
   id: number;
@@ -118,14 +133,22 @@ export interface ThreadStateSelection {
   ts: number;
   dur: number;
   state: string;
+  cpu: number;
 }
 
-type Selection = NoteSelection|SliceSelection|ChromeSliceSelection|
-    TimeSpanSelection|ThreadStateSelection;
+type Selection =
+    NoteSelection|SliceSelection|CounterSelection|HeapDumpSelection|
+    ChromeSliceSelection|TimeSpanSelection|ThreadStateSelection;
 
 export interface LogsPagination {
   offset: number;
   count: number;
+}
+
+export interface AdbRecordingTarget {
+  serial: string;
+  name: string;
+  os: string;
 }
 
 export interface State {
@@ -172,12 +195,19 @@ export interface State {
   videoNoteIds: string[];
   scrubbingEnabled: boolean;
   flagPauseEnabled: boolean;
+
   /**
    * Trace recording
    */
   recordingInProgress: boolean;
+  recordingCancelled: boolean;
   extensionInstalled: boolean;
-  serialAndroidDeviceConnected: string|undefined;
+  androidDeviceConnected?: AdbRecordingTarget;
+  availableDevices: AdbRecordingTarget[];
+  lastRecordingError?: string;
+  recordingStatus?: string;
+
+  chromeCategories: string[]|undefined;
 }
 
 export const defaultTraceTime = {
@@ -197,6 +227,10 @@ export function isAndroidTarget(target: TargetOs) {
 
 export function isChromeTarget(target: TargetOs) {
   return target === 'C';
+}
+
+export function isLinuxTarget(target: TargetOs) {
+  return target === 'L';
 }
 
 export interface RecordConfig {
@@ -248,6 +282,8 @@ export interface RecordConfig {
 
   procStats: boolean;
   procStatsPeriodMs: number;
+
+  chromeCategoriesSelected: string[];
 }
 
 export function createEmptyRecordConfig(): RecordConfig {
@@ -299,6 +335,8 @@ export function createEmptyRecordConfig(): RecordConfig {
     memLmk: false,
     procStats: false,
     procStatsPeriodMs: 1000,
+
+    chromeCategoriesSelected: [],
   };
 }
 
@@ -324,6 +362,7 @@ export function createEmptyState(): State {
       omniboxState: {
         lastUpdate: 0,
         omnibox: '',
+        mode: 'SEARCH',
       },
 
       visibleState: {
@@ -348,7 +387,11 @@ export function createEmptyState(): State {
     scrubbingEnabled: false,
     flagPauseEnabled: false,
     recordingInProgress: false,
+    recordingCancelled: false,
     extensionInstalled: false,
-    serialAndroidDeviceConnected: undefined,
+    androidDeviceConnected: undefined,
+    availableDevices: [],
+
+    chromeCategories: undefined,
   };
 }

@@ -64,12 +64,13 @@ export class TrackGroupPanel extends Panel<Attrs> {
     }
     return m(
         `.track-group-panel[collapsed=${collapsed}]`,
+        {id: 'track_' + this.trackGroupId},
         m('.shell',
           m('h1',
             {
               title: name,
             },
-            name + '\u200E'),
+            name),
           m('.fold-button',
             {
               onclick: (e: MouseEvent) => {

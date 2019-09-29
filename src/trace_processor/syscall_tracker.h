@@ -49,7 +49,7 @@ class SyscallTracker {
 
   void Enter(int64_t ts, UniqueTid utid, uint32_t syscall_num) {
     StringId name = SyscallNumberToStringId(syscall_num);
-    if (name) {
+    if (!name.is_null()) {
       context_->slice_tracker->Begin(ts, utid, RefType::kRefUtid, 0 /* cat */,
                                      name);
     }
@@ -57,7 +57,7 @@ class SyscallTracker {
 
   void Exit(int64_t ts, UniqueTid utid, uint32_t syscall_num) {
     StringId name = SyscallNumberToStringId(syscall_num);
-    if (name) {
+    if (!name.is_null()) {
       context_->slice_tracker->End(ts, utid, RefType::kRefUtid, 0 /* cat */,
                                    name);
     }
@@ -80,7 +80,7 @@ class SyscallTracker {
   }
 
   // This is table from platform specific syscall number directly to
-  // the relevent StringId (this avoids having to always do two conversions).
+  // the relevant StringId (this avoids having to always do two conversions).
   std::array<StringId, kMaxSyscalls> arch_syscall_to_string_id_{};
   StringId sys_write_string_id_ = std::numeric_limits<StringId>::max();
 };

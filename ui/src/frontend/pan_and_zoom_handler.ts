@@ -42,7 +42,7 @@ enum Pan {
 }
 function keyToPan(e: KeyboardEvent): Pan {
   if (['a'].includes(e.key)) return Pan.Left;
-  if (['d'].includes(e.key)) return Pan.Right;
+  if (['d', 'e'].includes(e.key)) return Pan.Right;
   return Pan.None;
 }
 
@@ -52,8 +52,8 @@ enum Zoom {
   Out = -1
 }
 function keyToZoom(e: KeyboardEvent): Zoom {
-  if (['w'].includes(e.key)) return Zoom.In;
-  if (['s'].includes(e.key)) return Zoom.Out;
+  if (['w', ','].includes(e.key)) return Zoom.In;
+  if (['s', 'o'].includes(e.key)) return Zoom.Out;
   return Zoom.None;
 }
 
@@ -166,6 +166,9 @@ export class PanAndZoomHandler {
   private onKeyDown(e: KeyboardEvent) {
     this.updateShift(e.shiftKey);
     if (keyToPan(e) !== Pan.None) {
+      if (this.panning !== keyToPan(e)) {
+        this.panAnimation.stop();
+      }
       this.panning = keyToPan(e);
       const animationTime = e.repeat ?
           ANIMATION_AUTO_END_AFTER_KEYPRESS_MS :
@@ -175,6 +178,9 @@ export class PanAndZoomHandler {
     }
 
     if (keyToZoom(e) !== Zoom.None) {
+      if (this.zooming !== keyToZoom(e)) {
+        this.zoomAnimation.stop();
+      }
       this.zooming = keyToZoom(e);
       const animationTime = e.repeat ?
           ANIMATION_AUTO_END_AFTER_KEYPRESS_MS :
@@ -184,7 +190,7 @@ export class PanAndZoomHandler {
     }
 
     // Handle key events that are not pan or zoom.
-    handleKey(e.key, true);
+    handleKey(e.key, true, this.shiftDown);
   }
 
   private onKeyUp(e: KeyboardEvent) {
@@ -201,7 +207,7 @@ export class PanAndZoomHandler {
     }
 
     // Handle key events that are not pan or zoom.
-    handleKey(e.key, false);
+    handleKey(e.key, false, this.shiftDown);
   }
 
   private updateShift(down: boolean) {

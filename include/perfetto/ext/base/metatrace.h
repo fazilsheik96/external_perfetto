@@ -23,10 +23,10 @@
 #include <string>
 
 #include "perfetto/base/logging.h"
+#include "perfetto/base/time.h"
 #include "perfetto/ext/base/metatrace_events.h"
 #include "perfetto/ext/base/thread_annotations.h"
 #include "perfetto/ext/base/thread_utils.h"
-#include "perfetto/ext/base/time.h"
 #include "perfetto/ext/base/utils.h"
 
 // A facility to trace execution of the perfetto codebase itself.
@@ -68,7 +68,7 @@ extern std::atomic<uint32_t> g_enabled_tags;
 extern std::atomic<uint64_t> g_enabled_timestamp;
 
 // Enables meta-tracing for one or more tags. Once enabled it will discard any
-// futher Enable() calls and return false until disabled,
+// further Enable() calls and return false until disabled,
 // |read_task| is a closure that will be called enqueued |task_runner| when the
 // meta-tracing ring buffer is half full. The task is expected to read the ring
 // buffer using RingBuffer::GetReadIterator() and serialize the contents onto a

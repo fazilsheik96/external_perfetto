@@ -18,6 +18,7 @@ import {assertExists} from '../base/logging';
 import {ConvertTrace} from '../controller/trace_converter';
 
 import {
+  AdbRecordingTarget,
   createEmptyState,
   LogsPagination,
   OmniboxState,
@@ -25,6 +26,7 @@ import {
   SCROLLING_TRACK_GROUP,
   State,
   Status,
+  TargetOs,
   TraceTime,
   TrackState,
   VisibleState,
@@ -45,11 +47,19 @@ function clearTraceState(state: StateDraft) {
   const nextId = state.nextId;
   const recordConfig = state.recordConfig;
   const route = state.route;
+  const androidDeviceConnected = state.androidDeviceConnected;
+  const extensionInstalled = state.extensionInstalled;
+  const availableDevices = state.availableDevices;
+  const chromeCategories = state.chromeCategories;
 
   Object.assign(state, createEmptyState());
   state.nextId = nextId;
   state.recordConfig = recordConfig;
   state.route = route;
+  state.androidDeviceConnected = androidDeviceConnected;
+  state.extensionInstalled = extensionInstalled;
+  state.availableDevices = availableDevices;
+  state.chromeCategories = chromeCategories;
 }
 
 export const StateActions = {
@@ -150,6 +160,11 @@ export const StateActions = {
 
   setVisibleTracks(state: StateDraft, args: {tracks: string[]}) {
     state.visibleTracks = args.tracks;
+  },
+
+  updateTrackConfig(state: StateDraft, args: {id: string, config: {}}) {
+    if (state.tracks[args.id] === undefined) return;
+    state.tracks[args.id].config = args.config;
   },
 
   executeQuery(
@@ -358,8 +373,25 @@ export const StateActions = {
     };
   },
 
-  selectChromeSlice(state: StateDraft, args: {slice_id: number}): void {
-    state.currentSelection = {kind: 'CHROME_SLICE', id: args.slice_id};
+  selectCounter(
+      state: StateDraft, args: {leftTs: number, rightTs: number, id: number}):
+      void {
+        state.currentSelection = {
+          kind: 'COUNTER',
+          leftTs: args.leftTs,
+          rightTs: args.rightTs,
+          id: args.id
+        };
+      },
+
+  selectHeapDump(
+      state: StateDraft, args: {id: number, upid: number, ts: number}): void {
+    state.currentSelection =
+        {kind: 'HEAP_DUMP', id: args.id, upid: args.upid, ts: args.ts};
+  },
+
+  selectChromeSlice(state: StateDraft, args: {id: number}): void {
+    state.currentSelection = {kind: 'CHROME_SLICE', id: args.id};
   },
 
   selectTimeSpan(
@@ -373,15 +405,18 @@ export const StateActions = {
 
   selectThreadState(
       state: StateDraft,
-      args: {utid: number, ts: number, dur: number, state: string}): void {
-    state.currentSelection = {
-      kind: 'THREAD_STATE',
-      utid: args.utid,
-      ts: args.ts,
-      dur: args.dur,
-      state: args.state
-    };
-  },
+      args:
+          {utid: number, ts: number, dur: number, state: string, cpu: number}):
+      void {
+        state.currentSelection = {
+          kind: 'THREAD_STATE',
+          utid: args.utid,
+          ts: args.ts,
+          dur: args.dur,
+          state: args.state,
+          cpu: args.cpu
+        };
+      },
 
   deselect(state: StateDraft, _: {}): void {
     state.currentSelection = null;
@@ -393,10 +428,17 @@ export const StateActions = {
 
   startRecording(state: StateDraft): void {
     state.recordingInProgress = true;
+    state.lastRecordingError = undefined;
+    state.recordingCancelled = false;
   },
 
   stopRecording(state: StateDraft): void {
     state.recordingInProgress = false;
+  },
+
+  cancelRecording(state: StateDraft): void {
+    state.recordingInProgress = false;
+    state.recordingCancelled = true;
   },
 
   setExtensionAvailable(state: StateDraft, args: {available: boolean}): void {
@@ -407,9 +449,17 @@ export const StateActions = {
     state.bufferUsage = args.percentage;
   },
 
-  setAndroidDevice(state: StateDraft, args: {serial: string}): void {
-    state.serialAndroidDeviceConnected = args.serial;
-  },
+  setAndroidDevice(state: StateDraft, args: {target?: AdbRecordingTarget}):
+      void {
+        state.recordConfig.targetOS =
+            args.target ? args.target.os as TargetOs : 'Q';
+        state.androidDeviceConnected = args.target;
+      },
+
+  setAvailableDevices(state: StateDraft, args: {devices: AdbRecordingTarget[]}):
+      void {
+        state.availableDevices = args.devices;
+      },
 
   setOmnibox(state: StateDraft, args: OmniboxState): void {
     state.frontendLocalState.omniboxState = args;
@@ -419,6 +469,19 @@ export const StateActions = {
     state.frontendLocalState.visibleState = args;
   },
 
+  setChromeCategories(state: StateDraft, args: {categories: string[]}): void {
+    state.chromeCategories = args.categories;
+  },
+
+  setLastRecordingError(state: StateDraft, args: {error?: string}): void {
+    state.lastRecordingError = args.error;
+    state.recordingStatus = undefined;
+  },
+
+  setRecordingStatus(state: StateDraft, args: {status?: string}): void {
+    state.recordingStatus = args.status;
+    state.lastRecordingError = undefined;
+  },
 };
 
 // When we are on the frontend side, we don't really want to execute the

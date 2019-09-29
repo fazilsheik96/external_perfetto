@@ -72,6 +72,7 @@ body>main {
     padding: 0;
     margin: 0;
     user-select: none;
+    overscroll-behavior: none;
 }
 
 h1,
@@ -287,6 +288,7 @@ button.close {
         @include transition();
         padding: 0 10px;
         display: grid;
+        cursor: grab;
         grid-template-areas: "title pin";
         grid-template-columns: 1fr auto auto;
         align-items: center;
@@ -323,6 +325,10 @@ button.close {
           cursor: pointer;
           width: 24px;
           opacity: 0;
+        }
+
+        .track-button.show {
+          opacity: 1;
         }
 
         &:hover .track-button{

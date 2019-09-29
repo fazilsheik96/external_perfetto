@@ -99,6 +99,7 @@ synth_1.py filter_counters.sql synth_1_filter_counters.out
 counters_where_cpu.py counters_where_cpu.sql counters_where_cpu_counters_where_cpu.out
 counters_group_by_freq.py counters_group_by_freq.sql counters_group_by_freq_counters_group_by_freq.out
 counters_order_ref.py counters_order_ref.sql counters_order_ref_counters_order_ref.out
+../data/example_android_trace_30s.pb filter_row_vector.sql filter_row_vector_example_android_trace_30s.out
 
 # Null printing
 synth_1.py nulls.sql nulls.out
@@ -110,9 +111,12 @@ synth_1.py nulls.sql nulls.out
 # Unsigned integers
 print_systrace_unsigned.py print_systrace.sql print_systrace_unsigned.out
 
-# GPU trace tests
-../data/gpu_counters.pb gpu_counters.sql gpu_counters.out
+# GPU trace tests.
+gpu_counters.py gpu_counters.sql gpu_counters.out
 ../data/gpu_trace.pb gpu_render_stages.sql gpu_render_stages.out
 
 # Clock sync
 clock_sync.py clock_sync.sql clock_sync.out
+
+# Graphics frame event trace tests.
+graphics_frame_events.py graphics_frame_events.sql graphics_frame_events.out

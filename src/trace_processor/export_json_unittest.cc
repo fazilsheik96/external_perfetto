@@ -637,9 +637,11 @@ TEST(ExportJsonTest, AsyncEvent) {
   UniquePid upid = storage.AddEmptyProcess(kProcessID);
   StringId cat_id = storage.InternString(base::StringView(kCategory));
   StringId name_id = storage.InternString(base::StringView(kName));
-  TrackId track_id = storage.mutable_tracks()->AddTrack(name_id);
-  storage.mutable_virtual_tracks()->AddVirtualTrack(
-      track_id, VirtualTrackScope::kProcess, upid);
+
+  tables::ChromeAsyncTrackTable::Row track(name_id);
+  track.upid = upid;
+  TrackId track_id = storage.mutable_chrome_async_track_table()->Insert(track);
+
   storage.mutable_nestable_slices()->AddSlice(kTimestamp, kDuration, track_id,
                                               RefType::kRefTrack, cat_id,
                                               name_id, 0, 0, 0);
@@ -698,9 +700,11 @@ TEST(ExportJsonTest, AsyncEventWithThreadTimestamp) {
   UniquePid upid = storage.AddEmptyProcess(kProcessID);
   StringId cat_id = storage.InternString(base::StringView(kCategory));
   StringId name_id = storage.InternString(base::StringView(kName));
-  TrackId track_id = storage.mutable_tracks()->AddTrack(name_id);
-  storage.mutable_virtual_tracks()->AddVirtualTrack(
-      track_id, VirtualTrackScope::kProcess, upid);
+
+  tables::ChromeAsyncTrackTable::Row track(name_id);
+  track.upid = upid;
+  TrackId track_id = storage.mutable_chrome_async_track_table()->Insert(track);
+
   auto slice_id = storage.mutable_nestable_slices()->AddSlice(
       kTimestamp, kDuration, track_id, RefType::kRefTrack, cat_id, name_id, 0,
       0, 0);
@@ -753,9 +757,11 @@ TEST(ExportJsonTest, UnfinishedAsyncEvent) {
   UniquePid upid = storage.AddEmptyProcess(kProcessID);
   StringId cat_id = storage.InternString(base::StringView(kCategory));
   StringId name_id = storage.InternString(base::StringView(kName));
-  TrackId track_id = storage.mutable_tracks()->AddTrack(name_id);
-  storage.mutable_virtual_tracks()->AddVirtualTrack(
-      track_id, VirtualTrackScope::kProcess, upid);
+
+  tables::ChromeAsyncTrackTable::Row track(name_id);
+  track.upid = upid;
+  TrackId track_id = storage.mutable_chrome_async_track_table()->Insert(track);
+
   auto slice_id = storage.mutable_nestable_slices()->AddSlice(
       kTimestamp, kDuration, track_id, RefType::kRefTrack, cat_id, name_id, 0,
       0, 0);
@@ -796,9 +802,11 @@ TEST(ExportJsonTest, AsyncInstantEvent) {
   UniquePid upid = storage.AddEmptyProcess(kProcessID);
   StringId cat_id = storage.InternString(base::StringView(kCategory));
   StringId name_id = storage.InternString(base::StringView(kName));
-  TrackId track_id = storage.mutable_tracks()->AddTrack(name_id);
-  storage.mutable_virtual_tracks()->AddVirtualTrack(
-      track_id, VirtualTrackScope::kProcess, upid);
+
+  tables::ChromeAsyncTrackTable::Row track(name_id);
+  track.upid = upid;
+  TrackId track_id = storage.mutable_chrome_async_track_table()->Insert(track);
+
   storage.mutable_nestable_slices()->AddSlice(
       kTimestamp, 0, track_id, RefType::kRefTrack, cat_id, name_id, 0, 0, 0);
   StringId arg_key_id = storage.InternString(base::StringView("arg_name"));
@@ -965,6 +973,67 @@ TEST(ExportJsonTest, LegacyRawEvents) {
   Json::Value user_event = result["traceEvents"][0];
   EXPECT_EQ(user_event["user"].asInt(), 1);
   EXPECT_EQ(result["systemTraceEvents"].asString(), kLegacyFtraceData);
+}
+
+TEST(ExportJsonTest, CpuProfileEvent) {
+  const int64_t kProcessID = 100;
+  const int64_t kThreadID = 200;
+  const int64_t kTimestamp = 10000000;
+
+  TraceProcessorContext context;
+  context.storage.reset(new TraceStorage());
+  TraceStorage* storage = context.storage.get();
+
+  UniquePid upid = storage->AddEmptyProcess(kProcessID);
+  UniqueTid utid = storage->AddEmptyThread(kThreadID);
+  storage->GetMutableThread(utid)->upid = upid;
+
+  RowId module_row_id_1 = storage->mutable_stack_profile_mappings()->Insert(
+      {storage->InternString("foo_module_id"), 0, 0, 0, 0, 0,
+       storage->InternString("foo_module_name")});
+
+  RowId module_row_id_2 = storage->mutable_stack_profile_mappings()->Insert(
+      {storage->InternString("bar_module_id"), 0, 0, 0, 0, 0,
+       storage->InternString("bar_module_name")});
+
+  RowId frame_row_id_1 = storage->mutable_stack_profile_frames()->Insert(
+      {storage->InternString("foo_func"), module_row_id_1, 0x42});
+
+  RowId frame_row_id_2 = storage->mutable_stack_profile_frames()->Insert(
+      {storage->InternString("bar_func"), module_row_id_2, 0x4242});
+
+  RowId frame_callsite_id_1 =
+      storage->mutable_stack_profile_callsites()->Insert(
+          {0, -1, frame_row_id_1});
+
+  RowId frame_callsite_id_2 =
+      storage->mutable_stack_profile_callsites()->Insert(
+          {1, frame_callsite_id_1, frame_row_id_2});
+
+  storage->mutable_cpu_profile_stack_samples()->Insert(
+      {kTimestamp, frame_callsite_id_2, utid});
+
+  base::TempFile temp_file = base::TempFile::Create();
+  FILE* output = fopen(temp_file.path().c_str(), "w+");
+  int code = ExportJson(storage, output);
+
+  EXPECT_EQ(code, kResultOk);
+
+  Json::Reader reader;
+  Json::Value result;
+  EXPECT_TRUE(reader.parse(ReadFile(output), result));
+
+  EXPECT_EQ(result["traceEvents"].size(), 1u);
+  Json::Value event = result["traceEvents"][0];
+  EXPECT_EQ(event["ph"].asString(), "I");
+  EXPECT_EQ(event["ts"].asInt64(), kTimestamp / 1000);
+  EXPECT_EQ(event["tid"].asUInt(), kThreadID);
+  EXPECT_EQ(event["cat"].asString(), "disabled_by_default-cpu_profiler");
+  EXPECT_EQ(event["name"].asString(), "StackCpuSampling");
+  EXPECT_EQ(event["scope"].asString(), "t");
+  EXPECT_EQ(event["args"]["frames"].asString(),
+            "foo_func - foo_module_name [foo_module_id]\nbar_func - "
+            "bar_module_name [bar_module_id]\n");
 }
 
 }  // namespace

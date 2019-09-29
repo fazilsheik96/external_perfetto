@@ -22,9 +22,9 @@
 #include <functional>
 
 #include "perfetto/base/logging.h"
+#include "perfetto/base/time.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
-#include "perfetto/ext/base/time.h"
 #include "perfetto/protozero/scattered_heap_buffer.h"
 #include "src/trace_processor/android_logs_table.h"
 #include "src/trace_processor/args_table.h"
@@ -32,12 +32,10 @@
 #include "src/trace_processor/clock_tracker.h"
 #include "src/trace_processor/counter_definitions_table.h"
 #include "src/trace_processor/counter_values_table.h"
+#include "src/trace_processor/cpu_profile_stack_sample_table.h"
 #include "src/trace_processor/event_tracker.h"
 #include "src/trace_processor/forwarding_trace_parser.h"
 #include "src/trace_processor/heap_profile_allocation_table.h"
-#include "src/trace_processor/heap_profile_callsite_table.h"
-#include "src/trace_processor/heap_profile_frame_table.h"
-#include "src/trace_processor/heap_profile_mapping_table.h"
 #include "src/trace_processor/heap_profile_tracker.h"
 #include "src/trace_processor/instants_table.h"
 #include "src/trace_processor/metadata_table.h"
@@ -54,8 +52,13 @@
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/span_join_operator_table.h"
 #include "src/trace_processor/sql_stats_table.h"
-#include "src/trace_processor/sqlite3_str_split.h"
-#include "src/trace_processor/sqlite_table.h"
+#include "src/trace_processor/sqlite/db_sqlite_table.h"
+#include "src/trace_processor/sqlite/sqlite3_str_split.h"
+#include "src/trace_processor/sqlite/sqlite_table.h"
+#include "src/trace_processor/stack_profile_callsite_table.h"
+#include "src/trace_processor/stack_profile_frame_table.h"
+#include "src/trace_processor/stack_profile_mapping_table.h"
+#include "src/trace_processor/stack_profile_tracker.h"
 #include "src/trace_processor/stats_table.h"
 #include "src/trace_processor/syscall_tracker.h"
 #include "src/trace_processor/systrace_parser.h"
@@ -63,22 +66,19 @@
 #include "src/trace_processor/thread_table.h"
 #include "src/trace_processor/trace_blob_view.h"
 #include "src/trace_processor/trace_sorter.h"
-#include "src/trace_processor/virtual_track_tracker.h"
+#include "src/trace_processor/track_tracker.h"
 #include "src/trace_processor/window_operator_table.h"
 
-#include "perfetto/metrics/android/mem_metric.pbzero.h"
-#include "perfetto/metrics/metrics.pbzero.h"
+#include "protos/perfetto/metrics/android/mem_metric.pbzero.h"
+#include "protos/perfetto/metrics/metrics.pbzero.h"
 
-// JSON parsing and exporting is only supported in the standalone and
-// Chromium builds.
-#if PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD) || \
-    PERFETTO_BUILD_WITH_CHROMIUM
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
 #include "src/trace_processor/export_json.h"
 #endif
 
 // In Android and Chromium tree builds, we don't have the percentile module.
 // Just don't include it.
-#if PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD)
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_PERCENTILE)
 // defined in sqlite_src/ext/misc/percentile.c
 extern "C" int sqlite3_percentile_init(sqlite3* db,
                                        char** error,
@@ -98,7 +98,7 @@ void InitializeSqlite(sqlite3* db) {
   sqlite3_str_split_init(db);
 // In Android tree builds, we don't have the percentile module.
 // Just don't include it.
-#if PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD)
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_PERCENTILE)
   sqlite3_percentile_init(db, &error, nullptr);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -188,10 +188,7 @@ void CreateBuiltinViews(sqlite3* db) {
   }
 }
 
-// Exporting traces in legacy JSON format is only supported
-// in the standalone and Chromium builds so far.
-#if PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD) || \
-    PERFETTO_BUILD_WITH_CHROMIUM
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
 void ExportJson(sqlite3_context* ctx, int /*argc*/, sqlite3_value** argv) {
   TraceStorage* storage = static_cast<TraceStorage*>(sqlite3_user_data(ctx));
   const char* filename =
@@ -267,18 +264,18 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg) {
 
   context_.config = cfg;
   context_.storage.reset(new TraceStorage());
-  context_.virtual_track_tracker.reset(new VirtualTrackTracker(&context_));
+  context_.track_tracker.reset(new TrackTracker(&context_));
   context_.args_tracker.reset(new ArgsTracker(&context_));
   context_.slice_tracker.reset(new SliceTracker(&context_));
   context_.event_tracker.reset(new EventTracker(&context_));
   context_.process_tracker.reset(new ProcessTracker(&context_));
   context_.syscall_tracker.reset(new SyscallTracker(&context_));
   context_.clock_tracker.reset(new ClockTracker(&context_));
+  context_.stack_profile_tracker.reset(new StackProfileTracker(&context_));
   context_.heap_profile_tracker.reset(new HeapProfileTracker(&context_));
   context_.systrace_parser.reset(new SystraceParser(&context_));
 
-#if PERFETTO_BUILDFLAG(PERFETTO_STANDALONE_BUILD) || \
-    PERFETTO_BUILD_WITH_CHROMIUM
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
   CreateJsonExportFunction(this->context_.storage.get(), db);
 #endif
 
@@ -299,10 +296,25 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg) {
   AndroidLogsTable::RegisterTable(*db_, context_.storage.get());
   RawTable::RegisterTable(*db_, context_.storage.get());
   HeapProfileAllocationTable::RegisterTable(*db_, context_.storage.get());
-  HeapProfileCallsiteTable::RegisterTable(*db_, context_.storage.get());
-  HeapProfileFrameTable::RegisterTable(*db_, context_.storage.get());
-  HeapProfileMappingTable::RegisterTable(*db_, context_.storage.get());
+  CpuProfileStackSampleTable::RegisterTable(*db_, context_.storage.get());
+  StackProfileCallsiteTable::RegisterTable(*db_, context_.storage.get());
+  StackProfileFrameTable::RegisterTable(*db_, context_.storage.get());
+  StackProfileMappingTable::RegisterTable(*db_, context_.storage.get());
   MetadataTable::RegisterTable(*db_, context_.storage.get());
+
+  // New style db-backed tables.
+  const TraceStorage* storage = context_.storage.get();
+  DbSqliteTable::RegisterTable(*db_, &storage->track_table(),
+                               storage->track_table().table_name());
+  DbSqliteTable::RegisterTable(
+      *db_, &storage->chrome_async_track_table(),
+      storage->chrome_async_track_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->gpu_slice_table(),
+                               storage->gpu_slice_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->gpu_track_table(),
+                               storage->gpu_track_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->symbol_table(),
+                               storage->symbol_table().table_name());
 }
 
 TraceProcessorImpl::~TraceProcessorImpl() {
