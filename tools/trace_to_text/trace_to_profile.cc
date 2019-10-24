@@ -19,8 +19,10 @@
 #include <string>
 #include <vector>
 
-#ifndef PERFETTO_NOLOCALSYMBOLIZE
-#include "tools/trace_to_text/local_symbolizer.h"  // nogncheck
+#include "perfetto/base/build_config.h"
+
+#if PERFETTO_BUILDFLAG(PERFETTO_LOCAL_SYMBOLIZER)
+#include "tools/trace_to_text/local_symbolizer.h"
 #endif
 #include "tools/trace_to_text/utils.h"
 
@@ -47,11 +49,14 @@ std::string GetTemp() {
 namespace perfetto {
 namespace trace_to_text {
 
-int TraceToProfile(std::istream* input, std::ostream* output) {
+int TraceToProfile(std::istream* input,
+                   std::ostream* output,
+                   uint64_t pid,
+                   std::vector<uint64_t> timestamps) {
   std::unique_ptr<Symbolizer> symbolizer;
   auto binary_path = GetPerfettoBinaryPath();
   if (!binary_path.empty()) {
-#ifndef PERFETTO_NOLOCALSYMBOLIZE
+#if PERFETTO_BUILDFLAG(PERFETTO_LOCAL_SYMBOLIZER)
     symbolizer.reset(new LocalSymbolizer(GetPerfettoBinaryPath()));
 #else
     PERFETTO_ELOG(
@@ -61,7 +66,7 @@ int TraceToProfile(std::istream* input, std::ostream* output) {
   }
 
   std::vector<SerializedProfile> profiles;
-  TraceToPprof(input, &profiles, symbolizer.get());
+  TraceToPprof(input, &profiles, symbolizer.get(), pid, timestamps);
   if (profiles.empty()) {
     return 0;
   }

@@ -66,6 +66,8 @@ enum TableId : uint8_t {
   kSched = 4,
   kNestableSlices = 5,
   kMetadataTable = 6,
+  kTrack = 7,
+  kVulkanMemoryAllocation = 8,
 };
 
 // The top 8 bits are set to the TableId and the bottom 32 to the row of the
@@ -78,7 +80,7 @@ static const ArgSetId kInvalidArgSetId = 0;
 
 using TrackId = uint32_t;
 
-enum RefType {
+enum class RefType {
   kRefNoRef = 0,
   kRefUtid = 1,
   kRefCpuId = 2,
@@ -319,6 +321,7 @@ class TraceStorage {
    public:
     inline uint32_t AddSlice(int64_t start_ns,
                              int64_t duration_ns,
+                             TrackId track_id,
                              int64_t ref,
                              RefType type,
                              StringId category,
@@ -328,6 +331,7 @@ class TraceStorage {
                              int64_t parent_stack_id) {
       start_ns_.emplace_back(start_ns);
       durations_.emplace_back(duration_ns);
+      track_id_.emplace_back(track_id);
       refs_.emplace_back(ref);
       types_.emplace_back(type);
       categories_.emplace_back(category);
@@ -357,6 +361,7 @@ class TraceStorage {
 
     const std::deque<int64_t>& start_ns() const { return start_ns_; }
     const std::deque<int64_t>& durations() const { return durations_; }
+    const std::deque<TrackId>& track_id() const { return track_id_; }
     const std::deque<int64_t>& refs() const { return refs_; }
     const std::deque<RefType>& types() const { return types_; }
     const std::deque<StringId>& categories() const { return categories_; }
@@ -371,6 +376,7 @@ class TraceStorage {
    private:
     std::deque<int64_t> start_ns_;
     std::deque<int64_t> durations_;
+    std::deque<TrackId> track_id_;
     std::deque<int64_t> refs_;
     std::deque<RefType> types_;
     std::deque<StringId> categories_;
@@ -832,7 +838,16 @@ class TraceStorage {
       mappings_.emplace_back(row.mapping_row);
       rel_pcs_.emplace_back(row.rel_pc);
       symbol_set_ids_.emplace_back(0);
-      return static_cast<int64_t>(names_.size()) - 1;
+      size_t row_number = names_.size() - 1;
+      index_.emplace(std::make_pair(row.mapping_row, row.rel_pc), row_number);
+      return static_cast<int64_t>(row_number);
+    }
+
+    ssize_t FindFrameRow(size_t mapping_row, uint64_t rel_pc) const {
+      auto it = index_.find(std::make_pair(mapping_row, rel_pc));
+      if (it == index_.end())
+        return -1;
+      return static_cast<ssize_t>(it->second);
     }
 
     void SetSymbolSetId(size_t row_idx, uint32_t symbol_set_id) {
@@ -852,6 +867,9 @@ class TraceStorage {
     std::deque<int64_t> mappings_;
     std::deque<int64_t> rel_pcs_;
     std::deque<uint32_t> symbol_set_ids_;
+
+    std::map<std::pair<size_t /* mapping row */, uint64_t /* rel_pc */>, size_t>
+        index_;
   };
 
   class StackProfileCallsites {
@@ -917,7 +935,19 @@ class TraceStorage {
       ends_.emplace_back(row.end);
       load_biases_.emplace_back(row.load_bias);
       names_.emplace_back(row.name_id);
-      return static_cast<int64_t>(build_ids_.size()) - 1;
+
+      size_t row_number = build_ids_.size() - 1;
+      index_[std::make_pair(row.name_id, row.build_id)].emplace_back(
+          row_number);
+      return static_cast<int64_t>(row_number);
+    }
+
+    std::vector<int64_t> FindMappingRow(StringId name,
+                                        StringId build_id) const {
+      auto it = index_.find(std::make_pair(name, build_id));
+      if (it == index_.end())
+        return {};
+      return it->second;
     }
 
     const std::deque<StringId>& build_ids() const { return build_ids_; }
@@ -936,6 +966,10 @@ class TraceStorage {
     std::deque<int64_t> ends_;
     std::deque<int64_t> load_biases_;
     std::deque<StringId> names_;
+
+    std::map<std::pair<StringId /* name */, StringId /* build id */>,
+             std::vector<int64_t>>
+        index_;
   };
 
   class HeapProfileAllocations {
@@ -1121,7 +1155,8 @@ class TraceStorage {
     return unique_processes_[upid];
   }
 
-  const Thread& GetThread(UniqueTid utid) const {
+  // Virtual for testing.
+  virtual const Thread& GetThread(UniqueTid utid) const {
     // Allow utid == 0 for idle thread retrieval.
     PERFETTO_DCHECK(utid < unique_threads_.size());
     return unique_threads_[utid];
@@ -1141,18 +1176,18 @@ class TraceStorage {
   const tables::TrackTable& track_table() const { return track_table_; }
   tables::TrackTable* mutable_track_table() { return &track_table_; }
 
-  const tables::ChromeAsyncTrackTable& chrome_async_track_table() const {
-    return chrome_async_track_table_;
+  const tables::ProcessTrackTable& process_track_table() const {
+    return process_track_table_;
   }
-  tables::ChromeAsyncTrackTable* mutable_chrome_async_track_table() {
-    return &chrome_async_track_table_;
+  tables::ProcessTrackTable* mutable_process_track_table() {
+    return &process_track_table_;
   }
 
-  const tables::FuchsiaAsyncTrackTable& fuchsia_async_track_table() const {
-    return fuchsia_async_track_table_;
+  const tables::ThreadTrackTable& thread_track_table() const {
+    return thread_track_table_;
   }
-  tables::FuchsiaAsyncTrackTable* mutable_fuchsia_async_track_table() {
-    return &fuchsia_async_track_table_;
+  tables::ThreadTrackTable* mutable_thread_track_table() {
+    return &thread_track_table_;
   }
 
   const Slices& slices() const { return slices_; }
@@ -1244,10 +1279,36 @@ class TraceStorage {
 
   tables::SymbolTable* mutable_symbol_table() { return &symbol_table_; }
 
+  const tables::HeapGraphObjectTable& heap_graph_object_table() const {
+    return heap_graph_object_table_;
+  }
+
+  tables::HeapGraphObjectTable* mutable_heap_graph_object_table() {
+    return &heap_graph_object_table_;
+  }
+
+  const tables::HeapGraphReferenceTable& heap_graph_reference_table() const {
+    return heap_graph_reference_table_;
+  }
+
+  tables::HeapGraphReferenceTable* mutable_heap_graph_reference_table() {
+    return &heap_graph_reference_table_;
+  }
+
   const tables::GpuTrackTable& gpu_track_table() const {
     return gpu_track_table_;
   }
   tables::GpuTrackTable* mutable_gpu_track_table() { return &gpu_track_table_; }
+
+  const tables::VulkanMemoryAllocationsTable& vulkan_memory_allocations_table()
+      const {
+    return vulkan_memory_allocations_table_;
+  }
+
+  tables::VulkanMemoryAllocationsTable*
+  mutable_vulkan_memory_allocations_table() {
+    return &vulkan_memory_allocations_table_;
+  }
 
   const StringPool& string_pool() const { return string_pool_; }
 
@@ -1291,12 +1352,8 @@ class TraceStorage {
   // Metadata for tracks.
   tables::TrackTable track_table_{&string_pool_, nullptr};
   tables::GpuTrackTable gpu_track_table_{&string_pool_, &track_table_};
-  tables::FuchsiaAsyncTrackTable fuchsia_async_track_table_{&string_pool_,
-                                                            &track_table_};
-  tables::ChromeScopedTrackTable chrome_scoped_track_table_{&string_pool_,
-                                                            &track_table_};
-  tables::ChromeAsyncTrackTable chrome_async_track_table_{
-      &string_pool_, &chrome_scoped_track_table_};
+  tables::ProcessTrackTable process_track_table_{&string_pool_, &track_table_};
+  tables::ThreadTrackTable thread_track_table_{&string_pool_, &track_table_};
 
   // Metadata for gpu tracks.
   GpuContexts gpu_contexts_;
@@ -1358,6 +1415,12 @@ class TraceStorage {
 
   // Symbol tables (mappings from frames to symbol names)
   tables::SymbolTable symbol_table_{&string_pool_, nullptr};
+  tables::HeapGraphObjectTable heap_graph_object_table_{&string_pool_, nullptr};
+  tables::HeapGraphReferenceTable heap_graph_reference_table_{&string_pool_,
+                                                              nullptr};
+
+  tables::VulkanMemoryAllocationsTable vulkan_memory_allocations_table_{
+      &string_pool_, nullptr};
 };
 
 }  // namespace trace_processor

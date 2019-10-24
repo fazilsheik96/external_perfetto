@@ -21,12 +21,14 @@ load("@perfetto//bazel:proto_gen.bzl", "proto_gen")
 
 def default_cc_args():
     return {
-        "deps": [PERFETTO_CONFIG.root + ":build_config_hdr"],
+        "deps": PERFETTO_CONFIG.deps.build_config,
         "copts": [],
         "includes": ["include"],
         "linkopts": select({
+            "@perfetto//bazel:os_linux": ["-ldl", "-lrt"],
             "@perfetto//bazel:os_osx": [],
-            "//conditions:default": ["-ldl", "-lrt"],
+            "@perfetto//bazel:os_windows": [],
+            "//conditions:default": ["-ldl"],
         }),
     }
 
@@ -141,6 +143,51 @@ def perfetto_cc_ipc_library(name, deps, **kwargs):
 
             # Generated .pb.{cc,h} depend on this.
         ] + PERFETTO_CONFIG.deps.protobuf_lite,
+        **kwargs
+    )
+
+
+# Generates .gen.{cc,h} from .proto(s).
+def perfetto_cc_protocpp_library(name, deps, **kwargs):
+    if _rule_override(
+        "cc_protocpp_library",
+        name = name,
+        deps = deps,
+        **kwargs
+    ):
+        return
+
+    # A perfetto_cc_protocpp_library has two types of dependencies:
+    # 1. Exactly one dependency on a proto_library target. This defines the
+    #    .proto sources for the target
+    # 2. Zero or more deps on other perfetto_cc_protocpp_library targets. This
+    #    to deal with the case of foo.proto including common.proto from another
+    #    target.
+    _proto_deps = [d for d in deps if d.endswith("_protos")]
+    _cc_deps = [d for d in deps if d not in _proto_deps]
+
+    proto_gen(
+        name = name + "_gen",
+        deps = _proto_deps,
+        suffix = "gen",
+        plugin = PERFETTO_CONFIG.root + ":cppgen_plugin",
+        protoc = PERFETTO_CONFIG.deps.protoc[0],
+        root = PERFETTO_CONFIG.root,
+    )
+
+    native.filegroup(
+        name = name + "_gen_h",
+        srcs = [":" + name + "_gen"],
+        output_group = "h",
+    )
+
+    perfetto_cc_library(
+        name = name,
+        srcs = [":" + name + "_gen"],
+        hdrs = [":" + name + "_gen_h"],
+        deps = [
+            PERFETTO_CONFIG.root + ":libprotozero"
+        ] + _cc_deps,
         **kwargs
     )
 

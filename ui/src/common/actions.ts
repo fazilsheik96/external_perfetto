@@ -15,7 +15,7 @@
 import {Draft} from 'immer';
 
 import {assertExists} from '../base/logging';
-import {ConvertTrace} from '../controller/trace_converter';
+import {ConvertTrace, ConvertTraceToPprof} from '../controller/trace_converter';
 
 import {
   AdbRecordingTarget,
@@ -24,6 +24,7 @@ import {
   OmniboxState,
   RecordConfig,
   SCROLLING_TRACK_GROUP,
+  SelectedTimeRange,
   State,
   Status,
   TargetOs,
@@ -95,9 +96,19 @@ export const StateActions = {
     state.videoEnabled = true;
   },
 
+  // TODO(b/141359485): Actions should only modify state.
   convertTraceToJson(
-      _: StateDraft, args: {file: File, truncate?: 'start'|'end'}): void {
+      _: StateDraft, args: {file: Blob, truncate?: 'start'|'end'}): void {
     ConvertTrace(args.file, args.truncate);
+  },
+
+  convertTraceToPprof(_: StateDraft, args: {
+    pid: number,
+    src: string|File|ArrayBuffer,
+    ts1: number,
+    ts2?: number
+  }): void {
+    ConvertTraceToPprof(args.pid, args.src, args.ts1, args.ts2);
   },
 
   openTraceFromUrl(state: StateDraft, args: {url: string}): void {
@@ -365,10 +376,9 @@ export const StateActions = {
     }
   },
 
-  selectSlice(state: StateDraft, args: {utid: number, id: number}): void {
+  selectSlice(state: StateDraft, args: {id: number}): void {
     state.currentSelection = {
       kind: 'SLICE',
-      utid: args.utid,
       id: args.id,
     };
   },
@@ -384,23 +394,24 @@ export const StateActions = {
         };
       },
 
-  selectHeapDump(
+  selectHeapProfile(
       state: StateDraft, args: {id: number, upid: number, ts: number}): void {
     state.currentSelection =
-        {kind: 'HEAP_DUMP', id: args.id, upid: args.upid, ts: args.ts};
+        {kind: 'HEAP_PROFILE', id: args.id, upid: args.upid, ts: args.ts};
+  },
+
+  showHeapProfileFlamegraph(
+      state: StateDraft, args: {id: number, upid: number, ts: number}): void {
+    state.currentHeapProfileFlamegraph = {
+      kind: 'HEAP_PROFILE_FLAMEGRAPH',
+      id: args.id,
+      upid: args.upid,
+      ts: args.ts
+    };
   },
 
   selectChromeSlice(state: StateDraft, args: {id: number}): void {
     state.currentSelection = {kind: 'CHROME_SLICE', id: args.id};
-  },
-
-  selectTimeSpan(
-      state: StateDraft, args: {startTs: number, endTs: number}): void {
-    state.currentSelection = {
-      kind: 'TIMESPAN',
-      startTs: args.startTs,
-      endTs: args.endTs,
-    };
   },
 
   selectThreadState(
@@ -463,6 +474,10 @@ export const StateActions = {
 
   setOmnibox(state: StateDraft, args: OmniboxState): void {
     state.frontendLocalState.omniboxState = args;
+  },
+
+  selectTimeRange(state: StateDraft, args: SelectedTimeRange): void {
+    state.frontendLocalState.selectedTimeRange = args;
   },
 
   setVisibleTraceTime(state: StateDraft, args: VisibleState): void {

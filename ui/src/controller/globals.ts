@@ -26,9 +26,11 @@ import {
 } from '../common/wasm_engine_proxy';
 
 import {ControllerAny} from './controller';
+import {LoadingManager} from './loading_manager';
 
-type PublishKinds = 'OverviewData'|'TrackData'|'Threads'|'QueryResult'|
-    'LegacyTrace'|'SliceDetails'|'CounterDetails'|'HeapDumpDetails'|'Loading'|
+type PublishKinds =
+    'OverviewData'|'TrackData'|'Threads'|'QueryResult'|'LegacyTrace'|
+    'SliceDetails'|'CounterDetails'|'HeapDumpDetails'|'FileDownload'|'Loading'|
     'Search'|'BufferUsage'|'RecordingLog'|'SearchResult';
 
 export interface App {
@@ -93,8 +95,11 @@ class Globals implements App {
 
   createEngine(): Engine {
     const id = new Date().toUTCString();
-    const portAndId = {id, worker: createWasmEngine(id)};
-    return new WasmEngineProxy(portAndId);
+    return new WasmEngineProxy({
+      id,
+      worker: createWasmEngine(id),
+      loadingTracker: LoadingManager.getInstance,
+    });
   }
 
   destroyEngine(id: string): void {

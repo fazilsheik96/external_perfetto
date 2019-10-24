@@ -39,7 +39,7 @@ std::unique_ptr<Host> Host::CreateInstance(const char* socket_name,
   std::unique_ptr<HostImpl> host(new HostImpl(socket_name, task_runner));
   if (!host->sock() || !host->sock()->is_listening())
     return nullptr;
-  return std::move(host);
+  return std::unique_ptr<Host>(std::move(host));
 }
 
 // static
@@ -49,19 +49,23 @@ std::unique_ptr<Host> Host::CreateInstance(base::ScopedFile socket_fd,
       new HostImpl(std::move(socket_fd), task_runner));
   if (!host->sock() || !host->sock()->is_listening())
     return nullptr;
-  return std::move(host);
+  return std::unique_ptr<Host>(std::move(host));
 }
 
 HostImpl::HostImpl(base::ScopedFile socket_fd, base::TaskRunner* task_runner)
     : task_runner_(task_runner), weak_ptr_factory_(this) {
   PERFETTO_DCHECK_THREAD(thread_checker_);
-  sock_ = base::UnixSocket::Listen(std::move(socket_fd), this, task_runner_);
+  sock_ = base::UnixSocket::Listen(std::move(socket_fd), this, task_runner_,
+                                   base::SockFamily::kUnix,
+                                   base::SockType::kStream);
 }
 
 HostImpl::HostImpl(const char* socket_name, base::TaskRunner* task_runner)
     : task_runner_(task_runner), weak_ptr_factory_(this) {
   PERFETTO_DCHECK_THREAD(thread_checker_);
-  sock_ = base::UnixSocket::Listen(socket_name, this, task_runner_);
+  sock_ = base::UnixSocket::Listen(socket_name, this, task_runner_,
+                                   base::SockFamily::kUnix,
+                                   base::SockType::kStream);
 }
 
 HostImpl::~HostImpl() = default;

@@ -33,16 +33,16 @@ import {
 } from '../common/protos';
 import {MeminfoCounters, VmstatCounters} from '../common/protos';
 import {
+  AdbRecordingTarget,
   isAndroidTarget,
   isChromeTarget,
   MAX_TIME,
   RecordConfig,
   TargetOs
 } from '../common/state';
-import {perfetto} from '../gen/protos';
 
 import {AdbOverWebUsb} from './adb';
-import {AdbConsumerPort} from './adb_record_controller';
+import {AdbConsumerPort} from './adb_shell_controller';
 import {AdbSocketConsumerPort} from './adb_socket_controller';
 import {ChromeExtensionConsumerPort} from './chrome_proxy_record_controller';
 import {
@@ -301,8 +301,16 @@ export function genConfig(uiCfg: RecordConfig): TraceConfig {
   }
 
   if (chromeCategories.size !== 0) {
-    const traceConfigJson =
-        JSON.stringify({included_categories: [...chromeCategories.values()]});
+    let chromeRecordMode = '';
+    if (uiCfg.mode === 'STOP_WHEN_FULL') {
+      chromeRecordMode = 'record-until-full';
+    } else {
+      chromeRecordMode = 'record-continuously';
+    }
+    const traceConfigJson = JSON.stringify({
+      record_mode: chromeRecordMode,
+      included_categories: [...chromeCategories.values()],
+    });
 
     const traceDs = new TraceConfig.DataSource();
     traceDs.config = new DataSourceConfig();
@@ -417,27 +425,6 @@ export function toPbtxt(configBuffer: Uint8Array): string {
   return [...message(json, 0)].join('');
 }
 
-export function extractTraceConfig(enableTracingRequest: Uint8Array):
-    Uint8Array|undefined {
-  try {
-    const enableTracingObject =
-        perfetto.protos.EnableTracingRequest.decode(enableTracingRequest);
-    if (!enableTracingObject.traceConfig) return undefined;
-    return perfetto.protos.TraceConfig.encode(enableTracingObject.traceConfig)
-        .finish();
-  } catch (e) {  // This catch is for possible proto encoding/decoding issues.
-    console.error('Error extracting the config: ', e.message);
-    return undefined;
-  }
-}
-
-export function extractDurationFromTraceConfig(traceConfigProto: Uint8Array) {
-  try {
-    return perfetto.protos.TraceConfig.decode(traceConfigProto).durationMs;
-  } catch (e) {  // This catch is for possible proto encoding/decoding issues.
-    return undefined;
-  }
-}
 export class RecordController extends Controller<'main'> implements Consumer {
   private app: App;
   private config: RecordConfig|null = null;
@@ -446,10 +433,14 @@ export class RecordController extends Controller<'main'> implements Consumer {
   private consumerPort: ConsumerPort;
   private traceBuffer: Uint8Array[] = [];
   private bufferUpdateInterval: ReturnType<typeof setTimeout>|undefined;
+  private adb = new AdbOverWebUsb();
 
   // We have a different controller for each targetOS. The correct one will be
-  // created when needed, and stored here.
-  private controllers = new Map<TargetOs, RpcConsumerPort>();
+  // created when needed, and stored here. When the key is a string, it is the
+  // serial of the target (used for android devices). When the key is a single
+  // char, it is the 'targetOS'
+  private controllerPromises = new Map<string, Promise<RpcConsumerPort>>();
+
   constructor(args: {app: App, extensionPort: MessagePort}) {
     super('main');
     this.app = args.app;
@@ -493,6 +484,7 @@ export class RecordController extends Controller<'main'> implements Consumer {
 
   startRecordTrace(traceConfig: TraceConfig) {
     this.scheduleBufferUpdateRequests();
+    this.traceBuffer = [];
     this.consumerPort.enableTracing({traceConfig});
   }
 
@@ -535,6 +527,12 @@ export class RecordController extends Controller<'main'> implements Consumer {
   onTraceComplete() {
     this.consumerPort.freeBuffers({});
     globals.dispatch(Actions.setRecordingStatus({status: undefined}));
+    if (globals.state.recordingCancelled) {
+      globals.dispatch(
+          Actions.setLastRecordingError({error: 'Recording cancelled.'}));
+      this.traceBuffer = [];
+      return;
+    }
     const trace = this.generateTrace();
     globals.dispatch(Actions.openTraceFromBuffer({buffer: trace.buffer}));
     this.traceBuffer = [];
@@ -566,6 +564,7 @@ export class RecordController extends Controller<'main'> implements Consumer {
   }
 
   onError(message: string) {
+    console.error('Error in record controller: ', message);
     globals.dispatch(
         Actions.setLastRecordingError({error: message.substr(0, 150)}));
     globals.dispatch(Actions.stopRecording({}));
@@ -584,38 +583,62 @@ export class RecordController extends Controller<'main'> implements Consumer {
   // - Android device target: WebUSB is used to communicate using the adb
   // protocol. Actually, there is no full consumer_port implementation, but
   // only the support to start tracing and fetch the file.
-  async getTargetController(target: TargetOs): Promise<RpcConsumerPort> {
-    let controller = this.controllers.get(target);
-    if (controller) return controller;
+  async getTargetController(target: TargetOs, device?: AdbRecordingTarget):
+      Promise<RpcConsumerPort> {
+    const identifier = this.getTargetIdentifier(target, device);
 
-    if (isChromeTarget(target)) {
-      controller = new ChromeExtensionConsumerPort(this.extensionPort, this);
-    } else if (isAndroidTarget(target)) {
-      // TODO(nicomazz): create the correct controller also based on the
-      // selected android device. TargetOS may be changed from a single char to
-      // something else.
-      const socketAccess = await this.hasSocketAccess();
-      controller = socketAccess ?
-          new AdbSocketConsumerPort(new AdbOverWebUsb(), this) :
-          new AdbConsumerPort(new AdbOverWebUsb(), this);
-    }
+    // The reason why caching the target 'record controller' Promise is that
+    // multiple rcp calls can happen while we are trying to understand if an
+    // android device has a socket connection available or not.
+    const precedentPromise = this.controllerPromises.get(identifier);
+    if (precedentPromise) return precedentPromise;
 
-    if (!controller) throw Error(`Unknown target: ${target}`);
+    const controllerPromise =
+        new Promise<RpcConsumerPort>(async (resolve, _) => {
+          let controller: RpcConsumerPort|undefined = undefined;
+          if (isChromeTarget(target)) {
+            controller =
+                new ChromeExtensionConsumerPort(this.extensionPort, this);
+          } else if (isAndroidTarget(target)) {
+            if (!device) throw Error(`No android device connected`);
 
-    this.controllers.set(target, controller);
-    return controller;
+            this.onStatus(`Please allow USB debugging on device.
+                 If you press cancel, reload the page.`);
+            const socketAccess = await this.hasSocketAccess(device);
+
+            controller = socketAccess ?
+                new AdbSocketConsumerPort(this.adb, this) :
+                new AdbConsumerPort(this.adb, this);
+          }
+
+          if (!controller) throw Error(`Unknown target: ${target}`);
+          resolve(controller);
+        });
+
+    this.controllerPromises.set(identifier, controllerPromise);
+    return controllerPromise;
   }
 
-  private hasSocketAccess() {
-    // TODO(nicomazz): implement proper logic
-    return Promise.resolve(false);
+  private getTargetIdentifier(target: TargetOs, device?: AdbRecordingTarget):
+      string {
+    return device ? device.serial : target;
+  }
+
+  private async hasSocketAccess(target: AdbRecordingTarget) {
+    const devices = await navigator.usb.getDevices();
+    const device = devices.find(d => d.serialNumber === target.serial);
+    console.assert(device);
+    if (!device) return Promise.resolve(false);
+    return AdbSocketConsumerPort.hasSocketAccess(device, this.adb);
   }
 
   private async rpcImpl(
       method: RPCImplMethod, requestData: Uint8Array,
       _callback: RPCImplCallback) {
     try {
-      (await this.getTargetController(this.app.state.recordConfig.targetOS))
+      const state = this.app.state;
+      (await this.getTargetController(
+           state.recordConfig.targetOS, state.androidDeviceConnected))
           .handleCommand(method.name, requestData);
     } catch (e) {
       console.error(`error invoking ${method}: ${e.message}`);

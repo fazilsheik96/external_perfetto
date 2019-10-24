@@ -18,6 +18,8 @@ source_set("lib") {
   sources = [
     "bit_vector.cc",
     "bit_vector.h",
+    "bit_vector_iterators.cc",
+    "bit_vector_iterators.h",
     "column.cc",
     "column.h",
     "row_map.cc",
@@ -60,6 +62,8 @@ if (enable_perfetto_benchmarks) {
     ]
     sources = [
       "bit_vector_benchmark.cc",
+      "row_map_benchmark.cc",
+      "sparse_vector_benchmark.cc",
     ]
   }
 }

@@ -37,8 +37,12 @@ perfetto_host_executable("trace_to_text_lite") {
 }
 
 source_set("utils") {
+  deps = [
+    ":symbolizer",
+  ]
   public_deps = [
     "../../gn:default_deps",
+    "../../gn:zlib",
     "../../include/perfetto/base",
     "../../include/perfetto/ext/base",
     "../../include/perfetto/ext/traced:sys_stats_counters",
@@ -49,8 +53,6 @@ source_set("utils") {
     "../../src/trace_processor:lib",
   ]
   sources = [
-    "profile_visitor.cc",
-    "profile_visitor.h",
     "utils.cc",
     "utils.h",
   ]
@@ -77,7 +79,6 @@ source_set("local_symbolizer") {
 
 source_set("symbolizer") {
   public_deps = [
-    ":utils",
     "../../gn:default_deps",
     "../../include/perfetto/base",
     "../../include/perfetto/ext/base",
@@ -90,8 +91,6 @@ source_set("symbolizer") {
   ]
   sources = [
     "symbolizer.cc",
-    "trace_symbol_table.cc",
-    "trace_symbol_table.h",
   ]
 }
 
@@ -125,6 +124,7 @@ static_library("libpprofbuilder") {
 # executable) and by the "lite" version (the WASM module for the UI).
 source_set("common") {
   deps = [
+    ":local_symbolizer",
     ":pprofbuilder",
     ":symbolizer",
     ":utils",
@@ -146,18 +146,14 @@ source_set("common") {
     "main.cc",
     "symbolize_profile.cc",
     "symbolize_profile.h",
+    "trace_to_json.cc",
+    "trace_to_json.h",
     "trace_to_profile.cc",
     "trace_to_profile.h",
     "trace_to_systrace.cc",
     "trace_to_systrace.h",
     "trace_to_text.h",
   ]
-  defines = []
-  if (is_linux || is_android) {
-    deps += [ ":local_symbolizer" ]
-  } else {
-    defines += [ "PERFETTO_NOLOCALSYMBOLIZE" ]
-  }
   if (enable_perfetto_version_gen) {
     deps += [ "//gn/standalone:gen_git_revision" ]
   }
@@ -174,7 +170,7 @@ source_set("lite") {
   ]
 }
 
-# Full traget for the host. Depends on libprotobuf-full.
+# Full target for the host. Depends on libprotobuf-full.
 source_set("full") {
   testonly = true
   deps = [
@@ -182,6 +178,7 @@ source_set("full") {
     ":utils",
     "../../gn:default_deps",
     "../../gn:protobuf_full",
+    "../../gn:zlib",
   ]
   sources = [
     "proto_full_utils.cc",

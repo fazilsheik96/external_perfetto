@@ -20,6 +20,7 @@ export interface Config {
   maxDepth: number;
   upid: number;
   utid: number;
+  trackId: number;
 }
 
 export interface Data extends TrackData {
@@ -30,5 +31,4 @@ export interface Data extends TrackData {
   ends: Float64Array;
   depths: Uint16Array;
   titles: Uint16Array;      // Index in |strings|.
-  categories: Uint16Array;  // Index in |strings|.
 }

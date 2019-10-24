@@ -101,7 +101,7 @@ ProcessStatsDataSource::ProcessStatsDataSource(
   dump_all_procs_on_start_ = cfg.scan_all_processes_on_start();
   enable_on_demand_dumps_ = true;
   for (auto quirk = cfg.quirks(); quirk; ++quirk) {
-    if (quirk->as_int32() == ProcessStatsConfig::DISABLE_ON_DEMAND)
+    if (*quirk == ProcessStatsConfig::DISABLE_ON_DEMAND)
       enable_on_demand_dumps_ = false;
   }
 
@@ -235,6 +235,8 @@ void ProcessStatsDataSource::WriteProcess(int32_t pid,
   auto* proc = GetOrCreatePsTree()->add_processes();
   proc->set_pid(pid);
   proc->set_ppid(ToInt(ReadProcStatusEntry(proc_status, "PPid:")));
+  // Uid will have multiple entries, only return first (real uid).
+  proc->set_uid(ToInt(ReadProcStatusEntry(proc_status, "Uid:")));
 
   std::string cmdline = ReadProcPidFile(pid, "cmdline");
   if (!cmdline.empty()) {

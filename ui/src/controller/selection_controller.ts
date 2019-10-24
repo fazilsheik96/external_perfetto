@@ -16,7 +16,7 @@ import {Engine} from '../common/engine';
 import {fromNs, toNs} from '../common/time';
 import {
   CounterDetails,
-  HeapDumpDetails,
+  HeapProfileDetails,
   SliceDetails
 } from '../frontend/globals';
 
@@ -30,7 +30,7 @@ export interface SelectionControllerArgs {
 // This class queries the TP for the details on a specific slice that has
 // been clicked.
 export class SelectionController extends Controller<'main'> {
-  private lastSelectedId?: number;
+  private lastSelectedId?: number|string;
   private lastSelectedKind?: string;
   constructor(private args: SelectionControllerArgs) {
     super('main');
@@ -38,12 +38,24 @@ export class SelectionController extends Controller<'main'> {
 
   run() {
     const selection = globals.state.currentSelection;
-    if (selection === null ||
-        (selection.kind !== 'SLICE' && selection.kind !== 'CHROME_SLICE' &&
-         selection.kind !== 'COUNTER' && selection.kind !== 'HEAP_DUMP') ||
-        (selection.id === this.lastSelectedId &&
-         selection.kind === this.lastSelectedKind &&
-         selection.kind !== 'COUNTER')) {
+    if (!selection) return;
+    // TODO(taylori): Ideally thread_state should not be special cased, it
+    // should have some form of id like everything else.
+    if (selection.kind === 'THREAD_STATE') {
+      const sqlQuery = `SELECT row_id FROM sched WHERE utid = ${selection.utid}
+                        and ts = ${toNs(selection.ts)}`;
+      this.args.engine.query(sqlQuery).then(result => {
+        const id = result.columns[0].longValues![0] as number;
+        this.sliceDetails(id);
+      });
+      return;
+    }
+
+    const selectWithId = ['SLICE', 'COUNTER', 'CHROME_SLICE', 'HEAP_PROFILE'];
+    if (!selectWithId.includes(selection.kind) ||
+        (selectWithId.includes(selection.kind) &&
+         selection.id === this.lastSelectedId &&
+         selection.kind === this.lastSelectedKind)) {
       return;
     }
     const selectedId = selection.id;
@@ -53,8 +65,8 @@ export class SelectionController extends Controller<'main'> {
 
     if (selectedId === undefined) return;
 
-    if (selection.kind === 'HEAP_DUMP') {
-      const selected: HeapDumpDetails = {};
+    if (selection.kind === 'HEAP_PROFILE') {
+      const selected: HeapProfileDetails = {};
       const ts = selection.ts;
       const upid = selection.upid;
       this.heapDumpDetails(ts, upid).then(results => {
@@ -76,27 +88,7 @@ export class SelectionController extends Controller<'main'> {
             }
           });
     } else if (selectedKind === 'SLICE') {
-      const sqlQuery = `SELECT ts, dur, priority, end_state, utid FROM sched
-                        WHERE row_id = ${selectedId}`;
-      this.args.engine.query(sqlQuery).then(result => {
-        // Check selection is still the same on completion of query.
-        const selection = globals.state.currentSelection;
-        if (result.numRecords === 1 && selection &&
-            selection.kind === selectedKind && selection.id === selectedId) {
-          const ts = result.columns[0].longValues![0] as number;
-          const timeFromStart = fromNs(ts) - globals.state.traceTime.startSec;
-          const dur = fromNs(result.columns[1].longValues![0] as number);
-          const priority = result.columns[2].longValues![0] as number;
-          const endState = result.columns[3].stringValues![0];
-          const selected:
-              SliceDetails = {ts: timeFromStart, dur, priority, endState};
-          const utid = result.columns[4].longValues![0];
-          this.schedulingDetails(ts, utid).then(wakeResult => {
-            Object.assign(selected, wakeResult);
-            globals.publish('SliceDetails', selected);
-          });
-        }
-      });
+      this.sliceDetails(selectedId as number);
     } else if (selectedKind === 'CHROME_SLICE') {
       if (selectedId === -1) {
         globals.publish('SliceDetails', {ts: 0, name: 'Summarized slice'});
@@ -115,15 +107,44 @@ export class SelectionController extends Controller<'main'> {
           const dur = fromNs(result.columns[1].longValues![0] as number);
           const category = result.columns[3].stringValues![0];
           // TODO(nicomazz): Add arguments and thread timestamps
-          const selected:
-              SliceDetails = {ts: timeFromStart, dur, category, name};
+          const selected: SliceDetails =
+              {ts: timeFromStart, dur, category, name, id: selectedId};
           globals.publish('SliceDetails', selected);
         }
       });
     }
   }
 
+  async sliceDetails(id: number) {
+    const sqlQuery = `SELECT ts, dur, priority, end_state, utid, cpu FROM sched
+    WHERE row_id = ${id}`;
+    this.args.engine.query(sqlQuery).then(result => {
+      // Check selection is still the same on completion of query.
+      const selection = globals.state.currentSelection;
+      if (result.numRecords === 1 && selection) {
+        const ts = result.columns[0].longValues![0] as number;
+        const timeFromStart = fromNs(ts) - globals.state.traceTime.startSec;
+        const dur = fromNs(result.columns[1].longValues![0] as number);
+        const priority = result.columns[2].longValues![0] as number;
+        const endState = result.columns[3].stringValues![0];
+        const utid = result.columns[4].longValues![0] as number;
+        const cpu = result.columns[5].longValues![0] as number;
+        const selected: SliceDetails =
+            {ts: timeFromStart, dur, priority, endState, cpu, id, utid};
+        this.schedulingDetails(ts, utid).then(wakeResult => {
+          Object.assign(selected, wakeResult);
+          globals.publish('SliceDetails', selected);
+        });
+      }
+    });
+  }
+
   async heapDumpDetails(ts: number, upid: number) {
+    // Collecting data for more information about heap profile, such as:
+    // total memory allocated, memory that is allocated and not freed.
+    const pidValue = await this.args.engine.query(
+        `select pid from process where upid = ${upid}`);
+    const pid = pidValue.columns[0].longValues![0];
     const allocatedMemory = await this.args.engine.query(
         `select sum(size) from heap_profile_allocation where ts <= ${
             ts} and size > 0 and upid = ${upid}`);
@@ -133,7 +154,13 @@ export class SelectionController extends Controller<'main'> {
             ts} and upid = ${upid}`);
     const allocatedNotFreed = allocatedNotFreedMemory.columns[0].longValues![0];
     const startTime = fromNs(ts) - globals.state.traceTime.startSec;
-    return {ts: startTime, allocated, allocatedNotFreed};
+    return {
+      ts: startTime,
+      allocated,
+      allocatedNotFreed,
+      tsNs: ts,
+      pid,
+    };
   }
 
   async counterDetails(ts: number, rightTs: number, id: number) {

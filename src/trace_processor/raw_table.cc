@@ -18,7 +18,7 @@
 
 #include <inttypes.h>
 
-#include "src/trace_processor/ftrace_descriptors.h"
+#include "perfetto/base/compiler.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/variadic.h"
 
@@ -35,6 +35,7 @@ namespace trace_processor {
 
 RawTable::RawTable(sqlite3* db, const TraceStorage* storage)
     : storage_(storage) {
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
   auto fn = [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
     auto* thiz = static_cast<RawTable*>(sqlite3_user_data(ctx));
     thiz->ToSystrace(ctx, argc, argv);
@@ -42,6 +43,9 @@ RawTable::RawTable(sqlite3* db, const TraceStorage* storage)
   sqlite3_create_function(db, "to_ftrace", 1,
                           SQLITE_UTF8 | SQLITE_DETERMINISTIC, this, fn, nullptr,
                           nullptr);
+#else   // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
+  base::ignore_result(db);
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
 }
 
 void RawTable::RegisterTable(sqlite3* db, const TraceStorage* storage) {
@@ -77,6 +81,7 @@ int RawTable::BestIndex(const QueryConstraints& qc, BestIndexInfo* info) {
   return SQLITE_OK;
 }
 
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
 void RawTable::FormatSystraceArgs(NullTermStringView event_name,
                                   ArgSetId arg_set_id,
                                   base::StringWriter* writer) {
@@ -85,7 +90,7 @@ void RawTable::FormatSystraceArgs(NullTermStringView event_name,
   auto ub = std::find(lb, set_ids.end(), arg_set_id + 1);
 
   auto start_row = static_cast<uint32_t>(std::distance(set_ids.begin(), lb));
-
+  auto end_row = static_cast<uint32_t>(std::distance(set_ids.begin(), ub));
   using ValueWriter = std::function<void(const Variadic&)>;
   auto write_value = [this, writer](const Variadic& value) {
     switch (value.type) {
@@ -243,9 +248,9 @@ void RawTable::FormatSystraceArgs(NullTermStringView event_name,
                          });
     return;
   } else if (event_name == "print") {
-    using P = protos::pbzero::PrintFtraceEvent;
-
-    uint32_t arg_row = start_row + P::kBufFieldNumber - 1;
+    // 'ip' may be the first field or it may be dropped. We only care
+    // about the 'buf' field which will always appear last.
+    uint32_t arg_row = end_row - 1;
     const auto& args = storage_->args();
     const auto& value = args.arg_values()[arg_row];
     const auto& str = storage_->GetString(value.string_value);
@@ -366,6 +371,7 @@ void RawTable::ToSystrace(sqlite3_context* ctx,
   FormatSystraceArgs(event_name, raw_evts.arg_set_ids()[row], &writer);
   sqlite3_result_text(ctx, writer.CreateStringCopy(), -1, free);
 }
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
 
 }  // namespace trace_processor
 }  // namespace perfetto

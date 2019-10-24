@@ -32,6 +32,8 @@ import sys
 
 import gn_utils
 
+from compat import itervalues, iteritems, basestring
+
 # Arguments for the GN output directory.
 # host_os="linux" is to generate the right build files from Mac OS.
 gn_args = ' '.join([
@@ -47,6 +49,7 @@ gn_args = ' '.join([
 
 # These targets will be exported with public visibility in the generated BUILD.
 public_targets = [
+    '//:libperfetto_client_experimental',
     '//src/perfetto_cmd:perfetto',
     '//src/traced/probes:traced_probes',
     '//src/traced/service:traced',
@@ -63,11 +66,14 @@ default_targets = [
     '//src/ipc/protoc_plugin:ipc_plugin',
     '//src/protozero:libprotozero',
     '//src/protozero/protoc_plugin:protozero_plugin',
+    '//src/protozero/protoc_plugin:cppgen_plugin',
 ] + public_targets
 
 # Root proto targets (to force discovery of intermediate proto targets).
+# These targets are marked public.
 proto_targets = [
     '//protos/perfetto/trace:merged_trace',
+    '//protos/perfetto/config:merged_config',
     '//protos/perfetto/metrics:lite',
     '//protos/perfetto/trace:lite',
     '//protos/perfetto/config:lite',
@@ -92,15 +98,15 @@ external_deps = {
     ],
     '//gn:zlib': ['PERFETTO_CONFIG.deps.zlib'],
     '//gn/standalone:gen_git_revision': [],
-    '//src/trace_processor/metrics:gen_merged_sql_metrics': [
-        [":cc_merged_sql_metrics"]
-    ]
+    '//src/trace_processor/metrics:gen_merged_sql_metrics': [[
+        ":cc_merged_sql_metrics"
+    ]]
 }
 
 
 def gen_sql_metrics(target):
   label = BazelLabel(get_bazel_label_name(target.name), 'genrule')
-  label.srcs += [re.sub('^//', '', x) for x in target.inputs]
+  label.srcs += [re.sub('^//', '', x) for x in sorted(target.inputs)]
   label.outs += target.outputs
   label.cmd = r'$(location gen_merged_sql_metrics_py) --cpp_out=$@ $(SRCS)'
   label.tools += [':gen_merged_sql_metrics_py']
@@ -134,6 +140,12 @@ class BazelLabel(object):
     self.tools = []
     self.outs = []
 
+  def __lt__(self, other):
+    if isinstance(other, self.__class__):
+      return self.name < other.name
+    raise TypeError('\'<\' not supported between instances of \'%s\' and \'%s\''
+                    % (type(self).__name__, type(other).__name__))
+
   def __str__(self):
     """Converts the object into a Bazel Starlark label."""
     res = ''
@@ -141,8 +153,9 @@ class BazelLabel(object):
     res += '%s(\n' % self.type
     any_deps = len(self.deps) + len(self.external_deps) > 0
     ORD = ['name', 'srcs', 'hdrs', 'visibility', 'deps', 'outs', 'cmd', 'tools']
-    key_sorter = lambda kv: ORD.index(kv[0]) if kv[0] in ORD else '99-' + kv[0]
-    for k, v in sorted(self.__dict__.iteritems(), key=key_sorter):
+    hasher = lambda x: sum((99,) + tuple(ord(c) for c in x))
+    key_sorter = lambda kv: ORD.index(kv[0]) if kv[0] in ORD else hasher(kv[0])
+    for k, v in sorted(iteritems(self.__dict__), key=key_sorter):
       if k in ('type', 'comment',
                'external_deps') or v is None or (v == [] and
                                                  (k != 'deps' or not any_deps)):
@@ -202,7 +215,7 @@ def gen_proto_labels(target):
   assert (target.type == 'proto_library')
 
   def get_sources_label(target_name):
-    return re.sub('_(lite|zero)$', '',
+    return re.sub('_(lite|zero|cpp)$', '',
                   get_bazel_label_name(target_name)) + '_protos'
 
   sources_label_name = get_sources_label(target.name)
@@ -212,6 +225,8 @@ def gen_proto_labels(target):
     plugin_label_type = 'perfetto_cc_proto_library'
   elif target.proto_plugin == 'protozero':
     plugin_label_type = 'perfetto_cc_protozero_library'
+  elif target.proto_plugin == 'cppgen':
+    plugin_label_type = 'perfetto_cc_protocpp_library'
   elif target.proto_plugin == 'ipc':
     plugin_label_type = 'perfetto_cc_ipc_library'
   else:
@@ -221,6 +236,17 @@ def gen_proto_labels(target):
   plugin_label.comment = target.name
   plugin_label.deps += [':' + sources_label_name]
 
+  # When using the cppgen plugin we need to pass down also the transitive deps.
+  # For instance consider foo.proto including common.proto. The generated
+  # foo.cc will #include "common.gen.h". Hence the generated cc_protocpp_library
+  # rule need to pass down the dependency on the target that generates
+  # common.gen.{cc,h}. This is not needed for protozero because protozero
+  # headers are fully hermetic deps-wise and use only on forward declarations.
+  if target.proto_deps and target.proto_plugin == 'cppgen':
+    plugin_label.deps += [
+        ':' + get_bazel_label_name(x) for x in target.proto_deps
+    ]
+
   # Generates 2.
   sources_label = BazelLabel(sources_label_name, 'perfetto_proto_library')
   sources_label.comment = target.name
@@ -229,6 +255,9 @@ def gen_proto_labels(target):
   sources_label.srcs = sorted([x[2:] for x in target.sources])  # Strip //.
   deps = [':' + get_sources_label(x) for x in target.proto_deps]
   sources_label.deps = sorted(deps)
+
+  if target.name in proto_targets:
+    sources_label.visibility = ['//visibility:public']
 
   return [plugin_label, sources_label]
 
@@ -270,7 +299,7 @@ def gen_target(gn_target):
         label.hdrs += [name]
       else:
         label.srcs += [name]
-    for dep in gn_target.deps:
+    for dep in sorted(gn_target.deps):
       if dep.startswith('//gn:'):
         assert (dep in external_deps), dep
       if dep in external_deps:
@@ -322,6 +351,7 @@ load(
     "perfetto_cc_ipc_library",
     "perfetto_cc_library",
     "perfetto_cc_proto_library",
+    "perfetto_cc_protocpp_library",
     "perfetto_cc_protozero_library",
     "perfetto_java_proto_library",
     "perfetto_proto_library",
@@ -331,9 +361,10 @@ load(
 
 package(default_visibility = ["//visibility:private"])
 
-licenses(["notice"])  # Apache 2.0
+licenses(["notice"])
 
 exports_files(["NOTICE"])
+
 '''.format(__file__).lstrip()
 
   # Public targets need to be computed at the beginning (to figure out the
@@ -356,7 +387,7 @@ exports_files(["NOTICE"])
     res += gen_target_str(target)
 
   # Generate all the intermediate targets.
-  for target in sorted(gn.all_targets.itervalues(), key=lambda x: x.name):
+  for target in sorted(itervalues(gn.all_targets)):
     if target.name in default_targets or target.name in gn.proto_libs:
       continue
     res += gen_target_str(target)
@@ -368,17 +399,17 @@ exports_files(["NOTICE"])
 
 '''.lstrip()
   # Force discovery of explicilty listed root proto targets.
-  for target_name in proto_targets:
+  for target_name in sorted(proto_targets):
     gn.get_target(target_name)
 
   # Generate targets for the transitive set of proto targets.
   # TODO explain deduping here.
   labels = {}
-  for target in gn.proto_libs.itervalues():
+  for target in sorted(itervalues(gn.proto_libs)):
     for label in gen_target(target):
       labels[label.name] = label
 
-  res += ''.join(str(x) for x in labels.itervalues())
+  res += ''.join(str(x) for x in sorted(itervalues(labels)))
 
   res += '''
 # ##############################################################################

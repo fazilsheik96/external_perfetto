@@ -29,6 +29,9 @@ export type OmniboxState =
 export type VisibleState =
     Timestamped<{startSec: number; endSec: number; resolution: number;}>;
 
+export type SelectedTimeRange =
+    Timestamped<{startSec?: number; endSec?: number;}>;
+
 export const MAX_TIME = 180;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
@@ -76,6 +79,7 @@ export interface TraceTime {
 export interface FrontendLocalState {
   omniboxState: OmniboxState;
   visibleState: VisibleState;
+  selectedTimeRange: SelectedTimeRange;
 }
 
 export interface Status {
@@ -98,7 +102,6 @@ export interface NoteSelection {
 
 export interface SliceSelection {
   kind: 'SLICE';
-  utid: number;
   id: number;
 }
 
@@ -109,8 +112,15 @@ export interface CounterSelection {
   id: number;
 }
 
-export interface HeapDumpSelection {
-  kind: 'HEAP_DUMP';
+export interface HeapProfileSelection {
+  kind: 'HEAP_PROFILE';
+  id: number;
+  upid: number;
+  ts: number;
+}
+
+export interface HeapProfileFlamegraph {
+  kind: 'HEAP_PROFILE_FLAMEGRAPH';
   id: number;
   upid: number;
   ts: number;
@@ -119,12 +129,6 @@ export interface HeapDumpSelection {
 export interface ChromeSliceSelection {
   kind: 'CHROME_SLICE';
   id: number;
-}
-
-export interface TimeSpanSelection {
-  kind: 'TIMESPAN';
-  startTs: number;
-  endTs: number;
 }
 
 export interface ThreadStateSelection {
@@ -136,9 +140,8 @@ export interface ThreadStateSelection {
   cpu: number;
 }
 
-type Selection =
-    NoteSelection|SliceSelection|CounterSelection|HeapDumpSelection|
-    ChromeSliceSelection|TimeSpanSelection|ThreadStateSelection;
+type Selection = NoteSelection|SliceSelection|CounterSelection|
+    HeapProfileSelection|ChromeSliceSelection|ThreadStateSelection;
 
 export interface LogsPagination {
   offset: number;
@@ -178,6 +181,7 @@ export interface State {
   notes: ObjectById<Note>;
   status: Status;
   currentSelection: Selection|null;
+  currentHeapProfileFlamegraph: HeapProfileFlamegraph|null;
 
   logsPagination: LogsPagination;
 
@@ -370,6 +374,9 @@ export function createEmptyState(): State {
         lastUpdate: 0,
         resolution: 0,
       },
+      selectedTimeRange: {
+        lastUpdate: 0,
+      },
     },
 
     logsPagination: {
@@ -379,6 +386,7 @@ export function createEmptyState(): State {
 
     status: {msg: '', timestamp: 0},
     currentSelection: null,
+    currentHeapProfileFlamegraph: null,
 
     video: null,
     videoEnabled: false,
@@ -394,4 +402,17 @@ export function createEmptyState(): State {
 
     chromeCategories: undefined,
   };
+}
+
+export function getContainingTrackId(state: State, trackId: string): null|
+    string {
+  const track = state.tracks[trackId];
+  if (!track) {
+    return null;
+  }
+  const parentId = track.trackGroup;
+  if (!parentId) {
+    return null;
+  }
+  return parentId;
 }

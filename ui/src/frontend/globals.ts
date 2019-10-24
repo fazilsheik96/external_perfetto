@@ -28,6 +28,9 @@ export interface SliceDetails {
   dur?: number;
   priority?: number;
   endState?: string;
+  cpu?: number;
+  id?: number;
+  utid?: number;
   wakeupTs?: number;
   wakerUtid?: number;
   wakerCpu?: number;
@@ -42,10 +45,20 @@ export interface CounterDetails {
   duration?: number;
 }
 
-export interface HeapDumpDetails {
+export interface CallsiteInfo {
+  hash: number;
+  parentHash: number;
+  depth: number;
+  name?: string;
+  totalSize: number;
+}
+
+export interface HeapProfileDetails {
   ts?: number;
+  tsNs?: number;
   allocated?: number;
   allocatedNotFreed?: number;
+  pid?: number;
 }
 
 export interface QuantizedLoad {
@@ -81,7 +94,7 @@ class Globals {
   private _threadMap?: ThreadMap = undefined;
   private _sliceDetails?: SliceDetails = undefined;
   private _counterDetails?: CounterDetails = undefined;
-  private _heapDumpDetails?: HeapDumpDetails = undefined;
+  private _heapDumpDetails?: HeapProfileDetails = undefined;
   private _isLoading = false;
   private _bufferUsage?: number = undefined;
   private _recordingLog?: string = undefined;
@@ -90,6 +103,7 @@ class Globals {
     tsStarts: new Float64Array(0),
     utids: new Float64Array(0),
     trackIds: [],
+    refTypes: [],
     totalResults: 0,
   };
   searchSummary: SearchSummary = {
@@ -172,7 +186,7 @@ class Globals {
     return assertExists(this._heapDumpDetails);
   }
 
-  set heapDumpDetails(click: HeapDumpDetails) {
+  set heapDumpDetails(click: HeapProfileDetails) {
     this._heapDumpDetails = assertExists(click);
   }
 
@@ -243,6 +257,7 @@ class Globals {
       tsStarts: new Float64Array(0),
       utids: new Float64Array(0),
       trackIds: [],
+      refTypes: [],
       totalResults: 0,
     };
   }

@@ -52,6 +52,12 @@ action("gen_buildflags") {
   } else {
     perfetto_watchdog = "0"
   }
+  if (enable_perfetto_tools) {
+    perfetto_local_symbolizer = "PERFETTO_BUILDFLAG_DEFINE_PERFETTO_OS_LINUX()"
+  } else {
+    perfetto_local_symbolizer = "0"
+  }
+
   response_file_contents = [
     "--flags",  # Keep this marker first.
     "PERFETTO_ANDROID_BUILD=$perfetto_build_with_android",
@@ -64,9 +70,14 @@ action("gen_buildflags") {
     "PERFETTO_FORCE_DLOG_ON=$perfetto_force_dlog_on",
     "PERFETTO_FORCE_DLOG_OFF=$perfetto_force_dlog_off",
     "PERFETTO_VERSION_GEN=$enable_perfetto_version_gen",
-    "PERFETTO_TP_LINENOISE=$enable_perfetto_trace_processor_linenoise",
-    "PERFETTO_TP_JSON=$enable_perfetto_trace_processor_json",
     "PERFETTO_TP_PERCENTILE=$enable_perfetto_trace_processor_percentile",
+    "PERFETTO_TP_LINENOISE=$enable_perfetto_trace_processor_linenoise",
+    "PERFETTO_TP_METRICS=$enable_perfetto_trace_processor_metrics",
+    "PERFETTO_TP_FTRACE=$enable_perfetto_trace_processor_ftrace",
+    "PERFETTO_TP_GRAPHICS=$enable_perfetto_trace_processor_graphics",
+    "PERFETTO_TP_JSON=$enable_perfetto_trace_processor_json",
+    "PERFETTO_TP_FUCHSIA=$enable_perfetto_trace_processor_fuchsia",
+    "PERFETTO_LOCAL_SYMBOLIZER=$perfetto_local_symbolizer",
   ]
 
   rel_out_path = rebase_path(gen_header_path, "$root_build_dir")

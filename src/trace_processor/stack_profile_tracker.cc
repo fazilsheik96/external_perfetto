@@ -27,9 +27,17 @@ namespace trace_processor {
 StackProfileTracker::InternLookup::~InternLookup() = default;
 
 StackProfileTracker::StackProfileTracker(TraceProcessorContext* context)
-    : context_(context), empty_(context_->storage->InternString({"", 0})) {}
+    : context_(context), empty_(kNullStringId) {}
 
 StackProfileTracker::~StackProfileTracker() = default;
+
+StringId StackProfileTracker::GetEmptyStringId() {
+  if (empty_ == kNullStringId) {
+    empty_ = context_->storage->InternString({"", 0});
+  }
+
+  return empty_;
+}
 
 void StackProfileTracker::AddString(SourceStringId id, base::StringView str) {
   string_map_.emplace(id, str.ToStdString());
@@ -40,13 +48,15 @@ int64_t StackProfileTracker::AddMapping(SourceMappingId id,
                                         const InternLookup* intern_lookup) {
   std::string path;
   for (SourceStringId str_id : mapping.name_ids) {
-    auto opt_str = FindString(str_id, intern_lookup);
+    auto opt_str =
+        FindString(str_id, intern_lookup, InternedStringType::kMappingPath);
     if (!opt_str)
       break;
     path += "/" + *opt_str;
   }
 
-  auto opt_build_id = FindAndInternString(mapping.build_id, intern_lookup);
+  auto opt_build_id = FindAndInternString(mapping.build_id, intern_lookup,
+                                          InternedStringType::kBuildId);
   if (!opt_build_id) {
     context_->storage->IncrementStats(stats::stackprofile_invalid_string_id);
     PERFETTO_DFATAL("Invalid string.");
@@ -55,7 +65,7 @@ int64_t StackProfileTracker::AddMapping(SourceMappingId id,
   const StringId raw_build_id = opt_build_id.value();
   NullTermStringView raw_build_id_str =
       context_->storage->GetString(raw_build_id);
-  StringId build_id = empty_;
+  StringId build_id = GetEmptyStringId();
   if (raw_build_id_str.size() > 0) {
     std::string hex_build_id =
         base::ToHex(raw_build_id_str.c_str(), raw_build_id_str.size());
@@ -86,7 +96,8 @@ int64_t StackProfileTracker::AddMapping(SourceMappingId id,
 int64_t StackProfileTracker::AddFrame(SourceFrameId id,
                                       const SourceFrame& frame,
                                       const InternLookup* intern_lookup) {
-  auto opt_str_id = FindAndInternString(frame.name_id, intern_lookup);
+  auto opt_str_id = FindAndInternString(frame.name_id, intern_lookup,
+                                        InternedStringType::kFunctionName);
   if (!opt_str_id) {
     context_->storage->IncrementStats(stats::stackprofile_invalid_string_id);
     PERFETTO_DFATAL("Invalid string.");
@@ -170,31 +181,34 @@ int64_t StackProfileTracker::GetDatabaseFrameIdForTesting(
 
 base::Optional<StringId> StackProfileTracker::FindAndInternString(
     SourceStringId id,
-    const InternLookup* intern_lookup) {
+    const InternLookup* intern_lookup,
+    StackProfileTracker::InternedStringType type) {
   if (id == 0)
-    return empty_;
+    return GetEmptyStringId();
 
-  auto opt_str = FindString(id, intern_lookup);
+  auto opt_str = FindString(id, intern_lookup, type);
   if (!opt_str)
-    return empty_;
+    return GetEmptyStringId();
 
   return context_->storage->InternString(base::StringView(*opt_str));
 }
 
 base::Optional<std::string> StackProfileTracker::FindString(
     SourceStringId id,
-    const InternLookup* intern_lookup) {
+    const InternLookup* intern_lookup,
+    StackProfileTracker::InternedStringType type) {
   if (id == 0)
     return "";
 
   auto it = string_map_.find(id);
   if (it == string_map_.end()) {
     if (intern_lookup) {
-      auto str = intern_lookup->GetString(id);
+      auto str = intern_lookup->GetString(id, type);
       if (!str) {
         context_->storage->IncrementStats(
             stats::stackprofile_invalid_string_id);
         PERFETTO_DFATAL("Invalid string.");
+        return base::nullopt;
       }
       return str->ToStdString();
     }
@@ -273,22 +287,7 @@ void StackProfileTracker::ClearIndices() {
   mappings_.clear();
   callstacks_from_frames_.clear();
   callstacks_.clear();
-  // We intentionally hold on to the frames_ mappings - we will use them
-  // if we encounter any ProfiledFrameSymbols packets for symbolizing.
-}
-
-void StackProfileTracker::SetFrameSymbol(SourceFrameId source_frame_id,
-                                         uint32_t symbol_set_id,
-                                         const InternLookup* intern_lookup) {
-  auto maybe_frame_row = FindFrame(source_frame_id, intern_lookup);
-  if (!maybe_frame_row) {
-    context_->storage->IncrementStats(stats::stackprofile_invalid_frame_id);
-    PERFETTO_DFATAL_OR_ELOG("Unknown frame iid %" PRIu64 " in symbols.",
-                            source_frame_id);
-  }
-  size_t frame_row = static_cast<size_t>(*maybe_frame_row);
-  context_->storage->mutable_stack_profile_frames()->SetSymbolSetId(
-      frame_row, symbol_set_id);
+  frames_.clear();
 }
 
 }  // namespace trace_processor
