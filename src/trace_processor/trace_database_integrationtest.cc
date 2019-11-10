@@ -56,6 +56,8 @@ class TraceProcessorIntegrationTest : public ::testing::Test {
     return processor_->ExecuteQuery(query.c_str());
   }
 
+  size_t RestoreInitialTables() { return processor_->RestoreInitialTables(); }
+
  private:
   std::unique_ptr<TraceProcessor> processor_;
 };
@@ -136,15 +138,17 @@ TEST_F(TraceProcessorIntegrationTest, DISABLED_AndroidBuildTrace) {
   ASSERT_TRUE(LoadTrace("android_build_trace.json", strlen("[\n{")).ok());
 }
 
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
 TEST_F(TraceProcessorIntegrationTest, DISABLED_Clusterfuzz14357) {
-  ASSERT_TRUE(LoadTrace("clusterfuzz_14357", 4096).ok());
+  ASSERT_FALSE(LoadTrace("clusterfuzz_14357", 4096).ok());
 }
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
 
-TEST_F(TraceProcessorIntegrationTest, DISABLED_Clusterfuzz14730) {
+TEST_F(TraceProcessorIntegrationTest, Clusterfuzz14730) {
   ASSERT_TRUE(LoadTrace("clusterfuzz_14730", 4096).ok());
 }
 
-TEST_F(TraceProcessorIntegrationTest, DISABLED_Clusterfuzz14753) {
+TEST_F(TraceProcessorIntegrationTest, Clusterfuzz14753) {
   ASSERT_TRUE(LoadTrace("clusterfuzz_14753", 4096).ok());
 }
 
@@ -162,21 +166,43 @@ TEST_F(TraceProcessorIntegrationTest, Clusterfuzz14767) {
   ASSERT_TRUE(it.Next());
   ASSERT_GT(it.Get(0).long_value, 0);
 }
-#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FUCHSIA)
 
-TEST_F(TraceProcessorIntegrationTest, DISABLED_Clusterfuzz14799) {
+TEST_F(TraceProcessorIntegrationTest, Clusterfuzz14799) {
   ASSERT_TRUE(LoadTrace("clusterfuzz_14799", 4096 * 1024).ok());
   auto it = Query("select sum(value) from stats where severity = 'error';");
   ASSERT_TRUE(it.Next());
   ASSERT_GT(it.Get(0).long_value, 0);
 }
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FUCHSIA)
 
-TEST_F(TraceProcessorIntegrationTest, DISABLED_Clusterfuzz15252) {
+TEST_F(TraceProcessorIntegrationTest, Clusterfuzz15252) {
   ASSERT_TRUE(LoadTrace("clusterfuzz_15252", 4096).ok());
 }
 
 TEST_F(TraceProcessorIntegrationTest, Clusterfuzz17805) {
   ASSERT_TRUE(LoadTrace("clusterfuzz_17805", 4096).ok());
+}
+
+TEST_F(TraceProcessorIntegrationTest, RestoreInitialTables) {
+  ASSERT_TRUE(LoadTrace("android_sched_and_ps.pb").ok());
+
+  for (int repeat = 0; repeat < 3; repeat++) {
+    ASSERT_EQ(RestoreInitialTables(), 0u);
+
+    auto it = Query("CREATE TABLE user1(unused text);");
+    it.Next();
+    ASSERT_TRUE(it.Status().ok());
+
+    it = Query("CREATE TEMPORARY TABLE user2(unused text);");
+    it.Next();
+    ASSERT_TRUE(it.Status().ok());
+
+    it = Query("CREATE VIEW user3 AS SELECT * FROM stats;");
+    it.Next();
+    ASSERT_TRUE(it.Status().ok());
+
+    ASSERT_EQ(RestoreInitialTables(), 3u);
+  }
 }
 
 }  // namespace

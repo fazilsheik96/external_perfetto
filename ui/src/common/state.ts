@@ -140,8 +140,9 @@ export interface ThreadStateSelection {
   cpu: number;
 }
 
-type Selection = NoteSelection|SliceSelection|CounterSelection|
-    HeapProfileSelection|ChromeSliceSelection|ThreadStateSelection;
+type Selection =
+    (NoteSelection|SliceSelection|CounterSelection|HeapProfileSelection|
+     ChromeSliceSelection|ThreadStateSelection)&{trackId?: string};
 
 export interface LogsPagination {
   offset: number;
@@ -284,6 +285,13 @@ export interface RecordConfig {
   vmstatPeriodMs: number;
   vmstatCounters: string[];
 
+  heapProfiling: boolean;
+  hpSamplingIntervalBytes: number;
+  hpProcesses: string;
+  hpContinuousDumpsPhase: number;
+  hpContinuousDumpsInterval: number;
+  hpSharedMemoryBuffer: number;
+
   procStats: boolean;
   procStatsPeriodMs: number;
 
@@ -335,6 +343,13 @@ export function createEmptyRecordConfig(): RecordConfig {
     vmstat: false,
     vmstatPeriodMs: 1000,
     vmstatCounters: [],
+
+    heapProfiling: false,
+    hpSamplingIntervalBytes: 4096,
+    hpProcesses: '',
+    hpContinuousDumpsPhase: 0,
+    hpContinuousDumpsInterval: 0,
+    hpSharedMemoryBuffer: 8 * 1048576,
 
     memLmk: false,
     procStats: false,

@@ -29,6 +29,7 @@
 #include "src/trace_processor/android_logs_table.h"
 #include "src/trace_processor/args_table.h"
 #include "src/trace_processor/args_tracker.h"
+#include "src/trace_processor/binder_tracker.h"
 #include "src/trace_processor/clock_tracker.h"
 #include "src/trace_processor/counter_definitions_table.h"
 #include "src/trace_processor/counter_values_table.h"
@@ -40,8 +41,11 @@
 #include "src/trace_processor/heap_profile_tracker.h"
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
+#include "src/trace_processor/importers/proto/android_probes_module.h"
 #include "src/trace_processor/importers/proto/graphics_event_module.h"
 #include "src/trace_processor/importers/proto/proto_importer_module.h"
+#include "src/trace_processor/importers/proto/proto_trace_tokenizer.h"
+#include "src/trace_processor/importers/proto/system_probes_module.h"
 #include "src/trace_processor/importers/proto/track_event_module.h"
 #include "src/trace_processor/importers/systrace/systrace_parser.h"
 #include "src/trace_processor/importers/systrace/systrace_trace_parser.h"
@@ -49,7 +53,6 @@
 #include "src/trace_processor/metadata_table.h"
 #include "src/trace_processor/process_table.h"
 #include "src/trace_processor/process_tracker.h"
-#include "src/trace_processor/proto_trace_tokenizer.h"
 #include "src/trace_processor/raw_table.h"
 #include "src/trace_processor/sched_slice_table.h"
 #include "src/trace_processor/slice_table.h"
@@ -59,7 +62,6 @@
 #include "src/trace_processor/sqlite/db_sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite3_str_split.h"
 #include "src/trace_processor/sqlite/sqlite_table.h"
-#include "src/trace_processor/stack_profile_callsite_table.h"
 #include "src/trace_processor/stack_profile_frame_table.h"
 #include "src/trace_processor/stack_profile_mapping_table.h"
 #include "src/trace_processor/stack_profile_tracker.h"
@@ -77,9 +79,6 @@
 #include "src/trace_processor/metrics/metrics.descriptor.h"
 #include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/metrics/sql_metrics.h"
-
-#include "protos/perfetto/metrics/android/mem_metric.pbzero.h"
-#include "protos/perfetto/metrics/metrics.pbzero.h"
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_METRICS)
 
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
@@ -98,6 +97,10 @@ extern "C" int sqlite3_percentile_init(sqlite3* db,
 namespace perfetto {
 namespace trace_processor {
 namespace {
+
+const char kAllTablesQuery[] =
+    "SELECT tbl_name, type FROM (SELECT * FROM sqlite_master UNION ALL SELECT "
+    "* FROM sqlite_temp_master)";
 
 void InitializeSqlite(sqlite3* db) {
   char* error = nullptr;
@@ -163,7 +166,8 @@ void CreateBuiltinViews(sqlite3* db) {
   sqlite3_exec(db,
                "CREATE VIEW counters AS "
                "SELECT * FROM counter_values "
-               "INNER JOIN counter_definitions USING(counter_id);",
+               "INNER JOIN counter_definitions USING(counter_id) "
+               "ORDER BY ts;",
                0, 0, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -336,12 +340,17 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg) {
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
   context_.sched_tracker.reset(new SchedEventTracker(&context_));
   context_.systrace_parser.reset(new SystraceParser(&context_));
+  context_.binder_tracker.reset(new BinderTracker(&context_));
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
   context_.vulkan_memory_tracker.reset(new VulkanMemoryTracker(&context_));
   context_.ftrace_module.reset(
       new ProtoImporterModule<FtraceModule>(&context_));
   context_.track_event_module.reset(
       new ProtoImporterModule<TrackEventModule>(&context_));
+  context_.system_probes_module.reset(
+      new ProtoImporterModule<SystemProbesModule>(&context_));
+  context_.android_probes_module.reset(
+      new ProtoImporterModule<AndroidProbesModule>(&context_));
   context_.graphics_event_module.reset(
       new ProtoImporterModule<GraphicsEventModule>(&context_));
 
@@ -372,7 +381,6 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg) {
   RawTable::RegisterTable(*db_, context_.storage.get());
   HeapProfileAllocationTable::RegisterTable(*db_, context_.storage.get());
   CpuProfileStackSampleTable::RegisterTable(*db_, context_.storage.get());
-  StackProfileCallsiteTable::RegisterTable(*db_, context_.storage.get());
   StackProfileFrameTable::RegisterTable(*db_, context_.storage.get());
   StackProfileMappingTable::RegisterTable(*db_, context_.storage.get());
   MetadataTable::RegisterTable(*db_, context_.storage.get());
@@ -393,6 +401,9 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg) {
                                storage->symbol_table().table_name());
   DbSqliteTable::RegisterTable(*db_, &storage->heap_graph_object_table(),
                                storage->heap_graph_object_table().table_name());
+  DbSqliteTable::RegisterTable(
+      *db_, &storage->stack_profile_callsite_table(),
+      storage->stack_profile_callsite_table().table_name());
   DbSqliteTable::RegisterTable(
       *db_, &storage->heap_graph_reference_table(),
       storage->heap_graph_reference_table().table_name());
@@ -435,6 +446,41 @@ void TraceProcessorImpl::NotifyEndOfFile() {
   context_.event_tracker->FlushPendingEvents();
   context_.slice_tracker->FlushPendingSlices();
   BuildBoundsTable(*db_, context_.storage->GetTraceTimestampBoundsNs());
+
+  // Create a snapshot of all tables and views created so far. This is so later
+  // we can drop all extra tables created by the UI and reset to the original
+  // state (see RestoreInitialTables).
+  initial_tables_.clear();
+  auto it = ExecuteQuery(kAllTablesQuery);
+  while (it.Next()) {
+    auto value = it.Get(0);
+    PERFETTO_CHECK(value.type == SqlValue::Type::kString);
+    initial_tables_.push_back(value.string_value);
+  }
+}
+
+size_t TraceProcessorImpl::RestoreInitialTables() {
+  std::vector<std::pair<std::string, std::string>> deletion_list;
+  std::string msg = "Resetting DB to initial state, deleting table/views:";
+  for (auto it = ExecuteQuery(kAllTablesQuery); it.Next();) {
+    std::string name(it.Get(0).string_value);
+    std::string type(it.Get(1).string_value);
+    if (std::find(initial_tables_.begin(), initial_tables_.end(), name) ==
+        initial_tables_.end()) {
+      msg += " " + name;
+      deletion_list.push_back(std::make_pair(type, name));
+    }
+  }
+
+  PERFETTO_LOG("%s", msg.c_str());
+  for (const auto& tn : deletion_list) {
+    std::string query = "DROP " + tn.first + " " + tn.second;
+    auto it = ExecuteQuery(query);
+    while (it.Next()) {
+    }
+    PERFETTO_CHECK(it.Status().ok());
+  }
+  return deletion_list.size();
 }
 
 TraceProcessor::Iterator TraceProcessorImpl::ExecuteQuery(

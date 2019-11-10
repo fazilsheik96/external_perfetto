@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_PROTO_TRACE_TOKENIZER_H_
-#define SRC_TRACE_PROCESSOR_PROTO_TRACE_TOKENIZER_H_
+#ifndef SRC_TRACE_PROCESSOR_IMPORTERS_PROTO_PROTO_TRACE_TOKENIZER_H_
+#define SRC_TRACE_PROCESSOR_IMPORTERS_PROTO_PROTO_TRACE_TOKENIZER_H_
 
 #include <stdint.h>
 
@@ -25,7 +25,6 @@
 #include "src/trace_processor/chunked_trace_reader.h"
 #include "src/trace_processor/importers/proto/proto_incremental_state.h"
 #include "src/trace_processor/trace_blob_view.h"
-#include "src/trace_processor/trace_processor_impl.h"
 
 namespace protozero {
 struct ConstBytes;
@@ -88,4 +87,4 @@ class ProtoTraceTokenizer : public ChunkedTraceReader {
 }  // namespace trace_processor
 }  // namespace perfetto
 
-#endif  // SRC_TRACE_PROCESSOR_PROTO_TRACE_TOKENIZER_H_
+#endif  // SRC_TRACE_PROCESSOR_IMPORTERS_PROTO_PROTO_TRACE_TOKENIZER_H_

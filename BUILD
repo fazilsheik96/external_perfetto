@@ -400,12 +400,15 @@ filegroup(
         "include/perfetto/tracing/internal/tracing_muxer.h",
         "include/perfetto/tracing/internal/tracing_tls.h",
         "include/perfetto/tracing/internal/track_event_data_source.h",
+        "include/perfetto/tracing/internal/track_event_internal.h",
+        "include/perfetto/tracing/internal/track_event_macros.h",
         "include/perfetto/tracing/locked_handle.h",
         "include/perfetto/tracing/platform.h",
         "include/perfetto/tracing/trace_writer_base.h",
         "include/perfetto/tracing/tracing.h",
         "include/perfetto/tracing/tracing_backend.h",
         "include/perfetto/tracing/track_event.h",
+        "include/perfetto/tracing/track_event_category_registry.h",
     ],
 )
 
@@ -584,6 +587,24 @@ filegroup(
     ],
 )
 
+# GN target: //src/trace_processor/rpc:httpd
+filegroup(
+    name = "src_trace_processor_rpc_httpd",
+    srcs = [
+        "src/trace_processor/rpc/httpd.cc",
+        "src/trace_processor/rpc/httpd.h",
+    ],
+)
+
+# GN target: //src/trace_processor/rpc:rpc
+filegroup(
+    name = "src_trace_processor_rpc_rpc",
+    srcs = [
+        "src/trace_processor/rpc/rpc.cc",
+        "src/trace_processor/rpc/rpc.h",
+    ],
+)
+
 # GN target: //src/trace_processor/sqlite:sqlite
 filegroup(
     name = "src_trace_processor_sqlite_sqlite",
@@ -633,6 +654,8 @@ filegroup(
         "src/trace_processor/args_table.h",
         "src/trace_processor/args_tracker.cc",
         "src/trace_processor/args_tracker.h",
+        "src/trace_processor/binder_tracker.cc",
+        "src/trace_processor/binder_tracker.h",
         "src/trace_processor/chunked_trace_reader.h",
         "src/trace_processor/clock_tracker.cc",
         "src/trace_processor/clock_tracker.h",
@@ -683,12 +706,22 @@ filegroup(
         "src/trace_processor/importers/json/json_trace_tokenizer.h",
         "src/trace_processor/importers/json/json_trace_utils.cc",
         "src/trace_processor/importers/json/json_trace_utils.h",
+        "src/trace_processor/importers/proto/android_probes_module.h",
+        "src/trace_processor/importers/proto/android_probes_parser.cc",
+        "src/trace_processor/importers/proto/android_probes_parser.h",
         "src/trace_processor/importers/proto/graphics_event_module.h",
         "src/trace_processor/importers/proto/graphics_event_parser.cc",
         "src/trace_processor/importers/proto/graphics_event_parser.h",
         "src/trace_processor/importers/proto/packet_sequence_state.h",
         "src/trace_processor/importers/proto/proto_importer_module.h",
         "src/trace_processor/importers/proto/proto_incremental_state.h",
+        "src/trace_processor/importers/proto/proto_trace_parser.cc",
+        "src/trace_processor/importers/proto/proto_trace_parser.h",
+        "src/trace_processor/importers/proto/proto_trace_tokenizer.cc",
+        "src/trace_processor/importers/proto/proto_trace_tokenizer.h",
+        "src/trace_processor/importers/proto/system_probes_module.h",
+        "src/trace_processor/importers/proto/system_probes_parser.cc",
+        "src/trace_processor/importers/proto/system_probes_parser.h",
         "src/trace_processor/importers/proto/track_event_module.h",
         "src/trace_processor/importers/proto/track_event_parser.cc",
         "src/trace_processor/importers/proto/track_event_parser.h",
@@ -707,10 +740,6 @@ filegroup(
         "src/trace_processor/process_table.h",
         "src/trace_processor/process_tracker.cc",
         "src/trace_processor/process_tracker.h",
-        "src/trace_processor/proto_trace_parser.cc",
-        "src/trace_processor/proto_trace_parser.h",
-        "src/trace_processor/proto_trace_tokenizer.cc",
-        "src/trace_processor/proto_trace_tokenizer.h",
         "src/trace_processor/raw_table.cc",
         "src/trace_processor/raw_table.h",
         "src/trace_processor/read_trace.cc",
@@ -726,8 +755,6 @@ filegroup(
         "src/trace_processor/span_join_operator_table.h",
         "src/trace_processor/sql_stats_table.cc",
         "src/trace_processor/sql_stats_table.h",
-        "src/trace_processor/stack_profile_callsite_table.cc",
-        "src/trace_processor/stack_profile_callsite_table.h",
         "src/trace_processor/stack_profile_frame_table.cc",
         "src/trace_processor/stack_profile_frame_table.h",
         "src/trace_processor/stack_profile_mapping_table.cc",
@@ -940,9 +967,10 @@ filegroup(
         "src/tracing/internal/system_tracing_backend.h",
         "src/tracing/internal/tracing_muxer_impl.cc",
         "src/tracing/internal/tracing_muxer_impl.h",
+        "src/tracing/internal/track_event_internal.cc",
         "src/tracing/platform.cc",
         "src/tracing/tracing.cc",
-        "src/tracing/track_event.cc",
+        "src/tracing/track_event_category_registry.cc",
         "src/tracing/virtual_destructors.cc",
     ],
 )
@@ -1963,6 +1991,22 @@ perfetto_cc_protozero_library(
     ],
 )
 
+# GN target: //protos/perfetto/trace_processor:zero
+perfetto_proto_library(
+    name = "protos_perfetto_trace_processor_protos",
+    srcs = [
+        "protos/perfetto/trace_processor/trace_processor.proto",
+    ],
+)
+
+# GN target: //protos/perfetto/trace_processor:zero
+perfetto_cc_protozero_library(
+    name = "protos_perfetto_trace_processor_zero",
+    deps = [
+        ":protos_perfetto_trace_processor_protos",
+    ],
+)
+
 # GN target: //protos/perfetto/trace/profiling:lite
 perfetto_cc_proto_library(
     name = "protos_perfetto_trace_profiling_lite",
@@ -2374,11 +2418,14 @@ perfetto_cc_binary(
         ":include_perfetto_protozero_protozero",
         ":include_perfetto_trace_processor_trace_processor",
         ":src_base_base",
+        ":src_base_unix_socket",
         ":src_protozero_protozero",
         ":src_trace_processor_common",
         ":src_trace_processor_db_lib",
         ":src_trace_processor_lib",
         ":src_trace_processor_metrics_lib",
+        ":src_trace_processor_rpc_httpd",
+        ":src_trace_processor_rpc_rpc",
         ":src_trace_processor_sqlite_sqlite",
         ":src_trace_processor_tables_tables",
     ],
@@ -2409,6 +2456,7 @@ perfetto_cc_binary(
                ":protos_perfetto_trace_perfetto_zero",
                ":protos_perfetto_trace_power_zero",
                ":protos_perfetto_trace_processor_metrics_impl_zero",
+               ":protos_perfetto_trace_processor_zero",
                ":protos_perfetto_trace_profiling_zero",
                ":protos_perfetto_trace_ps_zero",
                ":protos_perfetto_trace_sys_stats_zero",

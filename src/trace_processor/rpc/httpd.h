@@ -14,30 +14,17 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_STACK_PROFILE_CALLSITE_TABLE_H_
-#define SRC_TRACE_PROCESSOR_STACK_PROFILE_CALLSITE_TABLE_H_
-
-#include "src/trace_processor/storage_table.h"
+#ifndef SRC_TRACE_PROCESSOR_RPC_HTTPD_H_
+#define SRC_TRACE_PROCESSOR_RPC_HTTPD_H_
 
 namespace perfetto {
 namespace trace_processor {
 
-class StackProfileCallsiteTable : public StorageTable {
- public:
-  static void RegisterTable(sqlite3* db, const TraceStorage* storage);
-
-  StackProfileCallsiteTable(sqlite3*, const TraceStorage*);
-
-  // StorageTable implementation.
-  StorageSchema CreateStorageSchema() override;
-  uint32_t RowCount() override;
-  int BestIndex(const QueryConstraints&, BestIndexInfo*) override;
-
- private:
-  const TraceStorage* const storage_;
-};
+// Starts a RPC server that handles requests using protobuf-over-HTTP.
+// It takes control of the calling thread and does not return.
+void RunHttpRPCServer();
 
 }  // namespace trace_processor
 }  // namespace perfetto
 
-#endif  // SRC_TRACE_PROCESSOR_STACK_PROFILE_CALLSITE_TABLE_H_
+#endif  // SRC_TRACE_PROCESSOR_RPC_HTTPD_H_
