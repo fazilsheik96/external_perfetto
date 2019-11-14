@@ -41,6 +41,7 @@
 #include "protos/perfetto/trace/clock_snapshot.pbzero.h"
 #include "protos/perfetto/trace/profiling/profile_common.pbzero.h"
 #include "protos/perfetto/trace/trace.pbzero.h"
+#include "protos/perfetto/trace/trace_packet.pbzero.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -69,8 +70,10 @@ TraceBlobView Decompress(TraceBlobView input) {
     stream.next_out = out;
     stream.avail_out = sizeof(out);
     ret = inflate(&stream, Z_NO_FLUSH);
-    if (ret != Z_STREAM_END && ret != Z_OK)
+    if (ret != Z_STREAM_END && ret != Z_OK) {
+      inflateEnd(&stream);
       return TraceBlobView(nullptr, 0, 0);
+    }
     s.append(reinterpret_cast<char*>(out), sizeof(out) - stream.avail_out);
   } while (ret != Z_STREAM_END);
   inflateEnd(&stream);

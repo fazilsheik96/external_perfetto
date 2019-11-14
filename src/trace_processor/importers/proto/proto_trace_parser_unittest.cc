@@ -26,6 +26,7 @@
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/importers/proto/android_probes_module.h"
 #include "src/trace_processor/importers/proto/graphics_event_module.h"
+#include "src/trace_processor/importers/proto/heap_graph_module.h"
 #include "src/trace_processor/importers/proto/proto_importer_module.h"
 #include "src/trace_processor/importers/proto/proto_trace_parser.h"
 #include "src/trace_processor/importers/proto/system_probes_module.h"
@@ -36,6 +37,7 @@
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/stack_profile_tracker.h"
 #include "src/trace_processor/trace_sorter.h"
+#include "src/trace_processor/trace_storage.h"
 #include "src/trace_processor/track_tracker.h"
 #include "src/trace_processor/vulkan_memory_tracker.h"
 #include "test/gtest_and_gmock.h"
@@ -135,13 +137,8 @@ class MockEventTracker : public EventTracker {
                     base::StringView next_comm,
                     int32_t next_prio));
 
-  MOCK_METHOD6(PushCounter,
-               RowId(int64_t timestamp,
-                     double value,
-                     StringId name_id,
-                     int64_t ref,
-                     RefType ref_type,
-                     bool resolve_utid_to_upid));
+  MOCK_METHOD3(PushCounter,
+               RowId(int64_t timestamp, double value, uint32_t track_id));
 
   MOCK_METHOD6(PushInstant,
                RowId(int64_t timestamp,
@@ -164,7 +161,8 @@ class MockProcessTracker : public ProcessTracker {
 
   MOCK_METHOD2(UpdateThreadName,
                UniqueTid(uint32_t tid, StringId thread_name_id));
-  MOCK_METHOD2(SetThreadName, void(UniqueTid utid, StringId thread_name_id));
+  MOCK_METHOD2(SetThreadNameIfUnset,
+               void(UniqueTid utid, StringId thread_name_id));
   MOCK_METHOD2(UpdateThread, UniqueTid(uint32_t tid, uint32_t tgid));
 
   MOCK_METHOD1(GetOrCreateProcess, UniquePid(uint32_t pid));
@@ -260,15 +258,19 @@ class ProtoTraceParserTest : public ::testing::Test {
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
     context_.systrace_parser.reset(new SystraceParser(&context_));
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_GRAPHICS)
     context_.vulkan_memory_tracker.reset(new VulkanMemoryTracker(&context_));
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_GRAPHICS)
     context_.ftrace_module.reset(
         new ProtoImporterModule<FtraceModule>(&context_));
+    context_.track_event_module.reset(
+        new ProtoImporterModule<TrackEventModule>(&context_));
     context_.system_probes_module.reset(
         new ProtoImporterModule<SystemProbesModule>(&context_));
     context_.android_probes_module.reset(
         new ProtoImporterModule<AndroidProbesModule>(&context_));
-    context_.track_event_module.reset(
-        new ProtoImporterModule<TrackEventModule>(&context_));
+    context_.heap_graph_module.reset(
+        new ProtoImporterModule<HeapGraphModule>(&context_));
     context_.graphics_event_module.reset(
         new ProtoImporterModule<GraphicsEventModule>(&context_));
   }
@@ -603,9 +605,10 @@ TEST_F(ProtoTraceParserTest, LoadCpuFreq) {
   cpu_freq->set_cpu_id(10);
   cpu_freq->set_state(2000);
 
-  EXPECT_CALL(*event_, PushCounter(1000, DoubleEq(2000), _, 10,
-                                   RefType::kRefCpuId, false));
+  EXPECT_CALL(*event_, PushCounter(1000, DoubleEq(2000), 0));
   Tokenize();
+
+  EXPECT_EQ(context_.storage->cpu_counter_track_table().cpu()[0], 10u);
 }
 
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
@@ -622,10 +625,11 @@ TEST_F(ProtoTraceParserTest, LoadMemInfo) {
   uint32_t value = 10;
   meminfo->set_value(value);
 
-  EXPECT_CALL(*event_,
-              PushCounter(static_cast<int64_t>(ts), DoubleEq(value * 1024.0), _,
-                          0, RefType::kRefNoRef, false));
+  EXPECT_CALL(*event_, PushCounter(static_cast<int64_t>(ts),
+                                   DoubleEq(value * 1024.0), 0u));
   Tokenize();
+
+  EXPECT_EQ(context_.storage->track_table().size(), 1u);
 }
 
 TEST_F(ProtoTraceParserTest, LoadVmStats) {
@@ -638,9 +642,11 @@ TEST_F(ProtoTraceParserTest, LoadVmStats) {
   uint32_t value = 10;
   meminfo->set_value(value);
 
-  EXPECT_CALL(*event_, PushCounter(static_cast<int64_t>(ts), DoubleEq(value), _,
-                                   0, RefType::kRefNoRef, false));
+  EXPECT_CALL(*event_,
+              PushCounter(static_cast<int64_t>(ts), DoubleEq(value), 0u));
   Tokenize();
+
+  EXPECT_EQ(context_.storage->track_table().size(), 1u);
 }
 
 TEST_F(ProtoTraceParserTest, LoadProcessPacket) {
@@ -728,14 +734,14 @@ TEST_F(ProtoTraceParserTest, ThreadNameFromThreadDescriptor) {
 
   EXPECT_CALL(*storage_, InternString(base::StringView("OldThreadName")))
       .WillOnce(Return(1));
-  EXPECT_CALL(*process_, SetThreadName(1u, StringId(1)));
+  EXPECT_CALL(*process_, SetThreadNameIfUnset(1u, StringId(1)));
   // Packet with same thread, but different name should update the name.
   EXPECT_CALL(*storage_, InternString(base::StringView("NewThreadName")))
       .WillOnce(Return(2));
-  EXPECT_CALL(*process_, SetThreadName(1u, StringId(2)));
+  EXPECT_CALL(*process_, SetThreadNameIfUnset(1u, StringId(2)));
   EXPECT_CALL(*storage_, InternString(base::StringView("DifferentThreadName")))
       .WillOnce(Return(3));
-  EXPECT_CALL(*process_, SetThreadName(2u, StringId(3)));
+  EXPECT_CALL(*process_, SetThreadNameIfUnset(2u, StringId(3)));
 
   Tokenize();
   context_.sorter->ExtractEventsForced();
@@ -1042,7 +1048,6 @@ TEST_F(ProtoTraceParserTest, TrackEventWithInternedData) {
   TraceStorage::Thread thread(16);
   thread.upid = 2u;
   EXPECT_CALL(*storage_, GetThread(1))
-      .Times(5)
       .WillRepeatedly(testing::ReturnRef(thread));
 
   MockArgsTracker args(&context_);
@@ -1062,12 +1067,11 @@ TEST_F(ProtoTraceParserTest, TrackEventWithInternedData) {
   InSequence in_sequence;  // Below slices should be sorted by timestamp.
 
   RowId first_slice_row_id =
-      TraceStorage::CreateRowId(TableId::kNestableSlices, 3u);
+      TraceStorage::CreateRowId(TableId::kNestableSlices, 0u);
   EXPECT_CALL(*slice_, Scoped(1005000, thread_1_track, 1, RefType::kRefUtid,
                               StringId(1), StringId(2), 23000, _))
       .WillOnce(
           DoAll(InvokeArgument<7>(&args, first_slice_row_id), Return(0u)));
-
   EXPECT_CALL(
       args, AddArg(first_slice_row_id, _, _, Variadic::UnsignedInteger(9999u)));
   EXPECT_CALL(args, AddArg(first_slice_row_id, _, _, Variadic::Boolean(true)));
@@ -1094,12 +1098,13 @@ TEST_F(ProtoTraceParserTest, TrackEventWithInternedData) {
               &args, TraceStorage::CreateRowId(TableId::kNestableSlices, 2u)),
           Return(2u)));
 
+  RowId last_slice_row_id =
+      TraceStorage::CreateRowId(TableId::kNestableSlices, 3u);
   EXPECT_CALL(*slice_, Scoped(1050000, process_2_track, 2, RefType::kRefUpid,
                               StringId(3), StringId(4), 0, _))
-      .WillOnce(DoAll(
-          InvokeArgument<7>(
-              &args, TraceStorage::CreateRowId(TableId::kNestableSlices, 3u)),
-          Return(3u)));
+      .WillOnce(DoAll(InvokeArgument<7>(&args, last_slice_row_id), Return(3u)));
+  // Second slice should have a legacy_event.original_tid arg.
+  EXPECT_CALL(args, AddArg(last_slice_row_id, _, _, Variadic::Integer(16)));
 
   context_.sorter->ExtractEventsForced();
 

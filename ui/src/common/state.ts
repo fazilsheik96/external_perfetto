@@ -36,6 +36,33 @@ export const MAX_TIME = 180;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
+
+export type EngineMode = 'WASM'|'HTTP_RPC';
+
+export type NewEngineMode = 'USE_HTTP_RPC_IF_AVAILABLE'|'FORCE_BUILTIN_WASM';
+
+export interface TraceFileSource {
+  type: 'FILE';
+  file: File;
+}
+
+export interface TraceArrayBufferSource {
+  type: 'ARRAY_BUFFER';
+  buffer: ArrayBuffer;
+}
+
+export interface TraceUrlSource {
+  type: 'URL';
+  url: string;
+}
+
+export interface TraceHttpRpcSource {
+  type: 'HTTP_RPC';
+}
+
+export type TraceSource =
+    TraceFileSource|TraceArrayBufferSource|TraceUrlSource|TraceHttpRpcSource;
+
 export interface TrackState {
   id: string;
   engineId: string;
@@ -56,8 +83,10 @@ export interface TrackGroupState {
 
 export interface EngineConfig {
   id: string;
+  mode?: EngineMode;  // Is undefined until |ready| is true.
   ready: boolean;
-  source: string|File|ArrayBuffer;
+  failed?: string;  // If defined the engine has crashed with the given message.
+  source: TraceSource;
 }
 
 export interface QueryConfig {
@@ -149,10 +178,13 @@ export interface LogsPagination {
   count: number;
 }
 
-export interface AdbRecordingTarget {
-  serial: string;
+export interface RecordingTarget {
   name: string;
-  os: string;
+  os: TargetOs;
+}
+
+export interface AdbRecordingTarget extends RecordingTarget {
+  serial: string;
 }
 
 export interface State {
@@ -170,6 +202,7 @@ export interface State {
   /**
    * Open traces.
    */
+  newEngineMode: NewEngineMode;
   engines: ObjectById<EngineConfig>;
   traceTime: TraceTime;
   trackGroups: ObjectById<TrackGroupState>;
@@ -207,8 +240,8 @@ export interface State {
   recordingInProgress: boolean;
   recordingCancelled: boolean;
   extensionInstalled: boolean;
-  androidDeviceConnected?: AdbRecordingTarget;
-  availableDevices: AdbRecordingTarget[];
+  recordingTarget: RecordingTarget;
+  availableAdbDevices: AdbRecordingTarget[];
   lastRecordingError?: string;
   recordingStatus?: string;
 
@@ -226,23 +259,28 @@ export declare type RecordMode =
 // 'Q','P','O' for Android, 'L' for Linux, 'C' for Chrome.
 export declare type TargetOs = 'Q' | 'P' | 'O' | 'C' | 'L';
 
-export function isAndroidTarget(target: TargetOs) {
-  return ['Q', 'P', 'O'].includes(target);
+export function isAndroidTarget(target: RecordingTarget) {
+  return ['Q', 'P', 'O'].includes(target.os);
 }
 
-export function isChromeTarget(target: TargetOs) {
-  return target === 'C';
+export function isChromeTarget(target: RecordingTarget) {
+  return target.os === 'C';
 }
 
-export function isLinuxTarget(target: TargetOs) {
-  return target === 'L';
+export function isLinuxTarget(target: RecordingTarget) {
+  return target.os === 'L';
+}
+
+export function isAdbTarget(target: RecordingTarget):
+    target is AdbRecordingTarget {
+  if ((target as AdbRecordingTarget).serial) return true;
+  return false;
 }
 
 export interface RecordConfig {
   [key: string]: null|number|boolean|string|string[];
 
   // Global settings
-  targetOS: TargetOs;
   mode: RecordMode;
   durationMs: number;
   bufferSizeMb: number;
@@ -300,7 +338,6 @@ export interface RecordConfig {
 
 export function createEmptyRecordConfig(): RecordConfig {
   return {
-    targetOS: 'Q',
     mode: 'STOP_WHEN_FULL',
     durationMs: 10000.0,
     maxFileSizeMb: 100,
@@ -359,10 +396,21 @@ export function createEmptyRecordConfig(): RecordConfig {
   };
 }
 
+export function getDefaultRecordingTargets(): RecordingTarget[] {
+  return [
+    {os: 'Q', name: 'Android Q+'},
+    {os: 'P', name: 'Android P'},
+    {os: 'O', name: 'Android O-'},
+    {os: 'C', name: 'Chrome'},
+    {os: 'L', name: 'Linux desktop'}
+  ];
+}
+
 export function createEmptyState(): State {
   return {
     route: null,
     nextId: 0,
+    newEngineMode: 'USE_HTTP_RPC_IF_AVAILABLE',
     engines: {},
     traceTime: {...defaultTraceTime},
     tracks: {},
@@ -412,8 +460,8 @@ export function createEmptyState(): State {
     recordingInProgress: false,
     recordingCancelled: false,
     extensionInstalled: false,
-    androidDeviceConnected: undefined,
-    availableDevices: [],
+    recordingTarget: getDefaultRecordingTargets()[0],
+    availableAdbDevices: [],
 
     chromeCategories: undefined,
   };

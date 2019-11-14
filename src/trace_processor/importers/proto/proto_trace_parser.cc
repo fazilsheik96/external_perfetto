@@ -27,14 +27,15 @@
 #include "perfetto/ext/base/string_view.h"
 #include "perfetto/ext/base/string_writer.h"
 #include "perfetto/ext/base/utils.h"
+#include "perfetto/ext/base/uuid.h"
 #include "perfetto/trace_processor/status.h"
 #include "src/trace_processor/args_tracker.h"
 #include "src/trace_processor/event_tracker.h"
-#include "src/trace_processor/heap_graph_tracker.h"
 #include "src/trace_processor/heap_profile_tracker.h"
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
 #include "src/trace_processor/importers/proto/android_probes_module.h"
 #include "src/trace_processor/importers/proto/graphics_event_module.h"
+#include "src/trace_processor/importers/proto/heap_graph_module.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state.h"
 #include "src/trace_processor/importers/proto/system_probes_module.h"
 #include "src/trace_processor/importers/proto/track_event_module.h"
@@ -54,7 +55,6 @@
 #include "protos/perfetto/trace/clock_snapshot.pbzero.h"
 #include "protos/perfetto/trace/interned_data/interned_data.pbzero.h"
 #include "protos/perfetto/trace/perfetto/perfetto_metatrace.pbzero.h"
-#include "protos/perfetto/trace/profiling/heap_graph.pbzero.h"
 #include "protos/perfetto/trace/profiling/profile_common.pbzero.h"
 #include "protos/perfetto/trace/profiling/profile_packet.pbzero.h"
 #include "protos/perfetto/trace/trace.pbzero.h"
@@ -165,43 +165,6 @@ class ProfilePacketInternLookup : public StackProfileTracker::InternLookup {
   size_t seq_state_generation_;
 };
 
-const char* HeapGraphRootTypeToString(int32_t type) {
-  switch (type) {
-    case protos::pbzero::HeapGraphRoot::ROOT_UNKNOWN:
-      return "ROOT_UNKNOWN";
-    case protos::pbzero::HeapGraphRoot::ROOT_JNI_GLOBAL:
-      return "ROOT_JNI_GLOBAL";
-    case protos::pbzero::HeapGraphRoot::ROOT_JNI_LOCAL:
-      return "ROOT_JNI_LOCAL";
-    case protos::pbzero::HeapGraphRoot::ROOT_JAVA_FRAME:
-      return "ROOT_JAVA_FRAME";
-    case protos::pbzero::HeapGraphRoot::ROOT_NATIVE_STACK:
-      return "ROOT_NATIVE_STACK";
-    case protos::pbzero::HeapGraphRoot::ROOT_STICKY_CLASS:
-      return "ROOT_STICKY_CLASS";
-    case protos::pbzero::HeapGraphRoot::ROOT_THREAD_BLOCK:
-      return "ROOT_THREAD_BLOCK";
-    case protos::pbzero::HeapGraphRoot::ROOT_MONITOR_USED:
-      return "ROOT_MONITOR_USED";
-    case protos::pbzero::HeapGraphRoot::ROOT_THREAD_OBJECT:
-      return "ROOT_THREAD_OBJECT";
-    case protos::pbzero::HeapGraphRoot::ROOT_INTERNED_STRING:
-      return "ROOT_INTERNED_STRING";
-    case protos::pbzero::HeapGraphRoot::ROOT_FINALIZING:
-      return "ROOT_FINALIZING";
-    case protos::pbzero::HeapGraphRoot::ROOT_DEBUGGER:
-      return "ROOT_DEBUGGER";
-    case protos::pbzero::HeapGraphRoot::ROOT_REFERENCE_CLEANUP:
-      return "ROOT_REFERENCE_CLEANUP";
-    case protos::pbzero::HeapGraphRoot::ROOT_VM_INTERNAL:
-      return "ROOT_VM_INTERNAL";
-    case protos::pbzero::HeapGraphRoot::ROOT_JNI_MONITOR:
-      return "ROOT_JNI_MONITOR";
-    default:
-      return "ROOT_UNKNOWN";
-  }
-}
-
 }  // namespace
 
 ProtoTraceParser::ProtoTraceParser(TraceProcessorContext* context)
@@ -253,6 +216,9 @@ void ProtoTraceParser::ParseTracePacketImpl(
   if (!context_->android_probes_module->ParsePacket(packet, ttp).ignored())
     return;
 
+  if (!context_->heap_graph_module->ParsePacket(packet, ttp).ignored())
+    return;
+
   if (!context_->graphics_event_module->ParsePacket(packet, ttp).ignored())
     return;
 
@@ -289,10 +255,6 @@ void ProtoTraceParser::ParseTracePacketImpl(
 
   if (packet.has_module_symbols()) {
     ParseModuleSymbols(packet.module_symbols());
-  }
-
-  if (packet.has_heap_graph()) {
-    ParseHeapGraph(ts, packet.heap_graph());
   }
 }
 
@@ -626,8 +588,9 @@ void ProtoTraceParser::ParseMetatraceEvent(int64_t ts, ConstBytes blob) {
       sprintf(fallback, "Counter %d", cid);
       name_id = context_->storage->InternString(fallback);
     }
-    context_->event_tracker->PushCounter(ts, event.counter_value(), name_id,
-                                         utid, RefType::kRefUtid);
+    TrackId track =
+        context_->track_tracker->InternThreadCounterTrack(name_id, utid);
+    context_->event_tracker->PushCounter(ts, event.counter_value(), track);
   }
 
   if (event.has_overruns())
@@ -639,6 +602,17 @@ void ProtoTraceParser::ParseTraceConfig(ConstBytes blob) {
 
   // TODO(eseckler): Propagate statuses from modules.
   context_->android_probes_module->ParseTraceConfig(trace_config);
+
+  if (trace_config.trace_uuid().size != 0) {
+    ConstBytes bytes = trace_config.trace_uuid();
+    base::Optional<base::Uuid> uuid = base::BytesToUuid(bytes.data, bytes.size);
+    if (uuid.has_value()) {
+      std::string str = base::UuidToPrettyString(uuid.value());
+      StringId id = context_->storage->InternString(base::StringView(str));
+      context_->storage->SetMetadata(metadata::trace_uuid,
+                                     Variadic::String(id));
+    }
+  }
 }
 
 void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
@@ -656,20 +630,26 @@ void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
   for (auto addr_it = module_symbols.address_symbols(); addr_it; ++addr_it) {
     protos::pbzero::AddressSymbols::Decoder address_symbols(*addr_it);
 
-    ssize_t frame_row = -1;
+    uint32_t symbol_set_id = context_->storage->symbol_table().size();
+    bool frame_found = false;
     for (int64_t mapping_row : mapping_rows) {
-      frame_row = context_->storage->stack_profile_frames().FindFrameRow(
-          static_cast<size_t>(mapping_row), address_symbols.address());
-      if (frame_row != -1)
-        break;
+      std::vector<int64_t> frame_rows =
+          context_->storage->stack_profile_frames().FindFrameRow(
+              static_cast<size_t>(mapping_row), address_symbols.address());
+
+      for (const int64_t frame_row : frame_rows) {
+        PERFETTO_DCHECK(frame_row >= 0);
+        context_->storage->mutable_stack_profile_frames()->SetSymbolSetId(
+            static_cast<size_t>(frame_row), symbol_set_id);
+        frame_found = true;
+      }
     }
-    if (frame_row == -1) {
+
+    if (!frame_found) {
       context_->storage->IncrementStats(stats::stackprofile_invalid_frame_id);
       continue;
     }
-    uint32_t symbol_set_id = context_->storage->symbol_table().size();
-    context_->storage->mutable_stack_profile_frames()->SetSymbolSetId(
-        static_cast<size_t>(frame_row), symbol_set_id);
+
     for (auto line_it = address_symbols.lines(); line_it; ++line_it) {
       protos::pbzero::Line::Decoder line(*line_it);
       context_->storage->mutable_symbol_table()->Insert(
@@ -677,66 +657,6 @@ void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
            context_->storage->InternString(line.source_file_name()),
            line.line_number()});
     }
-  }
-}
-
-void ProtoTraceParser::ParseHeapGraph(int64_t ts, ConstBytes blob) {
-  protos::pbzero::HeapGraph::Decoder heap_graph(blob.data, blob.size);
-  UniquePid upid = context_->process_tracker->GetOrCreateProcess(
-      static_cast<uint32_t>(heap_graph.pid()));
-  context_->heap_graph_tracker->SetPacketIndex(heap_graph.index());
-  for (auto it = heap_graph.objects(); it; ++it) {
-    protos::pbzero::HeapGraphObject::Decoder object(*it);
-    HeapGraphTracker::SourceObject obj;
-    obj.object_id = object.id();
-    obj.self_size = object.self_size();
-    obj.type_id = object.type_id();
-    auto ref_field_ids_it = object.reference_field_id();
-    auto ref_object_ids_it = object.reference_object_id();
-    for (; ref_field_ids_it && ref_object_ids_it;
-         ++ref_field_ids_it, ++ref_object_ids_it) {
-      HeapGraphTracker::SourceObject::Reference ref;
-      ref.field_name_id = *ref_field_ids_it;
-      ref.owned_object_id = *ref_object_ids_it;
-      obj.references.emplace_back(std::move(ref));
-    }
-
-    if (ref_field_ids_it || ref_object_ids_it) {
-      context_->storage->IncrementIndexedStats(stats::heap_graph_missing_packet,
-                                               static_cast<int>(upid));
-      continue;
-    }
-    context_->heap_graph_tracker->AddObject(upid, ts, std::move(obj));
-  }
-  for (auto it = heap_graph.type_names(); it; ++it) {
-    protos::pbzero::InternedString::Decoder entry(*it);
-    const char* str = reinterpret_cast<const char*>(entry.str().data);
-    auto str_view = base::StringView(str, entry.str().size);
-
-    context_->heap_graph_tracker->AddInternedTypeName(
-        entry.iid(), context_->storage->InternString(str_view));
-  }
-  for (auto it = heap_graph.field_names(); it; ++it) {
-    protos::pbzero::InternedString::Decoder entry(*it);
-    const char* str = reinterpret_cast<const char*>(entry.str().data);
-    auto str_view = base::StringView(str, entry.str().size);
-
-    context_->heap_graph_tracker->AddInternedFieldName(
-        entry.iid(), context_->storage->InternString(str_view));
-  }
-  for (auto it = heap_graph.roots(); it; ++it) {
-    protos::pbzero::HeapGraphRoot::Decoder entry(*it);
-    const char* str = HeapGraphRootTypeToString(entry.root_type());
-    auto str_view = base::StringView(str);
-
-    HeapGraphTracker::SourceRoot src_root;
-    src_root.root_type = context_->storage->InternString(str_view);
-    for (auto obj_it = entry.object_ids(); obj_it; ++obj_it)
-      src_root.object_ids.emplace_back(*obj_it);
-    context_->heap_graph_tracker->AddRoot(upid, ts, std::move(src_root));
-  }
-  if (!heap_graph.continued()) {
-    context_->heap_graph_tracker->FinalizeProfile();
   }
 }
 

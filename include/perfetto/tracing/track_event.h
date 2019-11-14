@@ -19,6 +19,7 @@
 
 #include "perfetto/base/time.h"
 #include "perfetto/tracing/internal/track_event_data_source.h"
+#include "perfetto/tracing/internal/track_event_internal.h"
 #include "perfetto/tracing/internal/track_event_macros.h"
 #include "perfetto/tracing/track_event_category_registry.h"
 #include "protos/perfetto/trace/track_event/track_event.pbzero.h"
@@ -53,10 +54,45 @@
 //
 //       int main() {
 //         perfetto::TrackEvent::Register();
-//         TRACK_EVENT_BEGIN("category", "MyEvent");
-//         TRACK_EVENT_END("category");
+//         TRACK_EVENT("category", "MyEvent");
 //         ...
 //       }
+//
+// ====================
+// Implementation notes
+// ====================
+//
+// The track event library consists of the following layers and components. The
+// classes the internal namespace shouldn't be considered part of the public
+// API.
+//                    .--------------------------------.
+//               .----|  TRACE_EVENT                   |----.
+//      write   |     |   - App instrumentation point  |     |  write
+//      event   |     '--------------------------------'     |  arguments
+//              V                                            V
+//  .----------------------------------.    .-----------------------------.
+//  | TrackEvent                       |    | TrackEventContext           |
+//  |  - Registry of event categories  |    |  - One track event instance |
+//  '----------------------------------'    '-----------------------------'
+//              |                                            |
+//              |                                            | look up
+//              | is                                         | interning ids
+//              V                                            V
+//  .----------------------------------.    .-----------------------------.
+//  | internal::TrackEventDataSource   |    | TrackEventInternedDataIndex |
+//  | - Perfetto data source           |    | - Corresponds to a field in |
+//  | - Has TrackEventIncrementalState |    |   in interned_data.proto    |
+//  '----------------------------------'    '-----------------------------'
+//              |                  |                         ^
+//              |                  |       owns (1:many)     |
+//              | write event      '-------------------------'
+//              V
+//  .----------------------------------.
+//  | internal::TrackEventInternal     |
+//  | - Outlined code to serialize     |
+//  |   one track event                |
+//  '----------------------------------'
+//
 
 // Each compilation unit can be in exactly one track event namespace,
 // allowing the overall program to use multiple track event data sources and
@@ -95,22 +131,37 @@
 // Begin a thread-scoped slice under |category| with the title |name|. Both
 // strings must be static constants. The track event is only recorded if
 // |category| is enabled for a tracing session.
-#define TRACE_EVENT_BEGIN(category, name) \
-  PERFETTO_INTERNAL_TRACK_EVENT(          \
-      category, name,                     \
-      ::perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_BEGIN)
+#define TRACE_EVENT_BEGIN(category, name, ...) \
+  PERFETTO_INTERNAL_TRACK_EVENT(               \
+      category, name,                          \
+      ::perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_BEGIN, ##__VA_ARGS__)
 
 // End a thread-scoped slice under |category|.
-#define TRACE_EVENT_END(category) \
-  PERFETTO_INTERNAL_TRACK_EVENT(  \
-      category, nullptr,          \
-      ::perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_END)
+#define TRACE_EVENT_END(category, ...) \
+  PERFETTO_INTERNAL_TRACK_EVENT(       \
+      category, nullptr,               \
+      ::perfetto::protos::pbzero::TrackEvent::TYPE_SLICE_END, ##__VA_ARGS__)
+
+// Begin a thread-scoped slice which gets automatically closed when going out of
+// scope.
+#define TRACE_EVENT(category, name, ...)               \
+  TRACE_EVENT_BEGIN(category, name, ##__VA_ARGS__);    \
+  struct {                                             \
+    struct EventFinalizer {                            \
+      ~EventFinalizer() { TRACE_EVENT_END(category); } \
+    } finalizer;                                       \
+  } PERFETTO_INTERNAL_UID(scoped_event)
+
+// Emit a thread-scoped slice which has zero duration.
+// TODO(skyostil): Add support for process-wide and global instant events.
+#define TRACE_EVENT_INSTANT(category, name, ...)                            \
+  PERFETTO_INTERNAL_TRACK_EVENT(                                            \
+      category, name, ::perfetto::protos::pbzero::TrackEvent::TYPE_INSTANT, \
+      ##__VA_ARGS__)
 
 // TODO(skyostil): Add arguments.
-// TODO(skyostil): Add scoped events.
 // TODO(skyostil): Add async events.
 // TODO(skyostil): Add flow events.
-// TODO(skyostil): Add instant events.
 // TODO(skyostil): Add counters.
 
 #endif  // INCLUDE_PERFETTO_TRACING_TRACK_EVENT_H_

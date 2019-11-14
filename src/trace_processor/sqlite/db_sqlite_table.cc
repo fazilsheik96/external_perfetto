@@ -43,6 +43,8 @@ FilterOp SqliteOpToFilterOp(int sqlite_op) {
       return FilterOp::kIsNull;
     case SQLITE_INDEX_CONSTRAINT_ISNOTNULL:
       return FilterOp::kIsNotNull;
+    case SQLITE_INDEX_CONSTRAINT_LIKE:
+      return FilterOp::kLike;
     default:
       PERFETTO_FATAL("Currently unsupported constraint");
   }
@@ -131,7 +133,7 @@ double DbSqliteTable::EstimateCost(const QueryConstraints& qc) {
   // This means we have at least one constraint. Check if any of the constraints
   // is an equality constraint on an id column.
   auto id_filter = [this](const QueryConstraints::Constraint& c) {
-    uint32_t col_idx = static_cast<uint32_t>(c.iColumn);
+    uint32_t col_idx = static_cast<uint32_t>(c.column);
     const auto& col = table_->GetColumn(col_idx);
     return sqlite_utils::IsOpEq(c.op) && col.IsId();
   };
@@ -157,11 +159,15 @@ DbSqliteTable::Cursor::Cursor(DbSqliteTable* table)
 
 int DbSqliteTable::Cursor::Filter(const QueryConstraints& qc,
                                   sqlite3_value** argv) {
+  // Clear out the iterator before filtering to ensure the destructor is run
+  // before the table's destructor.
+  iterator_ = base::nullopt;
+
   // We reuse this vector to reduce memory allocations on nested subqueries.
   constraints_.resize(qc.constraints().size());
   for (size_t i = 0; i < qc.constraints().size(); ++i) {
     const auto& cs = qc.constraints()[i];
-    uint32_t col = static_cast<uint32_t>(cs.iColumn);
+    uint32_t col = static_cast<uint32_t>(cs.column);
 
     FilterOp op = SqliteOpToFilterOp(cs.op);
     SqlValue value = SqliteValueToSqlValue(argv[i]);
@@ -180,16 +186,16 @@ int DbSqliteTable::Cursor::Filter(const QueryConstraints& qc,
   db_table_ = initial_db_table_->Filter(constraints_).Sort(orders_);
   iterator_ = db_table_->IterateRows();
 
-  return Next();
+  return SQLITE_OK;
 }
 
 int DbSqliteTable::Cursor::Next() {
-  eof_ = !iterator_->Next();
+  iterator_->Next();
   return SQLITE_OK;
 }
 
 int DbSqliteTable::Cursor::Eof() {
-  return eof_;
+  return !*iterator_;
 }
 
 int DbSqliteTable::Cursor::Column(sqlite3_context* ctx, int raw_col) {
