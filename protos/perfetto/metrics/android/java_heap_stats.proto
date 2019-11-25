@@ -18,6 +18,8 @@ option optimize_for = LITE_RUNTIME;
 
 package perfetto.protos;
 
+import "protos/perfetto/metrics/android/process_metadata.proto";
+
 message JavaHeapStats {
   message Sample {
     optional int64 ts = 1;
@@ -29,7 +31,7 @@ message JavaHeapStats {
   // dump is enabled).
   message InstanceStats {
     optional uint32 upid = 1;
-    optional string process_name = 2;
+    optional AndroidProcessMetadata process = 2;
     repeated Sample samples = 3;
   }
 
