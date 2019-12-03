@@ -31,6 +31,7 @@
 #include "perfetto/ext/base/optional.h"
 #include "perfetto/ext/base/string_view.h"
 #include "perfetto/ext/base/utils.h"
+#include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/ftrace_utils.h"
 #include "src/trace_processor/metadata.h"
 #include "src/trace_processor/stats.h"
@@ -103,7 +104,7 @@ const std::vector<const char*>& GetRefTypeStringMap();
 // names for a given CPU).
 class TraceStorage {
  public:
-  TraceStorage();
+  TraceStorage(const Config& = Config());
 
   virtual ~TraceStorage();
 
@@ -347,6 +348,8 @@ class TraceStorage {
       arg_set_ids_.emplace_back(kInvalidArgSetId);
       return slice_count() - 1;
     }
+
+    void set_name(uint32_t index, StringId name) { names_[index] = name; }
 
     void set_duration(uint32_t index, int64_t duration_ns) {
       durations_[index] = duration_ns;
@@ -752,6 +755,15 @@ class TraceStorage {
       values_.push_back(value);
       uint32_t index = static_cast<uint32_t>(keys_.size() - 1);
       return TraceStorage::CreateRowId(kMetadataTable, index);
+    }
+
+    const Variadic& GetScalarMetadata(metadata::KeyIDs key) const {
+      PERFETTO_DCHECK(scalar_indices.count(key) == 1);
+      return values_.at(scalar_indices.at(key));
+    }
+
+    bool MetadataExists(metadata::KeyIDs key) const {
+      return scalar_indices.count(key) >= 1;
     }
 
     void OverwriteMetadata(uint32_t index, Variadic value) {

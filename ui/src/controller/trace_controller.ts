@@ -44,9 +44,6 @@ import {CPU_SLICE_TRACK_KIND} from '../tracks/cpu_slices/common';
 import {GPU_FREQ_TRACK_KIND} from '../tracks/gpu_freq/common';
 import {HEAP_PROFILE_TRACK_KIND} from '../tracks/heap_profile/common';
 import {
-  HEAP_PROFILE_FLAMEGRAPH_TRACK_KIND
-} from '../tracks/heap_profile_flamegraph/common';
-import {
   PROCESS_SCHEDULING_TRACK_KIND
 } from '../tracks/process_scheduling/common';
 import {PROCESS_SUMMARY_TRACK} from '../tracks/process_summary/common';
@@ -54,6 +51,10 @@ import {THREAD_STATE_TRACK_KIND} from '../tracks/thread_state/common';
 
 import {Child, Children, Controller} from './controller';
 import {globals} from './globals';
+import {
+  HeapProfileController,
+  HeapProfileControllerArgs
+} from './heap_profile_controller';
 import {LoadingManager} from './loading_manager';
 import {LogsController} from './logs_controller';
 import {QueryController, QueryControllerArgs} from './query_controller';
@@ -148,6 +149,10 @@ export class TraceController extends Controller<States> {
         const selectionArgs: SelectionControllerArgs = {engine};
         childControllers.push(
           Child('selection', SelectionController, selectionArgs));
+
+        const heapProfileArgs: HeapProfileControllerArgs = {engine};
+        childControllers.push(
+            Child('heapProfile', HeapProfileController, heapProfileArgs));
 
         childControllers.push(Child('search', SearchController, {
           engine,
@@ -271,6 +276,7 @@ export class TraceController extends Controller<States> {
 
     await this.listThreads();
     await this.loadTimelineOverview(traceTime);
+    await this.initaliseHelperViews();
     return engineMode;
   }
 
@@ -633,14 +639,6 @@ export class TraceController extends Controller<States> {
               trackGroup: pUuid,
               config: {upid}
             });
-
-            tracksToAdd.push({
-              engineId: this.engineId,
-              kind: HEAP_PROFILE_FLAMEGRAPH_TRACK_KIND,
-              name: `Heap Profile Flamegraph`,
-              trackGroup: pUuid,
-              config: {upid}
-            });
           }
 
           if (upidToProcessTracks.has(upid)) {
@@ -797,6 +795,68 @@ export class TraceController extends Controller<States> {
       loadArray.push({startSec, endSec, load});
     }
     globals.publish('OverviewData', slicesData);
+  }
+
+  async initaliseHelperViews() {
+    const engine = assertExists<Engine>(this.engine);
+    let event = 'sched_waking';
+    const waking = await engine.query(
+        `select * from instants where name = 'sched_waking' limit 1`);
+    if (waking.numRecords === 0) {
+      // Only use sched_wakeup if sched_waking is not in the trace.
+      event = 'sched_wakeup';
+    }
+    await engine.query(`create view runnable AS
+      select
+        ts,
+        lead(ts, 1, (select end_ts from trace_bounds))
+          OVER(partition by ref order by ts) - ts as dur,
+        ref as utid
+      from instants
+      where name = '${event}'`);
+
+    // Get the first ts for each utid - whether a sched wakeup/waking
+    // or sched event.
+    await engine.query(`create view first_thread as
+      select min(ts) as ts, utid from
+      (select min(ts) as ts, utid from runnable group by utid
+       UNION
+      select min(ts) as ts,utid from sched group by utid)
+      group by utid`);
+
+    // Create an entry from first ts to either the first sched_wakeup/waking
+    // or to the end if there are no sched wakeup/ings. This means we will
+    // show all information we have even with no sched_wakeup/waking events.
+    await engine.query(`create view fill as
+      select first_thread.ts as ts,
+      coalesce(min(runnable.ts), (select end_ts from trace_bounds)) -
+      first_thread.ts as dur,
+      runnable.utid as utid
+      from runnable
+      JOIN first_thread using(utid) group by utid`);
+
+    await engine.query(`create view full_runnable as
+        select * from runnable UNION
+        select * from fill`);
+
+    await engine.query(`create virtual table thread_span
+        using span_left_join(
+          full_runnable partitioned utid,
+          sched partitioned utid)`);
+
+    // For performance reasons we need to create a table here.
+    // Once b/145350531 is fixed this should be able to revert to a
+    // view and we can recover the extra memory use.
+    await engine.query(`create table thread_state as
+      select ts, dur, utid, cpu,
+      case when end_state is not null then 'Running'
+      when lag(end_state) over ordered is not null
+      then lag(end_state) over ordered else 'Runnable'
+      end as state
+      from thread_span window ordered as
+      (partition by utid order by ts)`);
+
+    await engine.query(`create index utid_index on thread_state(utid)`);
   }
 
   private updateStatus(msg: string): void {

@@ -64,11 +64,11 @@ perfetto_cc_library(
         ":include_perfetto_base_base",
         ":include_perfetto_ext_base_base",
         ":include_perfetto_ext_ipc_ipc",
+        ":include_perfetto_protozero_protozero",
     ],
     deps = [
         ":protos_perfetto_ipc_wire_protocol_cpp",
-        ":protos_perfetto_ipc_wire_protocol_zero",
-    ] + PERFETTO_CONFIG.deps.protobuf_lite,
+    ],
 )
 
 # GN target: //src/protozero/protoc_plugin:cppgen_plugin
@@ -149,42 +149,33 @@ perfetto_cc_library(
         ":include_perfetto_protozero_protozero",
         ":include_perfetto_public_public",
         ":include_perfetto_tracing_core_core",
+        ":include_perfetto_tracing_core_forward_decls",
         ":include_perfetto_tracing_tracing",
     ],
     deps = [
         ":protos_perfetto_common_cpp",
-        ":protos_perfetto_common_lite",
         ":protos_perfetto_common_zero",
         ":protos_perfetto_config_android_cpp",
-        ":protos_perfetto_config_android_lite",
         ":protos_perfetto_config_android_zero",
         ":protos_perfetto_config_cpp",
         ":protos_perfetto_config_ftrace_cpp",
-        ":protos_perfetto_config_ftrace_lite",
         ":protos_perfetto_config_ftrace_zero",
         ":protos_perfetto_config_gpu_cpp",
-        ":protos_perfetto_config_gpu_lite",
         ":protos_perfetto_config_gpu_zero",
         ":protos_perfetto_config_inode_file_cpp",
-        ":protos_perfetto_config_inode_file_lite",
         ":protos_perfetto_config_inode_file_zero",
-        ":protos_perfetto_config_lite",
         ":protos_perfetto_config_power_cpp",
-        ":protos_perfetto_config_power_lite",
         ":protos_perfetto_config_power_zero",
         ":protos_perfetto_config_process_stats_cpp",
-        ":protos_perfetto_config_process_stats_lite",
         ":protos_perfetto_config_process_stats_zero",
         ":protos_perfetto_config_profiling_cpp",
-        ":protos_perfetto_config_profiling_lite",
         ":protos_perfetto_config_profiling_zero",
         ":protos_perfetto_config_sys_stats_cpp",
-        ":protos_perfetto_config_sys_stats_lite",
         ":protos_perfetto_config_sys_stats_zero",
         ":protos_perfetto_config_zero",
+        ":protos_perfetto_ipc_cpp",
         ":protos_perfetto_ipc_ipc",
         ":protos_perfetto_ipc_wire_protocol_cpp",
-        ":protos_perfetto_ipc_wire_protocol_zero",
         ":protos_perfetto_trace_android_zero",
         ":protos_perfetto_trace_chrome_zero",
         ":protos_perfetto_trace_filesystem_zero",
@@ -199,7 +190,7 @@ perfetto_cc_library(
         ":protos_perfetto_trace_ps_zero",
         ":protos_perfetto_trace_sys_stats_zero",
         ":protos_perfetto_trace_track_event_zero",
-    ] + PERFETTO_CONFIG.deps.protobuf_lite,
+    ],
 )
 
 # GN target: //include/perfetto/base:base
@@ -330,6 +321,14 @@ filegroup(
     ],
 )
 
+# GN target: //include/perfetto/profiling:deobfuscator
+filegroup(
+    name = "include_perfetto_profiling_deobfuscator",
+    srcs = [
+        "include/perfetto/profiling/deobfuscator.h",
+    ],
+)
+
 # GN target: //include/perfetto/profiling:symbolizer
 filegroup(
     name = "include_perfetto_profiling_symbolizer",
@@ -345,6 +344,7 @@ filegroup(
     srcs = [
         "include/perfetto/protozero/contiguous_memory_range.h",
         "include/perfetto/protozero/copyable_ptr.h",
+        "include/perfetto/protozero/cpp_message_obj.h",
         "include/perfetto/protozero/field.h",
         "include/perfetto/protozero/message.h",
         "include/perfetto/protozero/message_handle.h",
@@ -404,12 +404,21 @@ filegroup(
     ],
 )
 
+# GN target: //include/perfetto/tracing/core:forward_decls
+filegroup(
+    name = "include_perfetto_tracing_core_forward_decls",
+    srcs = [
+        "include/perfetto/tracing/core/forward_decls.h",
+    ],
+)
+
 # GN target: //include/perfetto/tracing:tracing
 filegroup(
     name = "include_perfetto_tracing_tracing",
     srcs = [
         "include/perfetto/tracing/buffer_exhausted_policy.h",
         "include/perfetto/tracing/data_source.h",
+        "include/perfetto/tracing/debug_annotation.h",
         "include/perfetto/tracing/event_context.h",
         "include/perfetto/tracing/internal/basic_types.h",
         "include/perfetto/tracing/internal/data_source_internal.h",
@@ -525,6 +534,14 @@ filegroup(
     ],
 )
 
+# GN target: //src/profiling:deobfuscator
+filegroup(
+    name = "src_profiling_deobfuscator",
+    srcs = [
+        "src/profiling/deobfuscator.cc",
+    ],
+)
+
 # GN target: //src/protozero:protozero
 filegroup(
     name = "src_protozero_protozero",
@@ -538,6 +555,7 @@ filegroup(
         "src/protozero/scattered_stream_null_delegate.cc",
         "src/protozero/scattered_stream_writer.cc",
         "src/protozero/static_buffer.cc",
+        "src/protozero/virtual_destructors.cc",
     ],
 )
 
@@ -568,6 +586,7 @@ genrule(
         "src/trace_processor/metrics/android/android_cpu_agg.sql",
         "src/trace_processor/metrics/android/android_ion.sql",
         "src/trace_processor/metrics/android/android_lmk.sql",
+        "src/trace_processor/metrics/android/android_lmk_reason.sql",
         "src/trace_processor/metrics/android/android_mem.sql",
         "src/trace_processor/metrics/android/android_mem_unagg.sql",
         "src/trace_processor/metrics/android/android_package_list.sql",
@@ -581,6 +600,7 @@ genrule(
         "src/trace_processor/metrics/android/mem_stats_priority_breakdown.sql",
         "src/trace_processor/metrics/android/process_mem.sql",
         "src/trace_processor/metrics/android/process_metadata.sql",
+        "src/trace_processor/metrics/android/process_oom_score.sql",
         "src/trace_processor/metrics/android/process_unagg_mem_view.sql",
         "src/trace_processor/metrics/android/span_view_stats.sql",
         "src/trace_processor/metrics/android/unsymbolized_frames.sql",
@@ -688,6 +708,8 @@ filegroup(
         "src/trace_processor/cpu_profile_stack_sample_table.h",
         "src/trace_processor/filtered_row_index.cc",
         "src/trace_processor/filtered_row_index.h",
+        "src/trace_processor/gfp_flags.cc",
+        "src/trace_processor/gfp_flags.h",
         "src/trace_processor/heap_profile_allocation_table.cc",
         "src/trace_processor/heap_profile_allocation_table.h",
         "src/trace_processor/instants_table.cc",
@@ -1001,6 +1023,7 @@ filegroup(
     name = "src_tracing_client_api",
     srcs = [
         "src/tracing/data_source.cc",
+        "src/tracing/debug_annotation.cc",
         "src/tracing/event_context.cc",
         "src/tracing/internal/in_process_tracing_backend.cc",
         "src/tracing/internal/in_process_tracing_backend.h",
@@ -1093,6 +1116,8 @@ filegroup(
 filegroup(
     name = "tools_trace_to_text_common",
     srcs = [
+        "tools/trace_to_text/deobfuscate_profile.cc",
+        "tools/trace_to_text/deobfuscate_profile.h",
         "tools/trace_to_text/main.cc",
         "tools/trace_to_text/symbolize_profile.cc",
         "tools/trace_to_text/symbolize_profile.h",
@@ -1159,7 +1184,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_common_cpp",
     deps = [
         ":protos_perfetto_common_protos",
-        ":protos_perfetto_common_zero",
     ],
 )
 
@@ -1204,8 +1228,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_android_cpp",
     deps = [
         ":protos_perfetto_config_android_protos",
-        ":protos_perfetto_config_android_zero",
-        ":protos_perfetto_common_zero",
         ":protos_perfetto_common_cpp",
     ],
 )
@@ -1246,24 +1268,14 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_cpp",
     deps = [
         ":protos_perfetto_config_protos",
-        ":protos_perfetto_config_gpu_zero",
-        ":protos_perfetto_config_profiling_zero",
-        ":protos_perfetto_config_android_cpp",
-        ":protos_perfetto_config_sys_stats_zero",
-        ":protos_perfetto_common_cpp",
         ":protos_perfetto_config_process_stats_cpp",
-        ":protos_perfetto_config_power_zero",
-        ":protos_perfetto_config_ftrace_zero",
-        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_config_android_cpp",
         ":protos_perfetto_config_inode_file_cpp",
-        ":protos_perfetto_config_zero",
+        ":protos_perfetto_config_ftrace_cpp",
         ":protos_perfetto_config_profiling_cpp",
         ":protos_perfetto_config_gpu_cpp",
-        ":protos_perfetto_config_inode_file_zero",
-        ":protos_perfetto_config_android_zero",
-        ":protos_perfetto_config_process_stats_zero",
-        ":protos_perfetto_common_zero",
-        ":protos_perfetto_config_ftrace_cpp",
+        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_common_cpp",
         ":protos_perfetto_config_sys_stats_cpp",
     ],
 )
@@ -1273,7 +1285,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_ftrace_cpp",
     deps = [
         ":protos_perfetto_config_ftrace_protos",
-        ":protos_perfetto_config_ftrace_zero",
     ],
 )
 
@@ -1309,7 +1320,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_gpu_cpp",
     deps = [
         ":protos_perfetto_config_gpu_protos",
-        ":protos_perfetto_config_gpu_zero",
     ],
 )
 
@@ -1326,6 +1336,7 @@ perfetto_proto_library(
     name = "protos_perfetto_config_gpu_protos",
     srcs = [
         "protos/perfetto/config/gpu/gpu_counter_config.proto",
+        "protos/perfetto/config/gpu/vulkan_memory_config.proto",
     ],
     visibility = [
         PERFETTO_CONFIG.proto_library_visibility,
@@ -1345,7 +1356,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_inode_file_cpp",
     deps = [
         ":protos_perfetto_config_inode_file_protos",
-        ":protos_perfetto_config_inode_file_zero",
     ],
 )
 
@@ -1408,7 +1418,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_power_cpp",
     deps = [
         ":protos_perfetto_config_power_protos",
-        ":protos_perfetto_config_power_zero",
     ],
 )
 
@@ -1444,7 +1453,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_process_stats_cpp",
     deps = [
         ":protos_perfetto_config_process_stats_protos",
-        ":protos_perfetto_config_process_stats_zero",
     ],
 )
 
@@ -1480,7 +1488,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_profiling_cpp",
     deps = [
         ":protos_perfetto_config_profiling_protos",
-        ":protos_perfetto_config_profiling_zero",
     ],
 )
 
@@ -1498,6 +1505,7 @@ perfetto_proto_library(
     srcs = [
         "protos/perfetto/config/profiling/heapprofd_config.proto",
         "protos/perfetto/config/profiling/java_hprof_config.proto",
+        "protos/perfetto/config/profiling/perf_event_config.proto",
     ],
     visibility = [
         PERFETTO_CONFIG.proto_library_visibility,
@@ -1522,7 +1530,7 @@ perfetto_proto_library(
         "protos/perfetto/config/trace_config.proto",
     ],
     visibility = [
-        PERFETTO_CONFIG.proto_library_visibility,
+        "//visibility:public",
     ],
     deps = [
         ":protos_perfetto_common_protos",
@@ -1542,8 +1550,6 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_config_sys_stats_cpp",
     deps = [
         ":protos_perfetto_config_sys_stats_protos",
-        ":protos_perfetto_config_sys_stats_zero",
-        ":protos_perfetto_common_zero",
         ":protos_perfetto_common_cpp",
     ],
 )
@@ -1586,11 +1592,41 @@ perfetto_cc_protozero_library(
     ],
 )
 
+# GN target: //protos/perfetto/ipc:cpp
+perfetto_cc_protocpp_library(
+    name = "protos_perfetto_ipc_cpp",
+    deps = [
+        ":protos_perfetto_ipc_protos",
+        ":protos_perfetto_config_process_stats_cpp",
+        ":protos_perfetto_config_android_cpp",
+        ":protos_perfetto_config_inode_file_cpp",
+        ":protos_perfetto_config_ftrace_cpp",
+        ":protos_perfetto_config_profiling_cpp",
+        ":protos_perfetto_config_gpu_cpp",
+        ":protos_perfetto_config_cpp",
+        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_common_cpp",
+        ":protos_perfetto_config_sys_stats_cpp",
+    ],
+)
+
 # GN target: //protos/perfetto/ipc:ipc
 perfetto_cc_ipc_library(
     name = "protos_perfetto_ipc_ipc",
     deps = [
         ":protos_perfetto_ipc_protos",
+        ":protos_perfetto_ipc_cpp",
+        ":protos_perfetto_config_process_stats_cpp",
+        ":protos_perfetto_config_android_cpp",
+        ":protos_perfetto_config_inode_file_cpp",
+        ":protos_perfetto_config_ftrace_cpp",
+        ":protos_perfetto_config_profiling_cpp",
+        ":protos_perfetto_ipc_wire_protocol_cpp",
+        ":protos_perfetto_config_gpu_cpp",
+        ":protos_perfetto_config_cpp",
+        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_common_cpp",
+        ":protos_perfetto_config_sys_stats_cpp",
     ],
 )
 
@@ -1615,6 +1651,7 @@ perfetto_proto_library(
         ":protos_perfetto_config_profiling_protos",
         ":protos_perfetto_config_protos",
         ":protos_perfetto_config_sys_stats_protos",
+        ":protos_perfetto_ipc_wire_protocol_protos",
     ],
 )
 
@@ -1623,11 +1660,10 @@ perfetto_cc_protocpp_library(
     name = "protos_perfetto_ipc_wire_protocol_cpp",
     deps = [
         ":protos_perfetto_ipc_wire_protocol_protos",
-        ":protos_perfetto_ipc_wire_protocol_zero",
     ],
 )
 
-# GN target: //protos/perfetto/ipc:wire_protocol_zero
+# GN target: //protos/perfetto/ipc:wire_protocol_cpp
 perfetto_proto_library(
     name = "protos_perfetto_ipc_wire_protocol_protos",
     srcs = [
@@ -1635,14 +1671,6 @@ perfetto_proto_library(
     ],
     visibility = [
         PERFETTO_CONFIG.proto_library_visibility,
-    ],
-)
-
-# GN target: //protos/perfetto/ipc:wire_protocol_zero
-perfetto_cc_protozero_library(
-    name = "protos_perfetto_ipc_wire_protocol_zero",
-    deps = [
-        ":protos_perfetto_ipc_wire_protocol_protos",
     ],
 )
 
@@ -1664,6 +1692,7 @@ perfetto_proto_library(
         "protos/perfetto/metrics/android/ion_metric.proto",
         "protos/perfetto/metrics/android/java_heap_stats.proto",
         "protos/perfetto/metrics/android/lmk_metric.proto",
+        "protos/perfetto/metrics/android/lmk_reason_metric.proto",
         "protos/perfetto/metrics/android/mem_metric.proto",
         "protos/perfetto/metrics/android/mem_unagg_metric.proto",
         "protos/perfetto/metrics/android/package_list.proto",
@@ -1673,7 +1702,7 @@ perfetto_proto_library(
         "protos/perfetto/metrics/android/unsymbolized_frames.proto",
     ],
     visibility = [
-        PERFETTO_CONFIG.proto_library_visibility,
+        "//visibility:public",
     ],
 )
 
@@ -1700,7 +1729,7 @@ perfetto_proto_library(
         "protos/perfetto/metrics/metrics.proto",
     ],
     visibility = [
-        PERFETTO_CONFIG.proto_library_visibility,
+        "//visibility:public",
     ],
     deps = [
         ":protos_perfetto_metrics_android_protos",
@@ -2004,7 +2033,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/trace_packet_defaults.proto",
     ],
     visibility = [
-        PERFETTO_CONFIG.proto_library_visibility,
+        "//visibility:public",
     ],
     deps = [
         ":protos_perfetto_common_protos",
@@ -2233,6 +2262,7 @@ perfetto_cc_proto_library(
 perfetto_proto_library(
     name = "protos_perfetto_trace_track_event_protos",
     srcs = [
+        "protos/perfetto/trace/track_event/chrome_compositor_scheduler_state.proto",
         "protos/perfetto/trace/track_event/debug_annotation.proto",
         "protos/perfetto/trace/track_event/log_message.proto",
         "protos/perfetto/trace/track_event/process_descriptor.proto",
@@ -2255,15 +2285,7 @@ perfetto_cc_protozero_library(
     ],
 )
 
-# GN target: //protos/third_party/pprof:lite
-perfetto_cc_proto_library(
-    name = "protos_third_party_pprof_lite",
-    deps = [
-        ":protos_third_party_pprof_protos",
-    ],
-)
-
-# GN target: //protos/third_party/pprof:lite
+# GN target: //protos/third_party/pprof:zero
 perfetto_proto_library(
     name = "protos_third_party_pprof_protos",
     srcs = [
@@ -2271,6 +2293,14 @@ perfetto_proto_library(
     ],
     visibility = [
         PERFETTO_CONFIG.proto_library_visibility,
+    ],
+)
+
+# GN target: //protos/third_party/pprof:zero
+perfetto_cc_protozero_library(
+    name = "protos_third_party_pprof_zero",
+    deps = [
+        ":protos_third_party_pprof_protos",
     ],
 )
 
@@ -2320,7 +2350,79 @@ perfetto_cc_library(
         ":include_perfetto_ext_tracing_ipc_ipc",
         ":include_perfetto_protozero_protozero",
         ":include_perfetto_tracing_core_core",
+        ":include_perfetto_tracing_core_forward_decls",
         ":include_perfetto_tracing_tracing",
+    ],
+    visibility = [
+        "//visibility:public",
+    ],
+    deps = [
+        ":protos_perfetto_common_cpp",
+        ":protos_perfetto_common_zero",
+        ":protos_perfetto_config_android_cpp",
+        ":protos_perfetto_config_android_zero",
+        ":protos_perfetto_config_cpp",
+        ":protos_perfetto_config_ftrace_cpp",
+        ":protos_perfetto_config_ftrace_zero",
+        ":protos_perfetto_config_gpu_cpp",
+        ":protos_perfetto_config_gpu_zero",
+        ":protos_perfetto_config_inode_file_cpp",
+        ":protos_perfetto_config_inode_file_zero",
+        ":protos_perfetto_config_power_cpp",
+        ":protos_perfetto_config_power_zero",
+        ":protos_perfetto_config_process_stats_cpp",
+        ":protos_perfetto_config_process_stats_zero",
+        ":protos_perfetto_config_profiling_cpp",
+        ":protos_perfetto_config_profiling_zero",
+        ":protos_perfetto_config_sys_stats_cpp",
+        ":protos_perfetto_config_sys_stats_zero",
+        ":protos_perfetto_config_zero",
+        ":protos_perfetto_ipc_cpp",
+        ":protos_perfetto_ipc_ipc",
+        ":protos_perfetto_ipc_wire_protocol_cpp",
+        ":protos_perfetto_trace_android_zero",
+        ":protos_perfetto_trace_chrome_zero",
+        ":protos_perfetto_trace_filesystem_zero",
+        ":protos_perfetto_trace_ftrace_zero",
+        ":protos_perfetto_trace_gpu_zero",
+        ":protos_perfetto_trace_interned_data_zero",
+        ":protos_perfetto_trace_minimal_zero",
+        ":protos_perfetto_trace_non_minimal_zero",
+        ":protos_perfetto_trace_perfetto_zero",
+        ":protos_perfetto_trace_power_zero",
+        ":protos_perfetto_trace_profiling_zero",
+        ":protos_perfetto_trace_ps_zero",
+        ":protos_perfetto_trace_sys_stats_zero",
+        ":protos_perfetto_trace_track_event_zero",
+    ],
+)
+
+# GN target: //src/perfetto_cmd:perfetto
+perfetto_cc_binary(
+    name = "perfetto",
+    srcs = [
+        "src/perfetto_cmd/main.cc",
+        ":include_perfetto_base_base",
+        ":include_perfetto_ext_base_base",
+        ":include_perfetto_ext_ipc_ipc",
+        ":include_perfetto_ext_traced_traced",
+        ":include_perfetto_ext_tracing_core_core",
+        ":include_perfetto_ext_tracing_ipc_ipc",
+        ":include_perfetto_protozero_protozero",
+        ":include_perfetto_tracing_core_core",
+        ":include_perfetto_tracing_core_forward_decls",
+        ":include_perfetto_tracing_tracing",
+        ":src_android_internal_headers",
+        ":src_android_internal_lazy_library_loader",
+        ":src_base_base",
+        ":src_base_unix_socket",
+        ":src_ipc_ipc",
+        ":src_perfetto_cmd_perfetto_cmd",
+        ":src_perfetto_cmd_trigger_producer",
+        ":src_protozero_protozero",
+        ":src_tracing_common",
+        ":src_tracing_ipc",
+        ":src_tracing_tracing",
     ],
     visibility = [
         "//visibility:public",
@@ -2356,9 +2458,9 @@ perfetto_cc_library(
         ":protos_perfetto_config_sys_stats_lite",
         ":protos_perfetto_config_sys_stats_zero",
         ":protos_perfetto_config_zero",
+        ":protos_perfetto_ipc_cpp",
         ":protos_perfetto_ipc_ipc",
         ":protos_perfetto_ipc_wire_protocol_cpp",
-        ":protos_perfetto_ipc_wire_protocol_zero",
         ":protos_perfetto_trace_android_zero",
         ":protos_perfetto_trace_chrome_zero",
         ":protos_perfetto_trace_filesystem_zero",
@@ -2373,89 +2475,8 @@ perfetto_cc_library(
         ":protos_perfetto_trace_ps_zero",
         ":protos_perfetto_trace_sys_stats_zero",
         ":protos_perfetto_trace_track_event_zero",
-    ] + PERFETTO_CONFIG.deps.protobuf_lite,
-)
-
-# GN target: //src/perfetto_cmd:perfetto
-perfetto_cc_binary(
-    name = "perfetto",
-    srcs = [
-        "src/perfetto_cmd/main.cc",
-        ":include_perfetto_base_base",
-        ":include_perfetto_ext_base_base",
-        ":include_perfetto_ext_ipc_ipc",
-        ":include_perfetto_ext_traced_traced",
-        ":include_perfetto_ext_tracing_core_core",
-        ":include_perfetto_ext_tracing_ipc_ipc",
-        ":include_perfetto_protozero_protozero",
-        ":include_perfetto_tracing_core_core",
-        ":include_perfetto_tracing_tracing",
-        ":src_android_internal_headers",
-        ":src_android_internal_lazy_library_loader",
-        ":src_base_base",
-        ":src_base_unix_socket",
-        ":src_ipc_ipc",
-        ":src_perfetto_cmd_perfetto_cmd",
-        ":src_perfetto_cmd_trigger_producer",
-        ":src_protozero_protozero",
-        ":src_tracing_common",
-        ":src_tracing_ipc",
-        ":src_tracing_tracing",
-    ],
-    visibility = [
-        "//visibility:public",
-    ],
-    deps = [
-               ":protos_perfetto_common_cpp",
-               ":protos_perfetto_common_lite",
-               ":protos_perfetto_common_zero",
-               ":protos_perfetto_config_android_cpp",
-               ":protos_perfetto_config_android_lite",
-               ":protos_perfetto_config_android_zero",
-               ":protos_perfetto_config_cpp",
-               ":protos_perfetto_config_ftrace_cpp",
-               ":protos_perfetto_config_ftrace_lite",
-               ":protos_perfetto_config_ftrace_zero",
-               ":protos_perfetto_config_gpu_cpp",
-               ":protos_perfetto_config_gpu_lite",
-               ":protos_perfetto_config_gpu_zero",
-               ":protos_perfetto_config_inode_file_cpp",
-               ":protos_perfetto_config_inode_file_lite",
-               ":protos_perfetto_config_inode_file_zero",
-               ":protos_perfetto_config_lite",
-               ":protos_perfetto_config_power_cpp",
-               ":protos_perfetto_config_power_lite",
-               ":protos_perfetto_config_power_zero",
-               ":protos_perfetto_config_process_stats_cpp",
-               ":protos_perfetto_config_process_stats_lite",
-               ":protos_perfetto_config_process_stats_zero",
-               ":protos_perfetto_config_profiling_cpp",
-               ":protos_perfetto_config_profiling_lite",
-               ":protos_perfetto_config_profiling_zero",
-               ":protos_perfetto_config_sys_stats_cpp",
-               ":protos_perfetto_config_sys_stats_lite",
-               ":protos_perfetto_config_sys_stats_zero",
-               ":protos_perfetto_config_zero",
-               ":protos_perfetto_ipc_ipc",
-               ":protos_perfetto_ipc_wire_protocol_cpp",
-               ":protos_perfetto_ipc_wire_protocol_zero",
-               ":protos_perfetto_trace_android_zero",
-               ":protos_perfetto_trace_chrome_zero",
-               ":protos_perfetto_trace_filesystem_zero",
-               ":protos_perfetto_trace_ftrace_zero",
-               ":protos_perfetto_trace_gpu_zero",
-               ":protos_perfetto_trace_interned_data_zero",
-               ":protos_perfetto_trace_minimal_zero",
-               ":protos_perfetto_trace_non_minimal_zero",
-               ":protos_perfetto_trace_perfetto_zero",
-               ":protos_perfetto_trace_power_zero",
-               ":protos_perfetto_trace_profiling_zero",
-               ":protos_perfetto_trace_ps_zero",
-               ":protos_perfetto_trace_sys_stats_zero",
-               ":protos_perfetto_trace_track_event_zero",
-               ":src_perfetto_cmd_protos",
-           ] + PERFETTO_CONFIG.deps.protobuf_lite +
-           PERFETTO_CONFIG.deps.zlib,
+        ":src_perfetto_cmd_protos",
+    ] + PERFETTO_CONFIG.deps.zlib,
 )
 
 # GN target: //src/trace_processor:trace_processor
@@ -2627,16 +2648,7 @@ perfetto_cc_binary(
 perfetto_cc_library(
     name = "libpprofbuilder",
     srcs = [
-        ":src_base_base",
-        ":src_protozero_protozero",
-        ":src_trace_processor_common",
-        ":src_trace_processor_db_lib",
-        ":src_trace_processor_export_json",
-        ":src_trace_processor_lib",
-        ":src_trace_processor_metrics_lib",
-        ":src_trace_processor_sqlite_sqlite",
-        ":src_trace_processor_storage",
-        ":src_trace_processor_tables_tables",
+        ":src_profiling_deobfuscator",
         ":tools_trace_to_text_pprofbuilder",
         ":tools_trace_to_text_symbolizer",
         ":tools_trace_to_text_utils",
@@ -2644,8 +2656,7 @@ perfetto_cc_library(
     hdrs = [
         ":include_perfetto_base_base",
         ":include_perfetto_ext_base_base",
-        ":include_perfetto_ext_trace_processor_export_json",
-        ":include_perfetto_ext_traced_sys_stats_counters",
+        ":include_perfetto_profiling_deobfuscator",
         ":include_perfetto_profiling_symbolizer",
         ":include_perfetto_protozero_protozero",
         ":include_perfetto_trace_processor_basic_types",
@@ -2656,64 +2667,32 @@ perfetto_cc_library(
         "//visibility:public",
     ],
     deps = [
-               ":protos_perfetto_common_lite",
-               ":protos_perfetto_common_zero",
-               ":protos_perfetto_config_android_lite",
-               ":protos_perfetto_config_android_zero",
-               ":protos_perfetto_config_ftrace_lite",
-               ":protos_perfetto_config_ftrace_zero",
-               ":protos_perfetto_config_gpu_lite",
-               ":protos_perfetto_config_gpu_zero",
-               ":protos_perfetto_config_inode_file_lite",
-               ":protos_perfetto_config_inode_file_zero",
-               ":protos_perfetto_config_lite",
-               ":protos_perfetto_config_power_lite",
-               ":protos_perfetto_config_power_zero",
-               ":protos_perfetto_config_process_stats_lite",
-               ":protos_perfetto_config_process_stats_zero",
-               ":protos_perfetto_config_profiling_lite",
-               ":protos_perfetto_config_profiling_zero",
-               ":protos_perfetto_config_sys_stats_lite",
-               ":protos_perfetto_config_sys_stats_zero",
-               ":protos_perfetto_config_zero",
-               ":protos_perfetto_metrics_android_zero",
-               ":protos_perfetto_metrics_zero",
-               ":protos_perfetto_trace_android_lite",
-               ":protos_perfetto_trace_android_zero",
-               ":protos_perfetto_trace_chrome_lite",
-               ":protos_perfetto_trace_chrome_zero",
-               ":protos_perfetto_trace_filesystem_lite",
-               ":protos_perfetto_trace_filesystem_zero",
-               ":protos_perfetto_trace_ftrace_lite",
-               ":protos_perfetto_trace_ftrace_zero",
-               ":protos_perfetto_trace_gpu_lite",
-               ":protos_perfetto_trace_gpu_zero",
-               ":protos_perfetto_trace_interned_data_lite",
-               ":protos_perfetto_trace_interned_data_zero",
-               ":protos_perfetto_trace_minimal_lite",
-               ":protos_perfetto_trace_minimal_zero",
-               ":protos_perfetto_trace_non_minimal_lite",
-               ":protos_perfetto_trace_non_minimal_zero",
-               ":protos_perfetto_trace_perfetto_lite",
-               ":protos_perfetto_trace_perfetto_zero",
-               ":protos_perfetto_trace_power_lite",
-               ":protos_perfetto_trace_power_zero",
-               ":protos_perfetto_trace_processor_metrics_impl_zero",
-               ":protos_perfetto_trace_profiling_lite",
-               ":protos_perfetto_trace_profiling_zero",
-               ":protos_perfetto_trace_ps_lite",
-               ":protos_perfetto_trace_ps_zero",
-               ":protos_perfetto_trace_sys_stats_lite",
-               ":protos_perfetto_trace_sys_stats_zero",
-               ":protos_perfetto_trace_track_event_lite",
-               ":protos_perfetto_trace_track_event_zero",
-               ":protos_third_party_pprof_lite",
-           ] + PERFETTO_CONFIG.deps.jsoncpp +
-           PERFETTO_CONFIG.deps.sqlite +
-           PERFETTO_CONFIG.deps.sqlite_ext_percentile +
-           PERFETTO_CONFIG.deps.zlib + [
-        ":cc_merged_sql_metrics",
-    ],
+        ":protos_perfetto_common_zero",
+        ":protos_perfetto_config_android_zero",
+        ":protos_perfetto_config_ftrace_zero",
+        ":protos_perfetto_config_gpu_zero",
+        ":protos_perfetto_config_inode_file_zero",
+        ":protos_perfetto_config_power_zero",
+        ":protos_perfetto_config_process_stats_zero",
+        ":protos_perfetto_config_profiling_zero",
+        ":protos_perfetto_config_sys_stats_zero",
+        ":protos_perfetto_config_zero",
+        ":protos_perfetto_trace_android_zero",
+        ":protos_perfetto_trace_chrome_zero",
+        ":protos_perfetto_trace_filesystem_zero",
+        ":protos_perfetto_trace_ftrace_zero",
+        ":protos_perfetto_trace_gpu_zero",
+        ":protos_perfetto_trace_interned_data_zero",
+        ":protos_perfetto_trace_minimal_zero",
+        ":protos_perfetto_trace_non_minimal_zero",
+        ":protos_perfetto_trace_perfetto_zero",
+        ":protos_perfetto_trace_power_zero",
+        ":protos_perfetto_trace_profiling_zero",
+        ":protos_perfetto_trace_ps_zero",
+        ":protos_perfetto_trace_sys_stats_zero",
+        ":protos_perfetto_trace_track_event_zero",
+        ":protos_third_party_pprof_zero",
+    ] + PERFETTO_CONFIG.deps.zlib,
 )
 
 # GN target: //tools/trace_to_text:trace_to_text
@@ -2724,12 +2703,14 @@ perfetto_cc_binary(
         ":include_perfetto_ext_base_base",
         ":include_perfetto_ext_trace_processor_export_json",
         ":include_perfetto_ext_traced_sys_stats_counters",
+        ":include_perfetto_profiling_deobfuscator",
         ":include_perfetto_profiling_symbolizer",
         ":include_perfetto_protozero_protozero",
         ":include_perfetto_trace_processor_basic_types",
         ":include_perfetto_trace_processor_storage",
         ":include_perfetto_trace_processor_trace_processor",
         ":src_base_base",
+        ":src_profiling_deobfuscator",
         ":src_protozero_protozero",
         ":src_trace_processor_common",
         ":src_trace_processor_db_lib",
@@ -2750,58 +2731,34 @@ perfetto_cc_binary(
         "//visibility:public",
     ],
     deps = [
-               ":protos_perfetto_common_lite",
                ":protos_perfetto_common_zero",
-               ":protos_perfetto_config_android_lite",
                ":protos_perfetto_config_android_zero",
-               ":protos_perfetto_config_ftrace_lite",
                ":protos_perfetto_config_ftrace_zero",
-               ":protos_perfetto_config_gpu_lite",
                ":protos_perfetto_config_gpu_zero",
-               ":protos_perfetto_config_inode_file_lite",
                ":protos_perfetto_config_inode_file_zero",
-               ":protos_perfetto_config_lite",
-               ":protos_perfetto_config_power_lite",
                ":protos_perfetto_config_power_zero",
-               ":protos_perfetto_config_process_stats_lite",
                ":protos_perfetto_config_process_stats_zero",
-               ":protos_perfetto_config_profiling_lite",
                ":protos_perfetto_config_profiling_zero",
-               ":protos_perfetto_config_sys_stats_lite",
                ":protos_perfetto_config_sys_stats_zero",
                ":protos_perfetto_config_zero",
                ":protos_perfetto_metrics_android_zero",
                ":protos_perfetto_metrics_zero",
-               ":protos_perfetto_trace_android_lite",
                ":protos_perfetto_trace_android_zero",
-               ":protos_perfetto_trace_chrome_lite",
                ":protos_perfetto_trace_chrome_zero",
-               ":protos_perfetto_trace_filesystem_lite",
                ":protos_perfetto_trace_filesystem_zero",
-               ":protos_perfetto_trace_ftrace_lite",
                ":protos_perfetto_trace_ftrace_zero",
-               ":protos_perfetto_trace_gpu_lite",
                ":protos_perfetto_trace_gpu_zero",
-               ":protos_perfetto_trace_interned_data_lite",
                ":protos_perfetto_trace_interned_data_zero",
-               ":protos_perfetto_trace_minimal_lite",
                ":protos_perfetto_trace_minimal_zero",
-               ":protos_perfetto_trace_non_minimal_lite",
                ":protos_perfetto_trace_non_minimal_zero",
-               ":protos_perfetto_trace_perfetto_lite",
                ":protos_perfetto_trace_perfetto_zero",
-               ":protos_perfetto_trace_power_lite",
                ":protos_perfetto_trace_power_zero",
                ":protos_perfetto_trace_processor_metrics_impl_zero",
-               ":protos_perfetto_trace_profiling_lite",
                ":protos_perfetto_trace_profiling_zero",
-               ":protos_perfetto_trace_ps_lite",
                ":protos_perfetto_trace_ps_zero",
-               ":protos_perfetto_trace_sys_stats_lite",
                ":protos_perfetto_trace_sys_stats_zero",
-               ":protos_perfetto_trace_track_event_lite",
                ":protos_perfetto_trace_track_event_zero",
-               ":protos_third_party_pprof_lite",
+               ":protos_third_party_pprof_zero",
            ] + PERFETTO_CONFIG.deps.jsoncpp +
            PERFETTO_CONFIG.deps.protobuf_full +
            PERFETTO_CONFIG.deps.sqlite +

@@ -54,8 +54,18 @@
 //
 //       int main() {
 //         perfetto::TrackEvent::Register();
-//         TRACK_EVENT("category", "MyEvent");
-//         ...
+//
+//         // A basic track event with just a name.
+//         TRACE_EVENT("category", "MyEvent");
+//
+//         // A track event with (up to two) debug annotations.
+//         TRACE_EVENT("category", "MyEvent", "parameter", 42);
+//
+//         // A track event with a strongly typed parameter.
+//         TRACE_EVENT("category", "MyEvent", [](perfetto::EventContext ctx) {
+//           ctx.event()->set_foo(42);
+//           ctx.event()->set_bar(.5f);
+//         });
 //       }
 //
 // ====================
@@ -144,13 +154,8 @@
 
 // Begin a thread-scoped slice which gets automatically closed when going out of
 // scope.
-#define TRACE_EVENT(category, name, ...)               \
-  TRACE_EVENT_BEGIN(category, name, ##__VA_ARGS__);    \
-  struct {                                             \
-    struct EventFinalizer {                            \
-      ~EventFinalizer() { TRACE_EVENT_END(category); } \
-    } finalizer;                                       \
-  } PERFETTO_INTERNAL_UID(scoped_event)
+#define TRACE_EVENT(category, name, ...) \
+  PERFETTO_INTERNAL_SCOPED_TRACK_EVENT(category, name, ##__VA_ARGS__)
 
 // Emit a thread-scoped slice which has zero duration.
 // TODO(skyostil): Add support for process-wide and global instant events.
