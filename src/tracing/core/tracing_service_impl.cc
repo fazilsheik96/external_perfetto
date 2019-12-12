@@ -75,7 +75,7 @@ namespace {
 constexpr int kMaxBuffersPerConsumer = 128;
 constexpr base::TimeMillis kSnapshotsInterval(10 * 1000);
 constexpr int kDefaultWriteIntoFilePeriodMs = 5000;
-constexpr int kMaxConcurrentTracingSessions = 5;
+constexpr int kMaxConcurrentTracingSessions = 15;
 
 constexpr uint32_t kMillisPerHour = 3600000;
 constexpr uint32_t kMaxTracingDurationMillis = 7 * 24 * kMillisPerHour;
@@ -573,9 +573,10 @@ bool TracingServiceImpl::EnableTracing(ConsumerEndpointImpl* consumer,
   tracing_session->state = TracingSession::CONFIGURED;
   PERFETTO_LOG(
       "Configured tracing, #sources:%zu, duration:%d ms, #buffers:%d, total "
-      "buffer size:%zu KB, total sessions:%zu",
+      "buffer size:%zu KB, total sessions:%zu session name: %s",
       cfg.data_sources().size(), tracing_session->config.duration_ms(),
-      cfg.buffers_size(), total_buf_size_kb, tracing_sessions_.size());
+      cfg.buffers_size(), total_buf_size_kb, tracing_sessions_.size(),
+      cfg.unique_session_name().c_str());
 
   // Start the data sources, unless this is a case of early setup + fast
   // triggering, either through TraceConfig.deferred_start or
@@ -2161,7 +2162,7 @@ void TracingServiceImpl::UpdateMemoryGuardrail() {
 
   // Set the guard rail to 32MB + the sum of all the buffers over a 30 second
   // interval.
-  uint64_t guardrail = 32 * 1024 * 1024 + total_buffer_bytes;
+  uint64_t guardrail = base::kWatchdogDefaultMemorySlack + total_buffer_bytes;
   base::Watchdog::GetInstance()->SetMemoryLimit(guardrail, 30 * 1000);
 #endif
 }

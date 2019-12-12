@@ -21,12 +21,21 @@
 
 #include "perfetto/protozero/field.h"
 #include "src/trace_processor/importers/proto/proto_incremental_state.h"
+#include "src/trace_processor/importers/proto/vulkan_memory_tracker.h"
 #include "src/trace_processor/trace_storage.h"
-#include "src/trace_processor/vulkan_memory_tracker.h"
 
 #include "protos/perfetto/trace/gpu/vulkan_memory_event.pbzero.h"
 
 namespace perfetto {
+
+namespace protos {
+namespace pbzero {
+
+class GpuRenderStageEvent_Decoder;
+
+}  // namespace pbzero
+}  // namespace protos
+
 namespace trace_processor {
 
 class TraceProcessorContext;
@@ -57,8 +66,14 @@ class GraphicsEventParser {
   void UpdateVulkanMemoryAllocationCounters(UniquePid,
                                             const VulkanMemoryEvent::Decoder&);
 
+  void ParseVulkanApiEvent(ConstBytes);
+
  private:
+  const StringId GetFullStageName(
+      const protos::pbzero::GpuRenderStageEvent_Decoder& event);
+
   TraceProcessorContext* const context_;
+  VulkanMemoryTracker vulkan_memory_tracker_;
   // For GpuCounterEvent
   std::unordered_map<uint32_t, TrackId> gpu_counter_track_ids_;
   // For GpuRenderStageEvent
@@ -71,6 +86,13 @@ class GraphicsEventParser {
   const StringId no_layer_name_name_id_;
   const StringId layer_name_key_id_;
   std::array<StringId, 14> event_type_name_ids_;
+  int64_t previous_timestamp_ = 0;
+  char present_frame_[4096];
+  char present_frame_layer_[4096];
+  StringId present_event_name_id_;
+  base::StringWriter present_frame_name_;
+  base::StringWriter present_frame_layer_name_;
+  TrackId present_track_id_;
   // For VulkanMemoryEvent
   std::unordered_map<VulkanMemoryEvent::AllocationScope,
                      int64_t /*counter_value*/,
@@ -86,6 +108,8 @@ class GraphicsEventParser {
   const StringId tag_id_;
   const StringId log_message_id_;
   std::array<StringId, 7> log_severity_ids_;
+  // For Vulkan events.
+  std::unordered_map<uint64_t, ::protozero::ConstChars> debug_marker_names_;
 };
 }  // namespace trace_processor
 }  // namespace perfetto
