@@ -25,7 +25,6 @@
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/importers/proto/android_probes_module.h"
-#include "src/trace_processor/importers/proto/graphics_event_module.h"
 #include "src/trace_processor/importers/proto/heap_graph_module.h"
 #include "src/trace_processor/importers/proto/proto_importer_module.h"
 #include "src/trace_processor/importers/proto/proto_trace_parser.h"
@@ -34,12 +33,12 @@
 #include "src/trace_processor/importers/systrace/systrace_parser.h"
 #include "src/trace_processor/metadata.h"
 #include "src/trace_processor/process_tracker.h"
+#include "src/trace_processor/register_additional_modules.h"
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/stack_profile_tracker.h"
 #include "src/trace_processor/trace_sorter.h"
 #include "src/trace_processor/trace_storage.h"
 #include "src/trace_processor/track_tracker.h"
-#include "src/trace_processor/vulkan_memory_tracker.h"
 #include "test/gtest_and_gmock.h"
 
 #include "protos/perfetto/common/sys_stats_counters.pbzero.h"
@@ -257,22 +256,25 @@ class ProtoTraceParserTest : public ::testing::Test {
     context_.parser.reset(new ProtoTraceParser(&context_));
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
     context_.systrace_parser.reset(new SystraceParser(&context_));
+    context_.modules.emplace_back(new FtraceModuleImpl(&context_));
+#else
+    context_.modules.emplace_back(new FtraceModule());
 #endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
-#if PERFETTO_BUILDFLAG(PERFETTO_TP_GRAPHICS)
-    context_.vulkan_memory_tracker.reset(new VulkanMemoryTracker(&context_));
-#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_GRAPHICS)
-    context_.ftrace_module.reset(
-        new ProtoImporterModule<FtraceModule>(&context_));
-    context_.track_event_module.reset(
-        new ProtoImporterModule<TrackEventModule>(&context_));
-    context_.system_probes_module.reset(
-        new ProtoImporterModule<SystemProbesModule>(&context_));
-    context_.android_probes_module.reset(
-        new ProtoImporterModule<AndroidProbesModule>(&context_));
-    context_.heap_graph_module.reset(
-        new ProtoImporterModule<HeapGraphModule>(&context_));
-    context_.graphics_event_module.reset(
-        new ProtoImporterModule<GraphicsEventModule>(&context_));
+    context_.ftrace_module =
+        static_cast<FtraceModule*>(context_.modules.back().get());
+
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_HEAP_GRAPHS)
+    context_.modules.emplace_back(new HeapGraphModule(&context_));
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_HEAP_GRAPHS)
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_ANDROID_PROBES)
+    context_.modules.emplace_back(new AndroidProbesModule(&context_));
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_ANDROID_PROBES)
+#if PERFETTO_BUILDFLAG(PERFETTO_TP_SYSTEM_PROBES)
+    context_.modules.emplace_back(new SystemProbesModule(&context_));
+#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_SYSTEM_PROBES)
+    context_.modules.emplace_back(new TrackEventModule(&context_));
+
+    RegisterAdditionalModules(&context_);
   }
 
   void ResetTraceBuffers() {

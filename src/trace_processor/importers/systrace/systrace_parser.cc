@@ -74,6 +74,26 @@ void SystraceParser::ParseZeroEvent(int64_t ts,
   context_->systrace_parser->ParseSystracePoint(ts, pid, point);
 }
 
+void SystraceParser::ParseSdeTracingMarkWrite(int64_t ts,
+                                              uint32_t pid,
+                                              char trace_type,
+                                              base::StringView trace_name,
+                                              uint32_t tgid,
+                                              int64_t value) {
+  systrace_utils::SystraceTracePoint point{};
+  point.name = trace_name;
+  point.tgid = tgid;
+  point.value = value;
+  point.phase = trace_type;
+
+  if (trace_type != 'B' && trace_type != 'E' && trace_type != 'C') {
+    context_->storage->IncrementStats(stats::systrace_parse_failure);
+    return;
+  }
+
+  context_->systrace_parser->ParseSystracePoint(ts, pid, point);
+}
+
 void SystraceParser::ParseSystracePoint(
     int64_t ts,
     uint32_t pid,
@@ -81,13 +101,29 @@ void SystraceParser::ParseSystracePoint(
   switch (point.phase) {
     case 'B': {
       StringId name_id = context_->storage->InternString(point.name);
-      context_->slice_tracker->BeginAndroid(ts, pid, point.tgid, 0 /*cat_id*/,
-                                            name_id);
+      UniqueTid utid = context_->process_tracker->UpdateThread(pid, point.tgid);
+      TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
+      context_->slice_tracker->Begin(ts, track_id, utid, RefType::kRefUtid,
+                                     0 /* cat */, name_id);
       break;
     }
 
     case 'E': {
-      context_->slice_tracker->EndAndroid(ts, pid, point.tgid);
+      // |point.tgid| can be 0 in older android versions where the end event
+      // would not contain the value.
+      UniqueTid utid;
+      if (point.tgid == 0) {
+        // If we haven't seen this thread before, there can't have been a Begin
+        // event for it so just ignore the event.
+        auto opt_utid = context_->process_tracker->GetThreadOrNull(pid);
+        if (!opt_utid)
+          break;
+        utid = *opt_utid;
+      } else {
+        utid = context_->process_tracker->UpdateThread(pid, point.tgid);
+      }
+      TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
+      context_->slice_tracker->End(ts, track_id);
       break;
     }
 
