@@ -94,20 +94,28 @@ void AndroidProbesParser::ParsePowerRails(int64_t ts, ConstBytes blob) {
   }
 
   if (evt.has_energy_data()) {
-    for (auto it = evt.energy_data(); it; ++it) {
-      protos::pbzero::PowerRails::EnergyData::Decoder desc(*it);
-      if (desc.index() < power_rails_strs_id_.size()) {
-        int64_t actual_ts =
-            desc.has_timestamp_ms()
-                ? static_cast<int64_t>(desc.timestamp_ms()) * 1000000
-                : ts;
-        TrackId track = context_->track_tracker->InternGlobalCounterTrack(
-            power_rails_strs_id_[desc.index()]);
-        context_->event_tracker->PushCounter(actual_ts, desc.energy(), track);
-      } else {
-        context_->storage->IncrementStats(stats::power_rail_unknown_index);
-      }
+    // Because we have some special code in the tokenization phase, we
+    // will only every get one EnergyData message per packet. Therefore,
+    // we can just read the data directly.
+    auto it = evt.energy_data();
+    protos::pbzero::PowerRails::EnergyData::Decoder desc(*it);
+    if (desc.index() < power_rails_strs_id_.size()) {
+      // The tokenization makes sure that this field is always present and
+      // is equal to the packet's timestamp (as the packet was forged in
+      // the tokenizer).
+      PERFETTO_DCHECK(desc.has_timestamp_ms());
+      PERFETTO_DCHECK(ts / 1000000 ==
+                      static_cast<int64_t>(desc.timestamp_ms()));
+
+      TrackId track = context_->track_tracker->InternGlobalCounterTrack(
+          power_rails_strs_id_[desc.index()]);
+      context_->event_tracker->PushCounter(ts, desc.energy(), track);
+    } else {
+      context_->storage->IncrementStats(stats::power_rail_unknown_index);
     }
+
+    // DCHECK that we only got one message.
+    PERFETTO_DCHECK(!++it);
   }
 }
 
@@ -218,12 +226,13 @@ void AndroidProbesParser::ParseAndroidPackagesList(ConstBytes blob) {
   for (auto it = pkg_list.packages(); it; ++it) {
     // Insert a placeholder metadata entry, which will be overwritten by the
     // arg_set_id when the arg tracker is flushed.
-    RowId row_id = context_->storage->AppendMetadata(
+    uint32_t row = context_->storage->AppendMetadata(
         metadata::android_packages_list, Variadic::Integer(0));
 
-    auto add_arg = [this, row_id](base::StringView name, Variadic value) {
+    auto add_arg = [this, row](base::StringView name, Variadic value) {
       StringId key_id = context_->storage->InternString(name);
-      context_->args_tracker->AddArg(row_id, key_id, key_id, value);
+      context_->args_tracker->AddArg(TableId::kMetadataTable, row, key_id,
+                                     key_id, value);
     };
     protos::pbzero::PackagesList_PackageInfo::Decoder pkg(*it);
     add_arg("name",

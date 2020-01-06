@@ -19,7 +19,7 @@
 #include "perfetto/base/logging.h"
 #include "perfetto/protozero/proto_decoder.h"
 #include "src/trace_processor/args_tracker.h"
-#include "src/trace_processor/binder_tracker.h"
+#include "src/trace_processor/importers/ftrace/binder_tracker.h"
 #include "src/trace_processor/importers/systrace/systrace_parser.h"
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/stats.h"
@@ -60,6 +60,7 @@ const char kKthreaddName[] = "kthreadd";
 
 FtraceParser::FtraceParser(TraceProcessorContext* context)
     : context_(context),
+      binder_tracker_(context),
       sched_wakeup_name_id_(context->storage->InternString("sched_wakeup")),
       sched_waking_name_id_(context->storage->InternString("sched_waking")),
       cpu_freq_name_id_(context->storage->InternString("cpufreq")),
@@ -188,26 +189,28 @@ util::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
                                             const TimestampedTracePiece& ttp) {
   using protos::pbzero::FtraceEvent;
   int64_t ts = ttp.timestamp;
+  SchedEventTracker* sched_tracker = SchedEventTracker::GetOrCreate(context_);
 
   // Handle the (optional) alternative encoding format for sched_switch.
-  if (ttp.inline_event.type == InlineEvent::Type::kSchedSwitch) {
-    const auto& event = ttp.inline_event.sched_switch;
-    context_->sched_tracker->PushSchedSwitchCompact(
-        cpu, ts, event.prev_state, static_cast<uint32_t>(event.next_pid),
-        event.next_prio, event.next_comm);
+  if (ttp.type == TimestampedTracePiece::Type::kInlineSchedSwitch) {
+    const auto& event = ttp.sched_switch;
+    sched_tracker->PushSchedSwitchCompact(cpu, ts, event.prev_state,
+                                          static_cast<uint32_t>(event.next_pid),
+                                          event.next_prio, event.next_comm);
     return util::OkStatus();
   }
 
   // Handle the (optional) alternative encoding format for sched_waking.
-  if (ttp.inline_event.type == InlineEvent::Type::kSchedWaking) {
-    const auto& event = ttp.inline_event.sched_waking;
-    context_->sched_tracker->PushSchedWakingCompact(
+  if (ttp.type == TimestampedTracePiece::Type::kInlineSchedWaking) {
+    const auto& event = ttp.sched_waking;
+    sched_tracker->PushSchedWakingCompact(
         cpu, ts, static_cast<uint32_t>(event.pid), event.target_cpu, event.prio,
         event.comm);
     return util::OkStatus();
   }
 
-  const TraceBlobView& event = ttp.blob_view;
+  PERFETTO_DCHECK(ttp.type == TimestampedTracePiece::Type::kFtraceEvent);
+  const TraceBlobView& event = ttp.ftrace_event;
   ProtoDecoder decoder(event.data(), event.length());
   uint64_t raw_pid = 0;
   if (auto pid_field = decoder.FindField(FtraceEvent::kPidFieldNumber)) {
@@ -360,22 +363,24 @@ void FtraceParser::ParseGenericFtrace(int64_t ts,
   protos::pbzero::GenericFtraceEvent::Decoder evt(blob.data, blob.size);
   StringId event_id = context_->storage->InternString(evt.event_name());
   UniqueTid utid = context_->process_tracker->GetOrCreateThread(tid);
-  RowId row_id = context_->storage->mutable_raw_events()->AddRawEvent(
+  uint32_t row = context_->storage->mutable_raw_events()->AddRawEvent(
       ts, event_id, cpu, utid);
 
   for (auto it = evt.field(); it; ++it) {
     protos::pbzero::GenericFtraceEvent::Field::Decoder fld(*it);
     auto field_name_id = context_->storage->InternString(fld.name());
     if (fld.has_int_value()) {
-      context_->args_tracker->AddArg(row_id, field_name_id, field_name_id,
+      context_->args_tracker->AddArg(TableId::kRawEvents, row, field_name_id,
+                                     field_name_id,
                                      Variadic::Integer(fld.int_value()));
     } else if (fld.has_uint_value()) {
       context_->args_tracker->AddArg(
-          row_id, field_name_id, field_name_id,
+          TableId::kRawEvents, row, field_name_id, field_name_id,
           Variadic::Integer(static_cast<int64_t>(fld.uint_value())));
     } else if (fld.has_str_value()) {
       StringId str_value = context_->storage->InternString(fld.str_value());
-      context_->args_tracker->AddArg(row_id, field_name_id, field_name_id,
+      context_->args_tracker->AddArg(TableId::kRawEvents, row, field_name_id,
+                                     field_name_id,
                                      Variadic::String(str_value));
     }
   }
@@ -396,7 +401,7 @@ void FtraceParser::ParseTypedFtraceToRaw(uint32_t ftrace_id,
   MessageDescriptor* m = GetMessageDescriptorForId(ftrace_id);
   const auto& message_strings = ftrace_message_strings_[ftrace_id];
   UniqueTid utid = context_->process_tracker->GetOrCreateThread(tid);
-  RowId raw_event_id = context_->storage->mutable_raw_events()->AddRawEvent(
+  uint32_t raw_event_row = context_->storage->mutable_raw_events()->AddRawEvent(
       ts, message_strings.message_name_id, cpu, utid);
   for (auto fld = decoder.ReadField(); fld.valid(); fld = decoder.ReadField()) {
     if (PERFETTO_UNLIKELY(fld.id() >= kMaxFtraceEventFields)) {
@@ -416,7 +421,8 @@ void FtraceParser::ParseTypedFtraceToRaw(uint32_t ftrace_id,
       case ProtoSchemaType::kSint64:
       case ProtoSchemaType::kBool:
       case ProtoSchemaType::kEnum: {
-        context_->args_tracker->AddArg(raw_event_id, name_id, name_id,
+        context_->args_tracker->AddArg(TableId::kRawEvents, raw_event_row,
+                                       name_id, name_id,
                                        Variadic::Integer(fld.as_int64()));
         break;
       }
@@ -428,25 +434,27 @@ void FtraceParser::ParseTypedFtraceToRaw(uint32_t ftrace_id,
         // as a signed 64 bit integers (but the translation back to ftrace
         // refers to this storage directly).
         context_->args_tracker->AddArg(
-            raw_event_id, name_id, name_id,
+            TableId::kRawEvents, raw_event_row, name_id, name_id,
             Variadic::UnsignedInteger(fld.as_uint64()));
         break;
       }
       case ProtoSchemaType::kString:
       case ProtoSchemaType::kBytes: {
         StringId value = context_->storage->InternString(fld.as_string());
-        context_->args_tracker->AddArg(raw_event_id, name_id, name_id,
+        context_->args_tracker->AddArg(TableId::kRawEvents, raw_event_row,
+                                       name_id, name_id,
                                        Variadic::String(value));
         break;
       }
       case ProtoSchemaType::kDouble: {
-        context_->args_tracker->AddArg(raw_event_id, name_id, name_id,
+        context_->args_tracker->AddArg(TableId::kRawEvents, raw_event_row,
+                                       name_id, name_id,
                                        Variadic::Real(fld.as_double()));
         break;
       }
       case ProtoSchemaType::kFloat: {
         context_->args_tracker->AddArg(
-            raw_event_id, name_id, name_id,
+            TableId::kRawEvents, raw_event_row, name_id, name_id,
             Variadic::Real(static_cast<double>(fld.as_float())));
         break;
       }
@@ -465,7 +473,7 @@ void FtraceParser::ParseSchedSwitch(uint32_t cpu, int64_t ts, ConstBytes blob) {
   protos::pbzero::SchedSwitchFtraceEvent::Decoder ss(blob.data, blob.size);
   uint32_t prev_pid = static_cast<uint32_t>(ss.prev_pid());
   uint32_t next_pid = static_cast<uint32_t>(ss.next_pid());
-  context_->sched_tracker->PushSchedSwitch(
+  SchedEventTracker::GetOrCreate(context_)->PushSchedSwitch(
       cpu, ts, prev_pid, ss.prev_comm(), ss.prev_prio(), ss.prev_state(),
       next_pid, ss.next_comm(), ss.next_prio());
 }
@@ -523,14 +531,14 @@ void FtraceParser::ParseCpuIdle(int64_t ts, ConstBytes blob) {
 
 void FtraceParser::ParsePrint(int64_t ts, uint32_t pid, ConstBytes blob) {
   protos::pbzero::PrintFtraceEvent::Decoder evt(blob.data, blob.size);
-  context_->systrace_parser->ParsePrintEvent(ts, pid, evt.buf());
+  SystraceParser::GetOrCreate(context_)->ParsePrintEvent(ts, pid, evt.buf());
 }
 
 void FtraceParser::ParseZero(int64_t ts, uint32_t pid, ConstBytes blob) {
   protos::pbzero::ZeroFtraceEvent::Decoder evt(blob.data, blob.size);
   uint32_t tgid = static_cast<uint32_t>(evt.pid());
-  context_->systrace_parser->ParseZeroEvent(ts, pid, evt.flag(), evt.name(),
-                                            tgid, evt.value());
+  SystraceParser::GetOrCreate(context_)->ParseZeroEvent(
+      ts, pid, evt.flag(), evt.name(), tgid, evt.value());
 }
 
 void FtraceParser::ParseSdeTracingMarkWrite(int64_t ts,
@@ -538,10 +546,15 @@ void FtraceParser::ParseSdeTracingMarkWrite(int64_t ts,
                                             ConstBytes blob) {
   protos::pbzero::SdeTracingMarkWriteFtraceEvent::Decoder evt(blob.data,
                                                               blob.size);
+  if (!evt.has_trace_type() && !evt.has_trace_begin()) {
+    context_->storage->IncrementStats(stats::systrace_parse_failure);
+    return;
+  }
+
   uint32_t tgid = static_cast<uint32_t>(evt.pid());
-  context_->systrace_parser->ParseSdeTracingMarkWrite(
-      ts, pid, static_cast<char>(evt.trace_type()), evt.trace_name(),
-      tgid, evt.value());
+  SystraceParser::GetOrCreate(context_)->ParseSdeTracingMarkWrite(
+      ts, pid, static_cast<char>(evt.trace_type()), evt.trace_begin(),
+      evt.trace_name(), tgid, evt.value());
 }
 
 void FtraceParser::ParseRssStat(int64_t ts, uint32_t pid, ConstBytes blob) {
@@ -651,14 +664,14 @@ void FtraceParser::ParseLowmemoryKill(int64_t ts, ConstBytes blob) {
   if (!opt_utid)
     return;
 
-  auto row_id = context_->event_tracker->PushInstant(
+  uint32_t row = context_->event_tracker->PushInstant(
       ts, lmk_id_, 0, opt_utid.value(), RefType::kRefUtid, true);
 
   // Store the comm as an arg.
   auto comm_id = context_->storage->InternString(
       lmk.has_comm() ? lmk.comm() : base::StringView());
-  context_->args_tracker->AddArg(row_id, comm_name_id_, comm_name_id_,
-                                 Variadic::String(comm_id));
+  context_->args_tracker->AddArg(TableId::kInstants, row, comm_name_id_,
+                                 comm_name_id_, Variadic::String(comm_id));
 }
 
 void FtraceParser::ParseOOMScoreAdjUpdate(int64_t ts, ConstBytes blob) {
@@ -702,10 +715,11 @@ void FtraceParser::ParseSysEvent(int64_t ts,
   uint32_t syscall_num = static_cast<uint32_t>(evt.id());
   UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
 
+  SyscallTracker* syscall_tracker = SyscallTracker::GetOrCreate(context_);
   if (is_enter) {
-    context_->syscall_tracker->Enter(ts, utid, syscall_num);
+    syscall_tracker->Enter(ts, utid, syscall_num);
   } else {
-    context_->syscall_tracker->Exit(ts, utid, syscall_num);
+    syscall_tracker->Exit(ts, utid, syscall_num);
   }
 
   // We are reusing the same function for sys_enter and sys_exit.
@@ -763,7 +777,7 @@ void FtraceParser::ParseBinderTransaction(int64_t timestamp,
                                           ConstBytes blob) {
   protos::pbzero::BinderTransactionFtraceEvent::Decoder evt(blob.data,
                                                             blob.size);
-  context_->binder_tracker->Transaction(timestamp, pid);
+  binder_tracker_.Transaction(timestamp, pid);
 }
 
 void FtraceParser::ParseBinderTransactionReceived(int64_t timestamp,
@@ -771,7 +785,7 @@ void FtraceParser::ParseBinderTransactionReceived(int64_t timestamp,
                                                   ConstBytes blob) {
   protos::pbzero::BinderTransactionReceivedFtraceEvent::Decoder evt(blob.data,
                                                                     blob.size);
-  context_->binder_tracker->TransactionReceived(timestamp, pid);
+  binder_tracker_.TransactionReceived(timestamp, pid);
 }
 
 void FtraceParser::ParseBinderTransactionAllocBuf(int64_t timestamp,
@@ -779,28 +793,28 @@ void FtraceParser::ParseBinderTransactionAllocBuf(int64_t timestamp,
                                                   ConstBytes blob) {
   protos::pbzero::BinderTransactionAllocBufFtraceEvent::Decoder evt(blob.data,
                                                                     blob.size);
-  context_->binder_tracker->TransactionAllocBuf(timestamp, pid);
+  binder_tracker_.TransactionAllocBuf(timestamp, pid);
 }
 
 void FtraceParser::ParseBinderLocked(int64_t timestamp,
                                      uint32_t pid,
                                      ConstBytes blob) {
   protos::pbzero::BinderLockedFtraceEvent::Decoder evt(blob.data, blob.size);
-  context_->binder_tracker->Locked(timestamp, pid);
+  binder_tracker_.Locked(timestamp, pid);
 }
 
 void FtraceParser::ParseBinderLock(int64_t timestamp,
                                    uint32_t pid,
                                    ConstBytes blob) {
   protos::pbzero::BinderLockFtraceEvent::Decoder evt(blob.data, blob.size);
-  context_->binder_tracker->Lock(timestamp, pid);
+  binder_tracker_.Lock(timestamp, pid);
 }
 
 void FtraceParser::ParseBinderUnlock(int64_t timestamp,
                                      uint32_t pid,
                                      ConstBytes blob) {
   protos::pbzero::BinderUnlockFtraceEvent::Decoder evt(blob.data, blob.size);
-  context_->binder_tracker->Unlock(timestamp, pid);
+  binder_tracker_.Unlock(timestamp, pid);
 }
 
 }  // namespace trace_processor

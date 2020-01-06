@@ -37,9 +37,6 @@ class ProcessTrackerTest : public ::testing::Test {
     context.args_tracker.reset(new ArgsTracker(&context));
     context.process_tracker.reset(new ProcessTracker(&context));
     context.event_tracker.reset(new EventTracker(&context));
-#if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
-    context.sched_tracker.reset(new SchedEventTracker(&context));
-#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
   }
 
  protected:
@@ -89,7 +86,6 @@ TEST_F(ProcessTrackerTest, AddProcessEntry_CorrectName) {
             "test");
 }
 
-#if PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
 TEST_F(ProcessTrackerTest, UpdateThreadMatch) {
   uint32_t cpu = 3;
   int64_t timestamp = 100;
@@ -97,13 +93,14 @@ TEST_F(ProcessTrackerTest, UpdateThreadMatch) {
   static const char kCommProc1[] = "process1";
   static const char kCommProc2[] = "process2";
   int32_t prio = 1024;
+  SchedEventTracker* sched_tracker = SchedEventTracker::GetOrCreate(&context);
 
-  context.sched_tracker->PushSchedSwitch(cpu, timestamp, /*tid=*/1, kCommProc2,
-                                         prio, prev_state,
-                                         /*tid=*/4, kCommProc1, prio);
-  context.sched_tracker->PushSchedSwitch(cpu, timestamp + 1, /*tid=*/4,
-                                         kCommProc1, prio, prev_state,
-                                         /*tid=*/1, kCommProc2, prio);
+  sched_tracker->PushSchedSwitch(cpu, timestamp, /*tid=*/1, kCommProc2, prio,
+                                 prev_state,
+                                 /*tid=*/4, kCommProc1, prio);
+  sched_tracker->PushSchedSwitch(cpu, timestamp + 1, /*tid=*/4, kCommProc1,
+                                 prio, prev_state,
+                                 /*tid=*/1, kCommProc2, prio);
 
   context.process_tracker->SetProcessMetadata(2, base::nullopt, "test");
   context.process_tracker->UpdateThread(4, 2);
@@ -116,7 +113,6 @@ TEST_F(ProcessTrackerTest, UpdateThreadMatch) {
   ASSERT_EQ(process.pid, 2u);
   ASSERT_EQ(process.start_ns, 0);
 }
-#endif  // PERFETTO_BUILDFLAG(PERFETTO_TP_FTRACE)
 
 TEST_F(ProcessTrackerTest, UpdateThreadCreate) {
   context.process_tracker->UpdateThread(12, 2);

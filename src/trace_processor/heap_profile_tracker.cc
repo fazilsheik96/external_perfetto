@@ -29,18 +29,22 @@ HeapProfileTracker::HeapProfileTracker(TraceProcessorContext* context)
 
 HeapProfileTracker::~HeapProfileTracker() = default;
 
-void HeapProfileTracker::SetProfilePacketIndex(uint64_t index) {
-  if (last_profile_packet_index_ != 0 &&
-      last_profile_packet_index_ + 1 != index) {
+void HeapProfileTracker::SetProfilePacketIndex(uint32_t seq_id,
+                                               uint64_t index) {
+  SequenceState& sequence_state = sequence_state_[seq_id];
+  if (sequence_state.last_profile_packet_index != 0 &&
+      sequence_state.last_profile_packet_index + 1 != index) {
     context_->storage->IncrementStats(stats::heapprofd_missing_packet);
   }
-  last_profile_packet_index_ = index;
+  sequence_state.last_profile_packet_index = index;
 }
 
 void HeapProfileTracker::AddAllocation(
+    uint32_t seq_id,
     StackProfileTracker* stack_profile_tracker,
     const SourceAllocation& alloc,
     const StackProfileTracker::InternLookup* intern_lookup) {
+  SequenceState& sequence_state = sequence_state_[seq_id];
   auto maybe_callstack_id =
       stack_profile_tracker->FindCallstack(alloc.callstack_id, intern_lookup);
   if (!maybe_callstack_id)
@@ -51,66 +55,73 @@ void HeapProfileTracker::AddAllocation(
   UniquePid upid = context_->process_tracker->GetOrCreateProcess(
       static_cast<uint32_t>(alloc.pid));
 
-  TraceStorage::HeapProfileAllocations::Row alloc_row{
+  tables::HeapProfileAllocationTable::Row alloc_row{
       alloc.timestamp, upid, callstack_id,
       static_cast<int64_t>(alloc.alloc_count),
       static_cast<int64_t>(alloc.self_allocated)};
 
-  TraceStorage::HeapProfileAllocations::Row free_row{
+  tables::HeapProfileAllocationTable::Row free_row{
       alloc.timestamp, upid, callstack_id,
       -static_cast<int64_t>(alloc.free_count),
       -static_cast<int64_t>(alloc.self_freed)};
 
-  TraceStorage::HeapProfileAllocations::Row alloc_delta = alloc_row;
-  TraceStorage::HeapProfileAllocations::Row free_delta = free_row;
+  tables::HeapProfileAllocationTable::Row alloc_delta = alloc_row;
+  tables::HeapProfileAllocationTable::Row free_delta = free_row;
 
-  auto prev_alloc_it = prev_alloc_.find({upid, callstack_id});
-  if (prev_alloc_it == prev_alloc_.end()) {
-    std::tie(prev_alloc_it, std::ignore) =
-        prev_alloc_.emplace(std::make_pair(upid, callstack_id),
-                            TraceStorage::HeapProfileAllocations::Row{});
+  auto prev_alloc_it = sequence_state.prev_alloc.find({upid, callstack_id});
+  if (prev_alloc_it == sequence_state.prev_alloc.end()) {
+    std::tie(prev_alloc_it, std::ignore) = sequence_state.prev_alloc.emplace(
+        std::make_pair(upid, callstack_id),
+        tables::HeapProfileAllocationTable::Row{});
   }
 
-  TraceStorage::HeapProfileAllocations::Row& prev_alloc = prev_alloc_it->second;
+  tables::HeapProfileAllocationTable::Row& prev_alloc = prev_alloc_it->second;
   alloc_delta.count -= prev_alloc.count;
   alloc_delta.size -= prev_alloc.size;
 
-  auto prev_free_it = prev_free_.find({upid, callstack_id});
-  if (prev_free_it == prev_free_.end()) {
-    std::tie(prev_free_it, std::ignore) =
-        prev_free_.emplace(std::make_pair(upid, callstack_id),
-                           TraceStorage::HeapProfileAllocations::Row{});
+  auto prev_free_it = sequence_state.prev_free.find({upid, callstack_id});
+  if (prev_free_it == sequence_state.prev_free.end()) {
+    std::tie(prev_free_it, std::ignore) = sequence_state.prev_free.emplace(
+        std::make_pair(upid, callstack_id),
+        tables::HeapProfileAllocationTable::Row{});
   }
 
-  TraceStorage::HeapProfileAllocations::Row& prev_free = prev_free_it->second;
+  tables::HeapProfileAllocationTable::Row& prev_free = prev_free_it->second;
   free_delta.count -= prev_free.count;
   free_delta.size -= prev_free.size;
 
   if (alloc_delta.count)
-    context_->storage->mutable_heap_profile_allocations()->Insert(alloc_delta);
+    context_->storage->mutable_heap_profile_allocation_table()->Insert(
+        alloc_delta);
   if (free_delta.count)
-    context_->storage->mutable_heap_profile_allocations()->Insert(free_delta);
+    context_->storage->mutable_heap_profile_allocation_table()->Insert(
+        free_delta);
 
   prev_alloc = alloc_row;
   prev_free = free_row;
 }
 
-void HeapProfileTracker::StoreAllocation(SourceAllocation alloc) {
-  pending_allocs_.emplace_back(std::move(alloc));
+void HeapProfileTracker::StoreAllocation(uint32_t seq_id,
+                                         SourceAllocation alloc) {
+  SequenceState& sequence_state = sequence_state_[seq_id];
+  sequence_state.pending_allocs.emplace_back(std::move(alloc));
 }
 
 void HeapProfileTracker::CommitAllocations(
+    uint32_t seq_id,
     StackProfileTracker* stack_profile_tracker,
     const StackProfileTracker::InternLookup* intern_lookup) {
-  for (const auto& p : pending_allocs_)
-    AddAllocation(stack_profile_tracker, p, intern_lookup);
-  pending_allocs_.clear();
+  SequenceState& sequence_state = sequence_state_[seq_id];
+  for (const auto& p : sequence_state.pending_allocs)
+    AddAllocation(seq_id, stack_profile_tracker, p, intern_lookup);
+  sequence_state.pending_allocs.clear();
 }
 
 void HeapProfileTracker::FinalizeProfile(
+    uint32_t seq_id,
     StackProfileTracker* stack_profile_tracker,
     const StackProfileTracker::InternLookup* intern_lookup) {
-  CommitAllocations(stack_profile_tracker, intern_lookup);
+  CommitAllocations(seq_id, stack_profile_tracker, intern_lookup);
   stack_profile_tracker->ClearIndices();
 }
 

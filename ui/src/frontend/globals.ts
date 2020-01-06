@@ -14,6 +14,7 @@
 
 import {assertExists} from '../base/logging';
 import {DeferredAction} from '../common/actions';
+import {AggregateCpuData} from '../common/aggregation_data';
 import {CurrentSearchResults, SearchSummary} from '../common/search_data';
 import {CallsiteInfo, createEmptyState, State} from '../common/state';
 
@@ -96,12 +97,21 @@ class Globals {
   private _numQueriesQueued = 0;
   private _bufferUsage?: number = undefined;
   private _recordingLog?: string = undefined;
+  private _aggregateCpuData: AggregateCpuData = {
+    strings: [],
+    procNameId: new Uint16Array(0),
+    pid: new Uint32Array(0),
+    threadNameId: new Uint16Array(0),
+    tid: new Uint32Array(0),
+    totalDur: new Float64Array(0),
+    occurrences: new Uint16Array(0)
+  };
   private _currentSearchResults: CurrentSearchResults = {
     sliceIds: new Float64Array(0),
     tsStarts: new Float64Array(0),
     utids: new Float64Array(0),
     trackIds: [],
-    refTypes: [],
+    sources: [],
     totalResults: 0,
   };
   searchSummary: SearchSummary = {
@@ -178,6 +188,14 @@ class Globals {
 
   set counterDetails(click: CounterDetails) {
     this._counterDetails = assertExists(click);
+  }
+
+  get aggregateCpuData(): AggregateCpuData {
+    return assertExists(this._aggregateCpuData);
+  }
+
+  set aggregateCpuData(value: AggregateCpuData) {
+    this._aggregateCpuData = value;
   }
 
   get heapProfileDetails() {
@@ -257,8 +275,17 @@ class Globals {
       tsStarts: new Float64Array(0),
       utids: new Float64Array(0),
       trackIds: [],
-      refTypes: [],
+      sources: [],
       totalResults: 0,
+    };
+    this._aggregateCpuData = {
+      strings: [],
+      procNameId: new Uint16Array(0),
+      pid: new Uint32Array(0),
+      threadNameId: new Uint16Array(0),
+      tid: new Uint32Array(0),
+      totalDur: new Float64Array(0),
+      occurrences: new Uint16Array(0)
     };
   }
 

@@ -28,6 +28,8 @@ namespace trace_processor {
 SystraceParser::SystraceParser(TraceProcessorContext* ctx)
     : context_(ctx), lmk_id_(ctx->storage->InternString("mem.lmk")) {}
 
+SystraceParser::~SystraceParser() = default;
+
 void SystraceParser::ParsePrintEvent(int64_t ts,
                                      uint32_t pid,
                                      base::StringView event) {
@@ -71,12 +73,13 @@ void SystraceParser::ParseZeroEvent(int64_t ts,
     context_->storage->IncrementStats(stats::systrace_parse_failure);
     return;
   }
-  context_->systrace_parser->ParseSystracePoint(ts, pid, point);
+  ParseSystracePoint(ts, pid, point);
 }
 
 void SystraceParser::ParseSdeTracingMarkWrite(int64_t ts,
                                               uint32_t pid,
                                               char trace_type,
+                                              bool trace_begin,
                                               base::StringView trace_name,
                                               uint32_t tgid,
                                               int64_t value) {
@@ -84,14 +87,17 @@ void SystraceParser::ParseSdeTracingMarkWrite(int64_t ts,
   point.name = trace_name;
   point.tgid = tgid;
   point.value = value;
-  point.phase = trace_type;
 
-  if (trace_type != 'B' && trace_type != 'E' && trace_type != 'C') {
+  if (trace_type == 0) {
+    point.phase = trace_begin ? 'B' : 'E';
+  } else if (trace_type == 'B' && trace_type == 'E' && trace_type == 'C') {
+    point.phase = trace_type;
+  } else {
     context_->storage->IncrementStats(stats::systrace_parse_failure);
     return;
   }
 
-  context_->systrace_parser->ParseSystracePoint(ts, pid, point);
+  ParseSystracePoint(ts, pid, point);
 }
 
 void SystraceParser::ParseSystracePoint(
@@ -103,8 +109,7 @@ void SystraceParser::ParseSystracePoint(
       StringId name_id = context_->storage->InternString(point.name);
       UniqueTid utid = context_->process_tracker->UpdateThread(pid, point.tgid);
       TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
-      context_->slice_tracker->Begin(ts, track_id, utid, RefType::kRefUtid,
-                                     0 /* cat */, name_id);
+      context_->slice_tracker->Begin(ts, track_id, 0 /* cat */, name_id);
       break;
     }
 
@@ -137,8 +142,7 @@ void SystraceParser::ParseSystracePoint(
       TrackId track_id = context_->track_tracker->InternAndroidAsyncTrack(
           name_id, upid, cookie);
       if (point.phase == 'S') {
-        context_->slice_tracker->Begin(ts, track_id, track_id,
-                                       RefType::kRefTrack, 0, name_id);
+        context_->slice_tracker->Begin(ts, track_id, 0, name_id);
       } else {
         context_->slice_tracker->End(ts, track_id);
       }

@@ -77,9 +77,8 @@ class ArgsTableUtilsTest : public ::testing::Test {
 };
 
 TEST_F(ArgsTableUtilsTest, EnsureChromeCompositorStateDescriptorParses) {
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(
       kChromeCompositorSchedulerStateDescriptor.data(),
       kChromeCompositorSchedulerStateDescriptor.size());
@@ -89,9 +88,8 @@ TEST_F(ArgsTableUtilsTest, EnsureChromeCompositorStateDescriptorParses) {
 }
 
 TEST_F(ArgsTableUtilsTest, EnsureTestMessageProtoParses) {
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   EXPECT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
@@ -127,18 +125,18 @@ TEST_F(ArgsTableUtilsTest, BasicSingleLayerProto) {
   auto binary_proto = msg.SerializeAsArray();
 
   storage_->mutable_track_table()->Insert({});
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
                            << status.message();
 
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.EveryField",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.EveryField", &inserter);
 
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
@@ -200,18 +198,18 @@ TEST_F(ArgsTableUtilsTest, NestedProto) {
   auto binary_proto = msg.SerializeAsArray();
 
   storage_->mutable_track_table()->Insert({});
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
                            << status.message();
 
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.NestedA",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.NestedA", &inserter);
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
   context_.args_tracker->Flush();
@@ -229,18 +227,18 @@ TEST_F(ArgsTableUtilsTest, CamelCaseFieldsProto) {
   auto binary_proto = msg.SerializeAsArray();
 
   storage_->mutable_track_table()->Insert({});
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
                            << status.message();
 
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.CamelCaseFields",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.CamelCaseFields", &inserter);
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
   context_.args_tracker->Flush();
@@ -258,9 +256,8 @@ TEST_F(ArgsTableUtilsTest, NestedProtoParsingOverrideHandled) {
   auto binary_proto = msg.SerializeAsArray();
 
   storage_->mutable_track_table()->Insert({});
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
@@ -269,23 +266,23 @@ TEST_F(ArgsTableUtilsTest, NestedProtoParsingOverrideHandled) {
   helper.AddParsingOverride(
       "super_nested.value_c",
       [](const ProtoToArgsTable::ParsingOverrideState& state,
-         const protozero::Field& field) {
+         const protozero::Field& field, ArgsTracker::BoundInserter* inserter) {
         EXPECT_EQ(field.type(), protozero::proto_utils::ProtoWireType::kVarInt);
-        EXPECT_TRUE(state.args_tracker);
         EXPECT_TRUE(state.context);
         EXPECT_TRUE(state.sequence_state);
         auto id = state.context->storage->InternString(
             "super_nested.value_b.replaced");
         int32_t val = field.as_int32();
-        state.args_tracker->AddArg(state.row_id, id, id,
-                                   Variadic::Integer(val + 1));
+        inserter->AddArg(id, id, Variadic::Integer(val + 1));
         // We've handled this field by adding the desired args.
         return true;
       });
+
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.NestedA",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.NestedA", &inserter);
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
   context_.args_tracker->Flush();
@@ -301,9 +298,8 @@ TEST_F(ArgsTableUtilsTest, NestedProtoParsingOverrideSkipped) {
   auto binary_proto = msg.SerializeAsArray();
 
   storage_->mutable_track_table()->Insert({});
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   auto status = helper.AddProtoFileDescriptor(kTestMessagesDescriptor.data(),
                                               kTestMessagesDescriptor.size());
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
@@ -312,21 +308,22 @@ TEST_F(ArgsTableUtilsTest, NestedProtoParsingOverrideSkipped) {
   helper.AddParsingOverride(
       "super_nested.value_c",
       [](const ProtoToArgsTable::ParsingOverrideState& state,
-         const protozero::Field& field) {
+         const protozero::Field& field, ArgsTracker::BoundInserter*) {
         static int val = 0;
         ++val;
         EXPECT_EQ(1, val);
         EXPECT_EQ(field.type(), protozero::proto_utils::ProtoWireType::kVarInt);
-        EXPECT_TRUE(state.args_tracker);
         EXPECT_TRUE(state.sequence_state);
         EXPECT_TRUE(state.context);
         // By returning false we expect this field to be handled like regular.
         return false;
       });
+
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.NestedA",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.NestedA", &inserter);
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
   context_.args_tracker->Flush();
@@ -357,20 +354,18 @@ TEST_F(ArgsTableUtilsTest, LookingUpInternedStateParsingOverride) {
       protos::pbzero::InternedData::kSourceLocationsFieldNumber,
       std::move(blob));
 
-  ProtoToArgsTable helper(sequence_state_.get(),
-                          sequence_state_->current_generation(), &context_,
-                          nullptr, "", 0);
+  ProtoToArgsTable helper(sequence_state_->current_generation(), &context_, "",
+                          0);
   // Now we override the behaviour of |value_c| so we can expand the iid into
   // multiple args rows.
   helper.AddParsingOverride(
       "super_nested.value_c",
       [](const ProtoToArgsTable::ParsingOverrideState& state,
-         const protozero::Field& field) {
+         const protozero::Field& field, ArgsTracker::BoundInserter* inserter) {
         EXPECT_EQ(field.type(), protozero::proto_utils::ProtoWireType::kVarInt);
         auto* decoder = state.sequence_state->LookupInternedMessage<
             protos::pbzero::InternedData::kSourceLocationsFieldNumber,
-            protos::pbzero::SourceLocation>(state.sequence_generation,
-                                            field.as_uint64());
+            protos::pbzero::SourceLocation>(field.as_uint64());
         if (!decoder) {
           // Lookup failed fall back on default behaviour.
           return false;
@@ -379,10 +374,8 @@ TEST_F(ArgsTableUtilsTest, LookingUpInternedStateParsingOverride) {
         auto file_name_id = storage->InternString("file_name");
         auto line_number_id = storage->InternString("line_number");
         auto file_id = storage->InternString(decoder->file_name());
-        state.args_tracker->AddArg(state.row_id, file_name_id, file_name_id,
-                                   Variadic::String(file_id));
-        state.args_tracker->AddArg(state.row_id, line_number_id, line_number_id,
-                                   Variadic::Integer(2));
+        inserter->AddArg(file_name_id, file_name_id, Variadic::String(file_id));
+        inserter->AddArg(line_number_id, line_number_id, Variadic::Integer(2));
         return true;
       });
 
@@ -392,10 +385,11 @@ TEST_F(ArgsTableUtilsTest, LookingUpInternedStateParsingOverride) {
   ASSERT_TRUE(status.ok()) << "Failed to parse kTestMessagesDescriptor: "
                            << status.message();
 
+  ArgsTracker::BoundInserter inserter(context_.args_tracker.get(),
+                                      TableId::kTrack, 0);
   status = helper.InternProtoIntoArgsTable(
       protozero::ConstBytes{binary_proto.data(), binary_proto.size()},
-      ".protozero.test.protos.NestedA",
-      TraceStorage::CreateRowId(TableId::kTrack, 0));
+      ".protozero.test.protos.NestedA", &inserter);
   EXPECT_TRUE(status.ok()) << "InternProtoIntoArgsTable failed with error: "
                            << status.message();
   auto file_name_id = storage_->string_pool().GetId("test_file_name");

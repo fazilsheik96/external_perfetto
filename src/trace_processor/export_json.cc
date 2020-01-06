@@ -286,7 +286,11 @@ std::string PrintUint64(uint64_t x) {
 class ArgsBuilder {
  public:
   explicit ArgsBuilder(const TraceStorage* storage)
-      : storage_(storage), empty_value_(Json::objectValue) {
+      : storage_(storage),
+        empty_value_(Json::objectValue),
+        nan_value_(Json::StaticString("NaN")),
+        inf_value_(Json::StaticString("Infinity")),
+        neg_inf_value_(Json::StaticString("-Infinity")) {
     const TraceStorage::Args& args = storage->args();
     if (args.args_count() == 0) {
       args_sets_.resize(1, empty_value_);
@@ -320,7 +324,15 @@ class ArgsBuilder {
       case Variadic::kString:
         return GetNonNullString(storage_, variadic.string_value);
       case Variadic::kReal:
-        return variadic.real_value;
+        if (std::isnan(variadic.real_value)) {
+          return nan_value_;
+        } else if (std::isinf(variadic.real_value) && variadic.real_value > 0) {
+          return inf_value_;
+        } else if (std::isinf(variadic.real_value) && variadic.real_value < 0) {
+          return neg_inf_value_;
+        } else {
+          return variadic.real_value;
+        }
       case Variadic::kPointer:
         return PrintUint64(variadic.pointer_value);
       case Variadic::kBool:
@@ -387,7 +399,10 @@ class ArgsBuilder {
 
   const TraceStorage* storage_;
   std::vector<Json::Value> args_sets_;
-  Json::Value empty_value_;
+  const Json::Value empty_value_;
+  const Json::Value nan_value_;
+  const Json::Value inf_value_;
+  const Json::Value neg_inf_value_;
 };
 
 void ConvertLegacyFlowEventArgs(const Json::Value& legacy_args,
@@ -443,7 +458,7 @@ util::Status ExportSlices(const TraceStorage* storage,
                           const ArgsBuilder& args_builder,
                           TraceFormatWriter* writer) {
   const auto& slices = storage->slice_table();
-  for (uint32_t i = 0; i < slices.size(); ++i) {
+  for (uint32_t i = 0; i < slices.row_count(); ++i) {
     Json::Value event;
     event["ts"] = Json::Int64(slices.ts()[i] / 1000);
     event["cat"] = GetNonNullString(storage, slices.category()[i]);
@@ -472,8 +487,12 @@ util::Status ExportSlices(const TraceStorage* storage,
     // or chrome tracks (i.e. TrackEvent slices). Slices on other tracks may
     // also be present as raw events and handled by trace_to_text. Only add more
     // track types here if they are not already covered by trace_to_text.
-    auto track_id = slices.track_id()[i];
-    auto track_args_id = storage->track_table().source_arg_set_id()[track_id];
+    uint32_t track_id = slices.track_id()[i];
+
+    const auto& track_table = storage->track_table();
+
+    uint32_t track_row = *track_table.id().IndexOf(TrackId{track_id});
+    auto track_args_id = track_table.source_arg_set_id()[track_row];
     if (!track_args_id)
       continue;
     const auto& track_args = args_builder.GetArgs(*track_args_id);
@@ -520,8 +539,7 @@ util::Status ExportSlices(const TraceStorage* storage,
       }
     }
 
-    auto opt_thread_track_row =
-        thread_track.id().IndexOf(SqlValue::Long(track_id));
+    auto opt_thread_track_row = thread_track.id().IndexOf(TrackId{track_id});
 
     if (opt_thread_track_row) {
       // Synchronous (thread) slice or instant event.
@@ -569,8 +587,7 @@ util::Status ExportSlices(const TraceStorage* storage,
     } else if (!legacy_chrome_track ||
                (legacy_chrome_track && track_args.isMember("source_id"))) {
       // Async event slice.
-      auto opt_process_row =
-          process_track.id().IndexOf(SqlValue::Long(track_id));
+      auto opt_process_row = process_track.id().IndexOf(TrackId{track_id});
       if (legacy_chrome_track) {
         // Legacy async tracks are always process-associated.
         PERFETTO_DCHECK(opt_process_row);
@@ -656,8 +673,7 @@ util::Status ExportSlices(const TraceStorage* storage,
       // Use "I" instead of "i" phase for backwards-compat with old consumers.
       event["ph"] = "I";
 
-      auto opt_process_row =
-          process_track.id().IndexOf(SqlValue::Long(track_id));
+      auto opt_process_row = process_track.id().IndexOf(TrackId{track_id});
       if (opt_process_row.has_value()) {
         uint32_t upid = process_track.upid()[*opt_process_row];
         event["pid"] = static_cast<int32_t>(storage->GetProcess(upid).pid);
@@ -796,13 +812,13 @@ util::Status ExportRawEvents(const TraceStorage* storage,
 
 util::Status ExportCpuProfileSamples(const TraceStorage* storage,
                                      TraceFormatWriter* writer) {
-  const TraceStorage::CpuProfileStackSamples& samples =
-      storage->cpu_profile_stack_samples();
-  for (uint32_t i = 0; i < samples.size(); ++i) {
+  const tables::CpuProfileStackSampleTable& samples =
+      storage->cpu_profile_stack_sample_table();
+  for (uint32_t i = 0; i < samples.row_count(); ++i) {
     Json::Value event;
-    event["ts"] = Json::Int64(samples.timestamps()[i] / 1000);
+    event["ts"] = Json::Int64(samples.ts()[i] / 1000);
 
-    UniqueTid utid = static_cast<UniqueTid>(samples.utids()[i]);
+    UniqueTid utid = static_cast<UniqueTid>(samples.utid()[i]);
     auto thread = storage->GetThread(utid);
     event["tid"] = static_cast<int32_t>(thread.tid);
     if (thread.upid) {
@@ -828,9 +844,9 @@ util::Status ExportCpuProfileSamples(const TraceStorage* storage,
 
     std::vector<std::string> callstack;
     const auto& callsites = storage->stack_profile_callsite_table();
-    int64_t maybe_callsite_id = samples.callsite_ids()[i];
+    int64_t maybe_callsite_id = samples.callsite_id()[i];
     PERFETTO_DCHECK(maybe_callsite_id >= 0 &&
-                    maybe_callsite_id < callsites.size());
+                    maybe_callsite_id < callsites.row_count());
     while (maybe_callsite_id >= 0) {
       uint32_t callsite_id = static_cast<uint32_t>(maybe_callsite_id);
 
@@ -840,11 +856,10 @@ util::Status ExportCpuProfileSamples(const TraceStorage* storage,
                       callsites.frame_id()[callsite_id] < frames.size());
       size_t frame_id = static_cast<size_t>(callsites.frame_id()[callsite_id]);
 
-      const TraceStorage::StackProfileMappings& mappings =
-          storage->stack_profile_mappings();
+      const auto& mappings = storage->stack_profile_mapping_table();
       PERFETTO_DCHECK(frames.mappings()[frame_id] >= 0 &&
-                      frames.mappings()[frame_id] < mappings.size());
-      size_t mapping_id = static_cast<size_t>(frames.mappings()[frame_id]);
+                      frames.mappings()[frame_id] < mappings.row_count());
+      uint32_t mapping_id = static_cast<uint32_t>(frames.mappings()[frame_id]);
 
       NullTermStringView symbol_name;
       uint32_t symbol_set_id = frames.symbol_set_ids()[frame_id];
@@ -860,8 +875,8 @@ util::Status ExportCpuProfileSamples(const TraceStorage* storage,
                ? PrintUint64(static_cast<uint64_t>(frames.rel_pcs()[frame_id]))
                      .c_str()
                : symbol_name.c_str()),
-          GetNonNullString(storage, mappings.names()[mapping_id]),
-          GetNonNullString(storage, mappings.build_ids()[mapping_id]));
+          GetNonNullString(storage, mappings.name()[mapping_id]),
+          GetNonNullString(storage, mappings.build_id()[mapping_id]));
 
       callstack.emplace_back(frame_entry);
 

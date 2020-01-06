@@ -18,7 +18,6 @@
 
 #include <stdint.h>
 
-#include "src/trace_processor/args_tracker.h"
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/trace_processor_context.h"
@@ -40,8 +39,6 @@ SliceTracker::~SliceTracker() = default;
 
 base::Optional<uint32_t> SliceTracker::Begin(int64_t timestamp,
                                              TrackId track_id,
-                                             int64_t ref,
-                                             RefType ref_type,
                                              StringId category,
                                              StringId name,
                                              SetArgsCallback args_callback) {
@@ -53,14 +50,12 @@ base::Optional<uint32_t> SliceTracker::Begin(int64_t timestamp,
   prev_timestamp_ = timestamp;
 
   MaybeCloseStack(timestamp, &stacks_[track_id]);
-  return StartSlice(timestamp, kPendingDuration, track_id, ref, ref_type,
-                    category, name, args_callback);
+  return StartSlice(timestamp, kPendingDuration, track_id, category, name,
+                    args_callback);
 }
 
 base::Optional<uint32_t> SliceTracker::Scoped(int64_t timestamp,
                                               TrackId track_id,
-                                              int64_t ref,
-                                              RefType ref_type,
                                               StringId category,
                                               StringId name,
                                               int64_t duration,
@@ -74,16 +69,14 @@ base::Optional<uint32_t> SliceTracker::Scoped(int64_t timestamp,
 
   PERFETTO_DCHECK(duration >= 0);
   MaybeCloseStack(timestamp, &stacks_[track_id]);
-  return StartSlice(timestamp, duration, track_id, ref, ref_type, category,
-                    name, args_callback);
+  return StartSlice(timestamp, duration, track_id, category, name,
+                    args_callback);
 }
 
 base::Optional<uint32_t> SliceTracker::StartSlice(
     int64_t timestamp,
     int64_t duration,
     TrackId track_id,
-    int64_t ref,
-    RefType ref_type,
     StringId category,
     StringId name,
     SetArgsCallback args_callback) {
@@ -98,18 +91,17 @@ base::Optional<uint32_t> SliceTracker::StartSlice(
   int64_t parent_stack_id =
       depth == 0 ? 0 : slices->stack_id()[stack->back().first];
 
-  StringId ref_type_id = context_->storage->InternString(
-      GetRefTypeStringMap()[static_cast<uint32_t>(ref_type)]);
-
-  tables::SliceTable::Row row(timestamp, duration, track_id, ref, ref_type_id,
-                              category, name, depth, 0, parent_stack_id);
-  uint32_t slice_idx = slices->Insert(row);
+  tables::SliceTable::Row row(timestamp, duration, track_id.value, category,
+                              name, depth, 0, parent_stack_id);
+  auto id = slices->Insert(row);
+  uint32_t slice_idx = *slices->id().IndexOf(id);
   stack->emplace_back(std::make_pair(slice_idx, ArgsTracker(context_)));
 
   if (args_callback) {
-    args_callback(
-        &stack->back().second,
-        TraceStorage::CreateRowId(TableId::kNestableSlices, slice_idx));
+    ArgsTracker* tracker = &stack->back().second;
+    ArgsTracker::BoundInserter inserter(tracker, TableId::kNestableSlices,
+                                        slice_idx);
+    args_callback(&inserter);
   }
   slices->mutable_stack_id()->Set(slice_idx, GetStackHash(*stack));
   return slice_idx;
@@ -186,9 +178,10 @@ base::Optional<uint32_t> SliceTracker::End(int64_t timestamp,
   slices->mutable_dur()->Set(slice_idx, timestamp - slices->ts()[slice_idx]);
 
   if (args_callback) {
-    args_callback(
-        &stack.back().second,
-        TraceStorage::CreateRowId(TableId::kNestableSlices, slice_idx));
+    ArgsTracker* tracker = &stack.back().second;
+    ArgsTracker::BoundInserter inserter(tracker, TableId::kNestableSlices,
+                                        slice_idx);
+    args_callback(&inserter);
   }
 
   return CompleteSlice(track_id);

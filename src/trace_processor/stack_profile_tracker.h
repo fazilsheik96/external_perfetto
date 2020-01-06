@@ -56,6 +56,8 @@ namespace trace_processor {
 
 class TraceProcessorContext;
 
+// TODO(lalitm): Overhaul this class to make row vs id consistent and use
+// base::Optional instead of int64_t.
 class StackProfileTracker {
  public:
   using SourceStringId = uint64_t;
@@ -168,7 +170,7 @@ class StackProfileTracker {
 
   // TODO(oysteine): Share these indices between the StackProfileTrackers,
   // since they're not sequence-specific.
-  std::unordered_map<TraceStorage::StackProfileMappings::Row, int64_t>
+  std::unordered_map<tables::StackProfileMappingTable::Row, int64_t>
       mapping_idx_;
   std::unordered_map<TraceStorage::StackProfileFrames::Row, int64_t> frame_idx_;
   std::unordered_map<tables::StackProfileCallsiteTable::Row, int64_t>

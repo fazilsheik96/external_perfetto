@@ -44,7 +44,7 @@ inline void PrintTo(const SliceInfo& info, ::std::ostream* os) {
 
 std::vector<SliceInfo> ToSliceInfo(const tables::SliceTable& slices) {
   std::vector<SliceInfo> infos;
-  for (uint32_t i = 0; i < slices.size(); i++) {
+  for (uint32_t i = 0; i < slices.row_count(); i++) {
     infos.emplace_back(SliceInfo{slices.ts()[i], slices.dur()[i]});
   }
   return infos;
@@ -55,21 +55,17 @@ TEST(SliceTrackerTest, OneSliceDetailed) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Begin(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                1 /*name*/);
+  constexpr TrackId track{22u};
+  tracker.Begin(2 /*ts*/, track, 0 /*cat*/, 1 /*name*/);
   tracker.End(10 /*ts*/, track, 0 /*cat*/, 1 /*name*/);
 
   const auto& slices = context.storage->slice_table();
-  EXPECT_EQ(slices.size(), 1u);
+  EXPECT_EQ(slices.row_count(), 1u);
   EXPECT_EQ(slices.ts()[0], 2);
   EXPECT_EQ(slices.dur()[0], 8);
-  EXPECT_EQ(slices.track_id()[0], track);
+  EXPECT_EQ(slices.track_id()[0], track.value);
   EXPECT_EQ(slices.category()[0], 0u);
   EXPECT_EQ(slices.name()[0], 1u);
-  EXPECT_EQ(slices.ref()[0], 42);
-  EXPECT_EQ(slices.ref_type().GetString(0),
-            GetRefTypeStringMap()[static_cast<uint32_t>(RefType::kRefUtid)]);
   EXPECT_EQ(slices.depth()[0], 0u);
   EXPECT_EQ(slices.arg_set_id()[0], kInvalidArgSetId);
 }
@@ -79,28 +75,25 @@ TEST(SliceTrackerTest, OneSliceWithArgs) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Begin(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                1 /*name*/, [](ArgsTracker* args_tracker, RowId row) {
-                  args_tracker->AddArg(row, /*flat_key=*/1, /*key=*/2,
-                                       /*value=*/Variadic::Integer(10));
+  constexpr TrackId track{22u};
+  tracker.Begin(2 /*ts*/, track, 0 /*cat*/, 1 /*name*/,
+                [](ArgsTracker::BoundInserter* inserter) {
+                  inserter->AddArg(/*flat_key=*/1, /*key=*/2,
+                                   /*value=*/Variadic::Integer(10));
                 });
   tracker.End(10 /*ts*/, track, 0 /*cat*/, 1 /*name*/,
-              [](ArgsTracker* args_tracker, RowId row) {
-                args_tracker->AddArg(row, /*flat_key=*/3, /*key=*/4,
-                                     /*value=*/Variadic::Integer(20));
+              [](ArgsTracker::BoundInserter* inserter) {
+                inserter->AddArg(/*flat_key=*/3, /*key=*/4,
+                                 /*value=*/Variadic::Integer(20));
               });
 
   const auto& slices = context.storage->slice_table();
-  EXPECT_EQ(slices.size(), 1u);
+  EXPECT_EQ(slices.row_count(), 1u);
   EXPECT_EQ(slices.ts()[0], 2);
   EXPECT_EQ(slices.dur()[0], 8);
-  EXPECT_EQ(slices.track_id()[0], track);
+  EXPECT_EQ(slices.track_id()[0], track.value);
   EXPECT_EQ(slices.category()[0], 0u);
   EXPECT_EQ(slices.name()[0], 1u);
-  EXPECT_EQ(slices.ref()[0], 42);
-  EXPECT_EQ(slices.ref_type().GetString(0),
-            GetRefTypeStringMap()[static_cast<uint32_t>(RefType::kRefUtid)]);
   EXPECT_EQ(slices.depth()[0], 0u);
   auto set_id = slices.arg_set_id()[0];
 
@@ -120,37 +113,29 @@ TEST(SliceTrackerTest, TwoSliceDetailed) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Begin(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                1 /*name*/);
-  tracker.Begin(3 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                2 /*name*/);
+  constexpr TrackId track{22u};
+  tracker.Begin(2 /*ts*/, track, 0 /*cat*/, 1 /*name*/);
+  tracker.Begin(3 /*ts*/, track, 0 /*cat*/, 2 /*name*/);
   tracker.End(5 /*ts*/, track);
   tracker.End(10 /*ts*/, track);
 
   const auto& slices = context.storage->slice_table();
 
-  EXPECT_EQ(slices.size(), 2u);
+  EXPECT_EQ(slices.row_count(), 2u);
 
   uint32_t idx = 0;
   EXPECT_EQ(slices.ts()[idx], 2);
   EXPECT_EQ(slices.dur()[idx], 8);
-  EXPECT_EQ(slices.track_id()[idx], track);
+  EXPECT_EQ(slices.track_id()[idx], track.value);
   EXPECT_EQ(slices.category()[idx], 0u);
   EXPECT_EQ(slices.name()[idx], 1u);
-  EXPECT_EQ(slices.ref()[idx], 42);
-  EXPECT_EQ(slices.ref_type().GetString(idx),
-            GetRefTypeStringMap()[static_cast<uint32_t>(RefType::kRefUtid)]);
   EXPECT_EQ(slices.depth()[idx++], 0u);
 
   EXPECT_EQ(slices.ts()[idx], 3);
   EXPECT_EQ(slices.dur()[idx], 2);
-  EXPECT_EQ(slices.track_id()[idx], track);
+  EXPECT_EQ(slices.track_id()[idx], track.value);
   EXPECT_EQ(slices.category()[idx], 0u);
   EXPECT_EQ(slices.name()[idx], 2u);
-  EXPECT_EQ(slices.ref()[idx], 42);
-  EXPECT_EQ(slices.ref_type().GetString(idx),
-            GetRefTypeStringMap()[static_cast<uint32_t>(RefType::kRefUtid)]);
   EXPECT_EQ(slices.depth()[idx], 1u);
 
   EXPECT_EQ(slices.parent_stack_id()[0], 0);
@@ -163,10 +148,10 @@ TEST(SliceTrackerTest, Scoped) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Begin(0 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0, 0);
-  tracker.Begin(1 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0, 0);
-  tracker.Scoped(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0, 0, 6);
+  constexpr TrackId track{22u};
+  tracker.Begin(0 /*ts*/, track, 0, 0);
+  tracker.Begin(1 /*ts*/, track, 0, 0);
+  tracker.Scoped(2 /*ts*/, track, 0, 0, 6);
   tracker.End(9 /*ts*/, track);
   tracker.End(10 /*ts*/, track);
 
@@ -180,9 +165,8 @@ TEST(SliceTrackerTest, IgnoreMismatchedEnds) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Begin(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 5 /*cat*/,
-                1 /*name*/);
+  constexpr TrackId track{22u};
+  tracker.Begin(2 /*ts*/, track, 5 /*cat*/, 1 /*name*/);
   tracker.End(3 /*ts*/, track, 1 /*cat*/, 1 /*name*/);
   tracker.End(4 /*ts*/, track, 0 /*cat*/, 2 /*name*/);
   tracker.End(5 /*ts*/, track, 5 /*cat*/, 1 /*name*/);
@@ -199,15 +183,11 @@ TEST(SliceTrackerTest, ZeroLengthScoped) {
   // Bug scenario: the second zero-length scoped slice prevents the first slice
   // from being closed, leading to an inconsistency when we try to insert the
   // final slice and it doesn't intersect with the still pending first slice.
-  constexpr TrackId track = 22u;
-  tracker.Scoped(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                 1 /*name*/, 10 /* dur */);
-  tracker.Scoped(2 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                 1 /*name*/, 0 /* dur */);
-  tracker.Scoped(12 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                 1 /*name*/, 1 /* dur */);
-  tracker.Scoped(13 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 0 /*cat*/,
-                 1 /*name*/, 1 /* dur */);
+  constexpr TrackId track{22u};
+  tracker.Scoped(2 /*ts*/, track, 0 /*cat*/, 1 /*name*/, 10 /* dur */);
+  tracker.Scoped(2 /*ts*/, track, 0 /*cat*/, 1 /*name*/, 0 /* dur */);
+  tracker.Scoped(12 /*ts*/, track, 0 /*cat*/, 1 /*name*/, 1 /* dur */);
+  tracker.Scoped(13 /*ts*/, track, 0 /*cat*/, 1 /*name*/, 1 /* dur */);
 
   auto slices = ToSliceInfo(context.storage->slice_table());
   EXPECT_THAT(slices, ElementsAre(SliceInfo{2, 10}, SliceInfo{2, 0},
@@ -219,11 +199,11 @@ TEST(SliceTrackerTest, DifferentTracks) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track_a = 22u;
-  constexpr TrackId track_b = 23u;
-  tracker.Begin(0 /*ts*/, track_a, 42 /*ref*/, RefType::kRefUtid, 0, 0);
-  tracker.Scoped(2 /*ts*/, track_b, 42 /*ref*/, RefType::kRefUtid, 0, 0, 6);
-  tracker.Scoped(3 /*ts*/, track_b, 42 /*ref*/, RefType::kRefUtid, 0, 0, 4);
+  constexpr TrackId track_a{22u};
+  constexpr TrackId track_b{23u};
+  tracker.Begin(0 /*ts*/, track_a, 0, 0);
+  tracker.Scoped(2 /*ts*/, track_b, 0, 0, 6);
+  tracker.Scoped(3 /*ts*/, track_b, 0, 0, 4);
   tracker.End(10 /*ts*/, track_a);
   tracker.FlushPendingSlices();
 
@@ -231,9 +211,9 @@ TEST(SliceTrackerTest, DifferentTracks) {
   EXPECT_THAT(slices,
               ElementsAre(SliceInfo{0, 10}, SliceInfo{2, 6}, SliceInfo{3, 4}));
 
-  EXPECT_EQ(context.storage->slice_table().track_id()[0], track_a);
-  EXPECT_EQ(context.storage->slice_table().track_id()[1], track_b);
-  EXPECT_EQ(context.storage->slice_table().track_id()[2], track_b);
+  EXPECT_EQ(context.storage->slice_table().track_id()[0], track_a.value);
+  EXPECT_EQ(context.storage->slice_table().track_id()[1], track_b.value);
+  EXPECT_EQ(context.storage->slice_table().track_id()[2], track_b.value);
   EXPECT_EQ(context.storage->slice_table().depth()[0], 0u);
   EXPECT_EQ(context.storage->slice_table().depth()[1], 0u);
   EXPECT_EQ(context.storage->slice_table().depth()[2], 1u);
@@ -244,29 +224,23 @@ TEST(SliceTrackerTest, EndEventOutOfOrder) {
   context.storage.reset(new TraceStorage());
   SliceTracker tracker(&context);
 
-  constexpr TrackId track = 22u;
-  tracker.Scoped(50 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 11 /*cat*/,
-                 21 /*name*/, 100 /*dur*/);
-  tracker.Begin(100 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 12 /*cat*/,
-                22 /*name*/);
-  tracker.Scoped(450 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 12 /*cat*/,
-                 22 /*name*/, 100 /*dur*/);
+  constexpr TrackId track{22u};
+  tracker.Scoped(50 /*ts*/, track, 11 /*cat*/, 21 /*name*/, 100 /*dur*/);
+  tracker.Begin(100 /*ts*/, track, 12 /*cat*/, 22 /*name*/);
+  tracker.Scoped(450 /*ts*/, track, 12 /*cat*/, 22 /*name*/, 100 /*dur*/);
   tracker.End(500 /*ts*/, track, 12 /*cat*/, 22 /*name*/);
 
   // This slice should now have depth 0.
-  tracker.Begin(800 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 13 /*cat*/,
-                23 /*name*/);
+  tracker.Begin(800 /*ts*/, track, 13 /*cat*/, 23 /*name*/);
   // Null cat and name matches everything.
   tracker.End(1000 /*ts*/, track, 0 /*cat*/, 0 /*name*/);
 
   // Slice will not close if category is different.
-  tracker.Begin(1100 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 11 /*cat*/,
-                21 /*name*/);
+  tracker.Begin(1100 /*ts*/, track, 11 /*cat*/, 21 /*name*/);
   tracker.End(1200 /*ts*/, track, 12 /*cat*/, 21 /*name*/);
 
   // Slice will not close if name is different.
-  tracker.Begin(1300 /*ts*/, track, 42 /*ref*/, RefType::kRefUtid, 11 /*cat*/,
-                21 /*name*/);
+  tracker.Begin(1300 /*ts*/, track, 11 /*cat*/, 21 /*name*/);
   tracker.End(1400 /*ts*/, track, 11 /*cat*/, 22 /*name*/);
 
   tracker.FlushPendingSlices();

@@ -49,6 +49,7 @@ import {
 import {PROCESS_SUMMARY_TRACK} from '../tracks/process_summary/common';
 import {THREAD_STATE_TRACK_KIND} from '../tracks/thread_state/common';
 
+import {AggregationController} from './aggregation_controller';
 import {Child, Children, Controller} from './controller';
 import {globals} from './globals';
 import {
@@ -153,7 +154,8 @@ export class TraceController extends Controller<States> {
         const heapProfileArgs: HeapProfileControllerArgs = {engine};
         childControllers.push(
             Child('heapProfile', HeapProfileController, heapProfileArgs));
-
+        childControllers.push(
+            Child('aggregation', AggregationController, {engine}));
         childControllers.push(Child('search', SearchController, {
           engine,
           app: globals,
@@ -307,10 +309,10 @@ export class TraceController extends Controller<States> {
     //  }));
     //}
     const maxCpuFreq = await engine.query(`
-     select max(value)
-     from counter c
-     inner join cpu_counter_track t on c.track_id = t.id
-     where name = 'cpufreq';
+      select max(value)
+      from counter c
+      inner join cpu_counter_track t on c.track_id = t.id
+      where name = 'cpufreq';
     `);
 
     const cpus = await engine.getCpus();
@@ -410,18 +412,19 @@ export class TraceController extends Controller<States> {
     }
 
     const maxGpuFreq = await engine.query(`
-     select max(value)
-     from counters
-     where name = 'gpufreq';
+      select max(value)
+      from counter c
+      inner join gpu_counter_track t on c.track_id = t.id
+      where name = 'gpufreq';
     `);
 
     for (let gpu = 0; gpu < numGpus; gpu++) {
       // Only add a gpu freq track if we have
       // gpu freq data.
       const freqExists = await engine.query(`
-        select value
-        from counters
-        where name = 'gpufreq' and ref = ${gpu}
+        select id
+        from gpu_counter_track
+        where name = 'gpufreq' and gpu_id = ${gpu}
         limit 1;
       `);
       if (freqExists.numRecords > 0) {
@@ -432,6 +435,7 @@ export class TraceController extends Controller<States> {
           trackGroup: SCROLLING_TRACK_GROUP,
           config: {
             gpu,
+            trackId: +freqExists.columns[0].longValues![0],
             maximumValue: +maxGpuFreq.columns[0].doubleValues![0],
           }
         });

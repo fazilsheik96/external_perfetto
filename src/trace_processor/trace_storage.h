@@ -32,10 +32,10 @@
 #include "perfetto/ext/base/string_view.h"
 #include "perfetto/ext/base/utils.h"
 #include "perfetto/trace_processor/basic_types.h"
+#include "src/trace_processor/containers/string_pool.h"
 #include "src/trace_processor/ftrace_utils.h"
 #include "src/trace_processor/metadata.h"
 #include "src/trace_processor/stats.h"
-#include "src/trace_processor/string_pool.h"
 #include "src/trace_processor/tables/counter_tables.h"
 #include "src/trace_processor/tables/profiler_tables.h"
 #include "src/trace_processor/tables/slice_tables.h"
@@ -59,9 +59,8 @@ using StringId = StringPool::Id;
 static const StringId kNullStringId = StringId(0);
 
 // Identifiers for all the tables in the database.
-enum TableId : uint8_t {
-  // Intentionally don't have TableId == 0 so that RowId == 0 can refer to an
-  // invalid row id.
+enum class TableId : uint8_t {
+  kInvalid = 0,
   kCounterValues = 1,
   kRawEvents = 2,
   kInstants = 3,
@@ -72,19 +71,21 @@ enum TableId : uint8_t {
   kVulkanMemoryAllocation = 8,
 };
 
-// The top 8 bits are set to the TableId and the bottom 32 to the row of the
-// table.
-using RowId = int64_t;
-static const RowId kInvalidRowId = 0;
-
 using ArgSetId = uint32_t;
 static const ArgSetId kInvalidArgSetId = 0;
 
-using TrackId = uint32_t;
+using TrackId = tables::TrackTable::Id;
+
+using CounterId = tables::CounterTable::Id;
+
+using SliceId = tables::SliceTable::Id;
+
+using MappingId = tables::StackProfileMappingTable::Id;
 
 // TODO(lalitm): this is a temporary hack while migrating the counters table and
 // will be removed when the migration is complete.
-static const TrackId kInvalidTrackId = std::numeric_limits<TrackId>::max();
+static const TrackId kInvalidTrackId =
+    TrackId(std::numeric_limits<TrackId>::max());
 
 enum class RefType {
   kRefNoRef = 0,
@@ -138,8 +139,8 @@ class TraceStorage {
       StringId key = 0;
       Variadic value = Variadic::Integer(0);
 
-      // This is only used by the arg tracker and so is not part of the hash.
-      RowId row_id = 0;
+      TableId table;
+      uint32_t row;
     };
 
     struct ArgHasher {
@@ -518,17 +519,16 @@ class TraceStorage {
 
   class RawEvents {
    public:
-    inline RowId AddRawEvent(int64_t timestamp,
-                             StringId name_id,
-                             uint32_t cpu,
-                             UniqueTid utid) {
+    inline uint32_t AddRawEvent(int64_t timestamp,
+                                StringId name_id,
+                                uint32_t cpu,
+                                UniqueTid utid) {
       timestamps_.emplace_back(timestamp);
       name_ids_.emplace_back(name_id);
       cpus_.emplace_back(cpu);
       utids_.emplace_back(utid);
       arg_set_ids_.emplace_back(kInvalidArgSetId);
-      return CreateRowId(TableId::kRawEvents,
-                         static_cast<uint32_t>(raw_event_count() - 1));
+      return static_cast<uint32_t>(raw_event_count() - 1);
     }
 
     void set_arg_set_id(uint32_t row, ArgSetId id) { arg_set_ids_[row] = id; }
@@ -596,7 +596,7 @@ class TraceStorage {
     const std::deque<metadata::KeyIDs>& keys() const { return keys_; }
     const std::deque<Variadic>& values() const { return values_; }
 
-    RowId SetScalarMetadata(metadata::KeyIDs key, Variadic value) {
+    uint32_t SetScalarMetadata(metadata::KeyIDs key, Variadic value) {
       PERFETTO_DCHECK(key < metadata::kNumKeys);
       PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kSingle);
       PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
@@ -607,25 +607,24 @@ class TraceStorage {
         PERFETTO_DFATAL("Setting a scalar metadata entry more than once.");
         uint32_t index = static_cast<uint32_t>(it->second);
         values_[index] = value;
-        return TraceStorage::CreateRowId(kMetadataTable, index);
+        return index;
       }
       // First time setting this key.
       keys_.push_back(key);
       values_.push_back(value);
       uint32_t index = static_cast<uint32_t>(keys_.size() - 1);
       scalar_indices[key] = index;
-      return TraceStorage::CreateRowId(kMetadataTable, index);
+      return index;
     }
 
-    RowId AppendMetadata(metadata::KeyIDs key, Variadic value) {
+    uint32_t AppendMetadata(metadata::KeyIDs key, Variadic value) {
       PERFETTO_DCHECK(key < metadata::kNumKeys);
       PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kMulti);
       PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
 
       keys_.push_back(key);
       values_.push_back(value);
-      uint32_t index = static_cast<uint32_t>(keys_.size() - 1);
-      return TraceStorage::CreateRowId(kMetadataTable, index);
+      return static_cast<uint32_t>(keys_.size() - 1);
     }
 
     const Variadic& GetScalarMetadata(metadata::KeyIDs key) const {
@@ -684,7 +683,7 @@ class TraceStorage {
       return it->second;
     }
 
-    void SetSymbolSetId(size_t row_idx, uint32_t symbol_set_id) {
+    void SetSymbolSetId(uint32_t row_idx, uint32_t symbol_set_id) {
       PERFETTO_CHECK(row_idx < symbol_set_ids_.size());
       symbol_set_ids_[row_idx] = symbol_set_id;
     }
@@ -705,132 +704,6 @@ class TraceStorage {
     std::map<std::pair<size_t /* mapping row */, uint64_t /* rel_pc */>,
              std::vector<int64_t>>
         index_;
-  };
-
-  class StackProfileMappings {
-   public:
-    struct Row {
-      StringId build_id;
-      int64_t exact_offset;
-      int64_t start_offset;
-      int64_t start;
-      int64_t end;
-      int64_t load_bias;
-      StringId name_id;
-
-      bool operator==(const Row& other) const {
-        return std::tie(build_id, exact_offset, start_offset, start, end,
-                        load_bias, name_id) ==
-               std::tie(other.build_id, other.exact_offset, other.start_offset,
-                        other.start, other.end, other.load_bias, other.name_id);
-      }
-    };
-
-    uint32_t size() const { return static_cast<uint32_t>(names_.size()); }
-
-    uint32_t Insert(const Row& row) {
-      build_ids_.emplace_back(row.build_id);
-      exact_offsets_.emplace_back(row.exact_offset);
-      start_offsets_.emplace_back(row.start_offset);
-      starts_.emplace_back(row.start);
-      ends_.emplace_back(row.end);
-      load_biases_.emplace_back(row.load_bias);
-      names_.emplace_back(row.name_id);
-
-      size_t row_number = build_ids_.size() - 1;
-      index_[std::make_pair(row.name_id, row.build_id)].emplace_back(
-          row_number);
-      return static_cast<uint32_t>(row_number);
-    }
-
-    std::vector<int64_t> FindMappingRow(StringId name,
-                                        StringId build_id) const {
-      auto it = index_.find(std::make_pair(name, build_id));
-      if (it == index_.end())
-        return {};
-      return it->second;
-    }
-
-    const std::deque<StringId>& build_ids() const { return build_ids_; }
-    const std::deque<int64_t>& exact_offsets() const { return exact_offsets_; }
-    const std::deque<int64_t>& start_offsets() const { return start_offsets_; }
-    const std::deque<int64_t>& starts() const { return starts_; }
-    const std::deque<int64_t>& ends() const { return ends_; }
-    const std::deque<int64_t>& load_biases() const { return load_biases_; }
-    const std::deque<StringId>& names() const { return names_; }
-
-   private:
-    std::deque<StringId> build_ids_;
-    std::deque<int64_t> exact_offsets_;
-    std::deque<int64_t> start_offsets_;
-    std::deque<int64_t> starts_;
-    std::deque<int64_t> ends_;
-    std::deque<int64_t> load_biases_;
-    std::deque<StringId> names_;
-
-    std::map<std::pair<StringId /* name */, StringId /* build id */>,
-             std::vector<int64_t>>
-        index_;
-  };
-
-  class HeapProfileAllocations {
-   public:
-    struct Row {
-      int64_t timestamp;
-      UniquePid upid;
-      int64_t callsite_id;
-      int64_t count;
-      int64_t size;
-    };
-
-    uint32_t size() const { return static_cast<uint32_t>(timestamps_.size()); }
-
-    void Insert(const Row& row) {
-      timestamps_.emplace_back(row.timestamp);
-      upids_.emplace_back(row.upid);
-      callsite_ids_.emplace_back(row.callsite_id);
-      counts_.emplace_back(row.count);
-      sizes_.emplace_back(row.size);
-    }
-
-    const std::deque<int64_t>& timestamps() const { return timestamps_; }
-    const std::deque<UniquePid>& upids() const { return upids_; }
-    const std::deque<int64_t>& callsite_ids() const { return callsite_ids_; }
-    const std::deque<int64_t>& counts() const { return counts_; }
-    const std::deque<int64_t>& sizes() const { return sizes_; }
-
-   private:
-    std::deque<int64_t> timestamps_;
-    std::deque<UniquePid> upids_;
-    std::deque<int64_t> callsite_ids_;
-    std::deque<int64_t> counts_;
-    std::deque<int64_t> sizes_;
-  };
-
-  class CpuProfileStackSamples {
-   public:
-    struct Row {
-      int64_t timestamp;
-      int64_t callsite_id;
-      UniqueTid utid;
-    };
-
-    uint32_t size() const { return static_cast<uint32_t>(timestamps_.size()); }
-
-    void Insert(const Row& row) {
-      timestamps_.emplace_back(row.timestamp);
-      callsite_ids_.emplace_back(row.callsite_id);
-      utids_.emplace_back(row.utid);
-    }
-
-    const std::deque<int64_t>& timestamps() const { return timestamps_; }
-    const std::deque<int64_t>& callsite_ids() const { return callsite_ids_; }
-    const std::deque<UniqueTid>& utids() const { return utids_; }
-
-   private:
-    std::deque<int64_t> timestamps_;
-    std::deque<int64_t> callsite_ids_;
-    std::deque<UniqueTid> utids_;
   };
 
   UniqueTid AddEmptyThread(uint32_t tid) {
@@ -891,18 +764,18 @@ class TraceStorage {
   // Example usage:
   // SetMetadata(metadata::benchmark_name,
   //             Variadic::String(storage->InternString("foo"));
-  // Returns the RowId of the new entry.
+  // Returns the row of the new entry.
   // Virtual for testing.
-  virtual RowId SetMetadata(metadata::KeyIDs key, Variadic value) {
+  virtual uint32_t SetMetadata(metadata::KeyIDs key, Variadic value) {
     return metadata_.SetScalarMetadata(key, value);
   }
 
   // Example usage:
   // AppendMetadata(metadata::benchmark_story_tags,
   //                Variadic::String(storage->InternString("bar"));
-  // Returns the RowId of the new entry.
+  // Returns the row of the new entry.
   // Virtual for testing.
-  virtual RowId AppendMetadata(metadata::KeyIDs key, Variadic value) {
+  virtual uint32_t AppendMetadata(metadata::KeyIDs key, Variadic value) {
     return metadata_.AppendMetadata(key, value);
   }
 
@@ -961,17 +834,6 @@ class TraceStorage {
     // Allow utid == 0 for idle thread retrieval.
     PERFETTO_DCHECK(utid < unique_threads_.size());
     return unique_threads_[utid];
-  }
-
-  static RowId CreateRowId(TableId table, uint32_t row) {
-    return (static_cast<RowId>(table) << kRowIdTableShift) | row;
-  }
-
-  static std::pair<int8_t /*table*/, uint32_t /*row*/> ParseRowId(RowId rowid) {
-    auto id = static_cast<uint64_t>(rowid);
-    auto table_id = static_cast<uint8_t>(id >> kRowIdTableShift);
-    auto row = static_cast<uint32_t>(id & ((1ull << kRowIdTableShift) - 1));
-    return std::make_pair(table_id, row);
   }
 
   const tables::TrackTable& track_table() const { return track_table_; }
@@ -1084,11 +946,11 @@ class TraceStorage {
   const RawEvents& raw_events() const { return raw_events_; }
   RawEvents* mutable_raw_events() { return &raw_events_; }
 
-  const StackProfileMappings& stack_profile_mappings() const {
-    return stack_profile_mappings_;
+  const tables::StackProfileMappingTable& stack_profile_mapping_table() const {
+    return stack_profile_mapping_table_;
   }
-  StackProfileMappings* mutable_stack_profile_mappings() {
-    return &stack_profile_mappings_;
+  tables::StackProfileMappingTable* mutable_stack_profile_mapping_table() {
+    return &stack_profile_mapping_table_;
   }
 
   const StackProfileFrames& stack_profile_frames() const {
@@ -1106,17 +968,19 @@ class TraceStorage {
     return &stack_profile_callsite_table_;
   }
 
-  const HeapProfileAllocations& heap_profile_allocations() const {
-    return heap_profile_allocations_;
+  const tables::HeapProfileAllocationTable& heap_profile_allocation_table()
+      const {
+    return heap_profile_allocation_table_;
   }
-  HeapProfileAllocations* mutable_heap_profile_allocations() {
-    return &heap_profile_allocations_;
+  tables::HeapProfileAllocationTable* mutable_heap_profile_allocation_table() {
+    return &heap_profile_allocation_table_;
   }
-  const CpuProfileStackSamples& cpu_profile_stack_samples() const {
-    return cpu_profile_stack_samples_;
+  const tables::CpuProfileStackSampleTable& cpu_profile_stack_sample_table()
+      const {
+    return cpu_profile_stack_sample_table_;
   }
-  CpuProfileStackSamples* mutable_cpu_profile_stack_samples() {
-    return &cpu_profile_stack_samples_;
+  tables::CpuProfileStackSampleTable* mutable_cpu_profile_stack_sample_table() {
+    return &cpu_profile_stack_sample_table_;
   }
 
   const tables::SymbolTable& symbol_table() const { return symbol_table_; }
@@ -1171,9 +1035,21 @@ class TraceStorage {
   // Returns (0, 0) if the trace is empty.
   std::pair<int64_t, int64_t> GetTraceTimestampBoundsNs() const;
 
- private:
-  static constexpr uint8_t kRowIdTableShift = 32;
+  // TODO(lalitm): remove this when we have a better home.
+  std::vector<int64_t> FindMappingRow(StringId name, StringId build_id) const {
+    auto it = stack_profile_mapping_index_.find(std::make_pair(name, build_id));
+    if (it == stack_profile_mapping_index_.end())
+      return {};
+    return it->second;
+  }
 
+  // TODO(lalitm): remove this when we have a better home.
+  void InsertMappingRow(StringId name, StringId build_id, uint32_t row) {
+    auto pair = std::make_pair(name, build_id);
+    stack_profile_mapping_index_[pair].emplace_back(row);
+  }
+
+ private:
   using StringHash = uint64_t;
 
   TraceStorage(const TraceStorage&) = delete;
@@ -1181,6 +1057,10 @@ class TraceStorage {
 
   TraceStorage(TraceStorage&&) = delete;
   TraceStorage& operator=(TraceStorage&&) = delete;
+
+  // TODO(lalitm): remove this when we find a better home for this.
+  using MappingKey = std::pair<StringId /* name */, StringId /* build id */>;
+  std::map<MappingKey, std::vector<int64_t>> stack_profile_mapping_index_;
 
   // One entry for each unique string in the trace.
   StringPool string_pool_;
@@ -1263,12 +1143,15 @@ class TraceStorage {
   RawEvents raw_events_;
   AndroidLogs android_log_;
 
-  StackProfileMappings stack_profile_mappings_;
+  tables::StackProfileMappingTable stack_profile_mapping_table_{&string_pool_,
+                                                                nullptr};
   StackProfileFrames stack_profile_frames_;
   tables::StackProfileCallsiteTable stack_profile_callsite_table_{&string_pool_,
                                                                   nullptr};
-  HeapProfileAllocations heap_profile_allocations_;
-  CpuProfileStackSamples cpu_profile_stack_samples_;
+  tables::HeapProfileAllocationTable heap_profile_allocation_table_{
+      &string_pool_, nullptr};
+  tables::CpuProfileStackSampleTable cpu_profile_stack_sample_table_{
+      &string_pool_, nullptr};
 
   // Symbol tables (mappings from frames to symbol names)
   tables::SymbolTable symbol_table_{&string_pool_, nullptr};
@@ -1284,6 +1167,16 @@ class TraceStorage {
 }  // namespace perfetto
 
 namespace std {
+
+template <>
+struct hash<::perfetto::trace_processor::TrackId> {
+  using argument_type = ::perfetto::trace_processor::TrackId;
+  using result_type = size_t;
+
+  result_type operator()(const argument_type& r) const {
+    return std::hash<uint32_t>{}(r.value);
+  }
+};
 
 template <>
 struct hash<
@@ -1313,9 +1206,9 @@ struct hash<
 
 template <>
 struct hash<
-    ::perfetto::trace_processor::TraceStorage::StackProfileMappings::Row> {
+    ::perfetto::trace_processor::tables::StackProfileMappingTable::Row> {
   using argument_type =
-      ::perfetto::trace_processor::TraceStorage::StackProfileMappings::Row;
+      ::perfetto::trace_processor::tables::StackProfileMappingTable::Row;
   using result_type = size_t;
 
   result_type operator()(const argument_type& r) const {
@@ -1324,7 +1217,7 @@ struct hash<
            std::hash<int64_t>{}(r.start_offset) ^
            std::hash<int64_t>{}(r.start) ^ std::hash<int64_t>{}(r.end) ^
            std::hash<int64_t>{}(r.load_bias) ^
-           std::hash<::perfetto::trace_processor::StringId>{}(r.name_id);
+           std::hash<::perfetto::trace_processor::StringId>{}(r.name);
   }
 };
 

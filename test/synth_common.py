@@ -28,9 +28,10 @@ class Trace(object):
     self.proc_map = {}
     self.proc_map[0] = 'idle_thread'
 
-  def add_system_info(self, arch=None):
+  def add_system_info(self, arch="", fingerprint=""):
     self.packet = self.trace.packet.add()
     self.packet.system_info.utsname.machine = arch
+    self.packet.system_info.android_build_fingerprint = fingerprint
 
   def add_ftrace_packet(self, cpu):
     self.packet = self.trace.packet.add()
@@ -281,7 +282,8 @@ class Trace(object):
     for s in specs:
       hw_queue = spec.hw_queue.add()
       hw_queue.name = s.get('name', '')
-      hw_queue.description = s.get('description', '')
+      if 'description' in s:
+        hw_queue.description = s['description']
 
   def add_gpu_render_stages_stage_spec(self, specs=[]):
     packet = self.add_packet()
@@ -289,7 +291,8 @@ class Trace(object):
     for s in specs:
       stage = spec.stage.add()
       stage.name = s.get('name', '')
-      stage.description = s.get('description', '')
+      if 'description' in s:
+        stage.description = s['description']
 
   def add_gpu_render_stages(self,
                             ts,
@@ -325,12 +328,13 @@ class Trace(object):
       if value is not None:
         data.value = value
 
-  def add_vk_debug_marker(self, ts, pid, vk_device, obj, obj_name):
+  def add_vk_debug_marker(self, ts, pid, vk_device, obj_type, obj, obj_name):
     packet = self.add_packet()
     packet.timestamp = ts
     debug_marker = (self.packet.vulkan_api_event.vk_debug_utils_object_name)
     debug_marker.pid = pid
     debug_marker.vk_device = vk_device
+    debug_marker.object_type = obj_type
     debug_marker.object = obj
     debug_marker.object_name = obj_name
 

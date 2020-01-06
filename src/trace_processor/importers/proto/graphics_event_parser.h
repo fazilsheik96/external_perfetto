@@ -60,9 +60,7 @@ class GraphicsEventParser {
   void ParseGraphicsFrameEvent(int64_t timestamp, ConstBytes);
   void ParseGpuLog(int64_t ts, ConstBytes);
 
-  void ParseVulkanMemoryEvent(PacketSequenceState*,
-                              size_t sequence_state_generation,
-                              ConstBytes);
+  void ParseVulkanMemoryEvent(PacketSequenceStateGeneration*, ConstBytes);
   void UpdateVulkanMemoryAllocationCounters(UniquePid,
                                             const VulkanMemoryEvent::Decoder&);
 
@@ -77,9 +75,11 @@ class GraphicsEventParser {
   // For GpuCounterEvent
   std::unordered_map<uint32_t, TrackId> gpu_counter_track_ids_;
   // For GpuRenderStageEvent
+  const StringId description_id_;
   const StringId gpu_render_stage_scope_id_;
   std::vector<TrackId> gpu_hw_queue_ids_;
-  std::vector<StringId> gpu_render_stage_ids_;
+  // Map of stage ID -> pair(stage name, stage description)
+  std::vector<std::pair<StringId, StringId>> gpu_render_stage_ids_;
   // For GraphicsFrameEvent
   const StringId graphics_event_scope_id_;
   const StringId unknown_event_name_id_;
@@ -109,7 +109,10 @@ class GraphicsEventParser {
   const StringId log_message_id_;
   std::array<StringId, 7> log_severity_ids_;
   // For Vulkan events.
-  std::unordered_map<uint64_t, ::protozero::ConstChars> debug_marker_names_;
+  // Map of vk handle -> vk object name.
+  using DebugMarkerMap = std::unordered_map<uint64_t, std::string>;
+  // Map of VkObjectType -> DebugMarkerMap.
+  std::unordered_map<int32_t, DebugMarkerMap> debug_marker_names_;
 };
 }  // namespace trace_processor
 }  // namespace perfetto
