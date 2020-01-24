@@ -55,6 +55,12 @@ synth_oom.py oom_query.sql synth_oom_oom_query.out
 kernel_lmk.py lmk.sql lmk_kernel_lmk.out
 ../data/lmk_userspace.pb lmk.sql lmk_userspace_lmk.out
 
+# Rss stats
+rss_stat_mm_id.py rss_stat.sql rss_stat_mm_id.out
+rss_stat_mm_id_clone.py rss_stat.sql rss_stat_mm_id_clone.out
+rss_stat_mm_id_reuse.py rss_stat.sql rss_stat_mm_id_reuse.out
+rss_stat_legacy.py rss_stat.sql rss_stat_legacy.out
+
 # Memory counters
 ../data/memory_counters.pb args_string_filter_null.sql memory_counters_args_string_filter_null.out
 ../data/memory_counters.pb args_string_is_null.sql memory_counters_args_string_is_null.out
@@ -92,6 +98,7 @@ synth_1.py span_join_unordered_cols_reverse.sql span_join_unordered_cols_synth_1
 ../data/android_sched_and_ps.pb span_join_zero_negative_dur.sql span_join_zero_negative_dur.out
 ../data/android_sched_and_ps.pb span_outer_join_empty.sql span_outer_join_empty_android_sched_and_ps.out
 ../data/android_sched_and_ps.pb span_left_join_unordered.sql span_left_join_unordered_android_sched_and_ps.out
+../data/android_sched_and_ps.pb span_join_unpartitioned_empty.sql span_join_unpartitioned_empty.out
 
 # Window table
 ../data/android_sched_and_ps.pb smoke_window.sql android_sched_and_ps_smoke_window.out
@@ -146,6 +153,8 @@ heap_graph.textproto heap_graph_object.sql heap_graph_object.out
 heap_graph.textproto heap_graph_reference.sql heap_graph_reference.out
 heap_graph_interleaved.textproto heap_graph_object.sql heap_graph_interleaved_object.out
 heap_graph_interleaved.textproto heap_graph_reference.sql heap_graph_interleaved_reference.out
+../data/system-server-heap-graph.pftrace heap_graph_flamegraph.sql heap_graph_flamegraph_system-server-heap-graph.out
+../data/system-server-native-profile heap_profile_flamegraph.sql heap_profile_flamegraph_system-server-native-profile.out
 
 # TrackEvent tests.
 track_event_same_tids.textproto process_tracking.sql track_event_same_tids_threads.out
@@ -167,3 +176,6 @@ config_metadata.textproto metadata.sql config_metadata.out
 
 # Ensures process -> package matching works as expected.
 process_metadata_matching.textproto process_metadata_matching.sql process_metadata_matching.out
+
+# Trace size
+../data/android_sched_and_ps.pb trace_size.sql android_sched_and_ps_trace_size.out

@@ -43,12 +43,17 @@ void MaybeUpdateMinMax(T begin_it,
 void DbTableMaybeUpdateMinMax(const TypedColumn<int64_t>& column,
                               int64_t* min_value,
                               int64_t* max_value) {
-  if (column.row_map().size() == 0)
+  if (column.row_map().empty())
     return;
 
-  PERFETTO_CHECK(column.IsSorted());
-  *min_value = std::min(*min_value, column[0]);
-  *max_value = std::max(*max_value, column[column.row_map().size() - 1]);
+  SqlValue col_min = *column.Min();
+  SqlValue col_max = *column.Max();
+
+  PERFETTO_DCHECK(col_min.type == SqlValue::Type::kLong);
+  PERFETTO_DCHECK(col_max.type == SqlValue::Type::kLong);
+
+  *min_value = std::min(*min_value, col_min.long_value);
+  *max_value = std::max(*max_value, col_max.long_value);
 }
 
 std::vector<NullTermStringView> CreateRefTypeStringMap() {
@@ -72,11 +77,19 @@ const std::vector<NullTermStringView>& GetRefTypeStringMap() {
   return map.ref();
 }
 
-TraceStorage::TraceStorage(const Config& config)
-    : string_pool_(config.string_pool_block_size_bytes) {
+TraceStorage::TraceStorage(const Config&) {
   // Upid/utid 0 is reserved for idle processes/threads.
-  unique_processes_.emplace_back(0);
-  unique_threads_.emplace_back(0);
+  tables::ThreadTable::Row thread_row;
+  thread_row.tid = 0;
+  thread_table_.Insert(thread_row);
+
+  tables::ProcessTable::Row process_row;
+  process_row.pid = 0;
+  process_table_.Insert(process_row);
+
+  for (uint32_t i = 0; i < variadic_type_ids_.size(); ++i) {
+    variadic_type_ids_[i] = InternString(Variadic::kTypeNames[i]);
+  }
 }
 
 TraceStorage::~TraceStorage() {}
@@ -126,17 +139,14 @@ std::pair<int64_t, int64_t> TraceStorage::GetTraceTimestampBoundsNs() const {
   int64_t end_ns = std::numeric_limits<int64_t>::min();
   MaybeUpdateMinMax(slices_.start_ns().begin(), slices_.start_ns().end(),
                     &start_ns, &end_ns);
-  MaybeUpdateMinMax(instants_.timestamps().begin(),
-                    instants_.timestamps().end(), &start_ns, &end_ns);
-  MaybeUpdateMinMax(android_log_.timestamps().begin(),
-                    android_log_.timestamps().end(), &start_ns, &end_ns);
-  MaybeUpdateMinMax(raw_events_.timestamps().begin(),
-                    raw_events_.timestamps().end(), &start_ns, &end_ns);
 
+  DbTableMaybeUpdateMinMax(raw_table_.ts(), &start_ns, &end_ns);
   DbTableMaybeUpdateMinMax(counter_table_.ts(), &start_ns, &end_ns);
   DbTableMaybeUpdateMinMax(slice_table_.ts(), &start_ns, &end_ns);
   DbTableMaybeUpdateMinMax(heap_profile_allocation_table_.ts(), &start_ns,
                            &end_ns);
+  DbTableMaybeUpdateMinMax(instant_table_.ts(), &start_ns, &end_ns);
+  DbTableMaybeUpdateMinMax(android_log_table_.ts(), &start_ns, &end_ns);
 
   if (start_ns == std::numeric_limits<int64_t>::max()) {
     return std::make_pair(0, 0);

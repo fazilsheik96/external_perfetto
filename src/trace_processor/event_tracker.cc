@@ -25,7 +25,7 @@
 #include "src/trace_processor/stats.h"
 #include "src/trace_processor/trace_processor_context.h"
 #include "src/trace_processor/track_tracker.h"
-#include "src/trace_processor/variadic.h"
+#include "src/trace_processor/types/variadic.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -67,33 +67,36 @@ base::Optional<CounterId> EventTracker::PushCounter(int64_t timestamp,
   return counter_values->Insert({timestamp, track_id.value, value});
 }
 
-uint32_t EventTracker::PushInstant(int64_t timestamp,
-                                   StringId name_id,
-                                   double value,
-                                   int64_t ref,
-                                   RefType ref_type,
-                                   bool resolve_utid_to_upid) {
-  auto* instants = context_->storage->mutable_instants();
-  uint32_t idx;
+InstantId EventTracker::PushInstant(int64_t timestamp,
+                                    StringId name_id,
+                                    int64_t ref,
+                                    RefType ref_type,
+                                    bool resolve_utid_to_upid) {
+  auto* instants = context_->storage->mutable_instant_table();
+  InstantId id;
   if (resolve_utid_to_upid) {
-    idx = instants->AddInstantEvent(timestamp, name_id, value, 0,
-                                    RefType::kRefUpid);
+    auto ref_type_id = context_->storage->InternString(
+        GetRefTypeStringMap()[static_cast<size_t>(RefType::kRefUpid)]);
+    id = instants->Insert({timestamp, name_id, 0, ref_type_id});
     PendingUpidResolutionInstant pending;
-    pending.row = idx;
+    pending.row = *instants->id().IndexOf(id);
     pending.utid = static_cast<UniqueTid>(ref);
     pending_upid_resolution_instant_.emplace_back(pending);
   } else {
-    idx = instants->AddInstantEvent(timestamp, name_id, value, ref, ref_type);
+    auto ref_type_id = context_->storage->InternString(
+        GetRefTypeStringMap()[static_cast<size_t>(ref_type)]);
+    id = instants->Insert({timestamp, name_id, ref, ref_type_id});
   }
-  return idx;
+  return id;
 }
 
 void EventTracker::FlushPendingEvents() {
+  const auto& thread_table = context_->storage->thread_table();
   for (const auto& pending_counter : pending_upid_resolution_counter_) {
-    const auto& thread = context_->storage->GetThread(pending_counter.utid);
     // TODO(lalitm): having upid == 0 is probably not the correct approach here
     // but it's unclear what may be better.
-    UniquePid upid = thread.upid.value_or(0);
+    UniqueTid utid = pending_counter.utid;
+    UniquePid upid = thread_table.upid()[utid].value_or(0);
     TrackId id = context_->track_tracker->InternProcessCounterTrack(
         pending_counter.name_id, upid);
     context_->storage->mutable_counter_table()->mutable_track_id()->Set(
@@ -101,11 +104,12 @@ void EventTracker::FlushPendingEvents() {
   }
 
   for (const auto& pending_instant : pending_upid_resolution_instant_) {
-    const auto& thread = context_->storage->GetThread(pending_instant.utid);
+    UniqueTid utid = pending_instant.utid;
     // TODO(lalitm): having upid == 0 is probably not the correct approach here
     // but it's unclear what may be better.
-    UniquePid upid = thread.upid.value_or(0);
-    context_->storage->mutable_instants()->set_ref(pending_instant.row, upid);
+    UniquePid upid = thread_table.upid()[utid].value_or(0);
+    context_->storage->mutable_instant_table()->mutable_ref()->Set(
+        pending_instant.row, upid);
   }
 
   pending_upid_resolution_counter_.clear();

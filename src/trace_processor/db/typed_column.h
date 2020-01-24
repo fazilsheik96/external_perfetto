@@ -62,6 +62,18 @@ struct TypedColumn : public Column {
   // Inserts the value at the end of the column.
   void Append(T v) { mutable_sparse_vector<T>()->Append(v); }
 
+  // Returns the row containing the given value in the Column.
+  base::Optional<uint32_t> IndexOf(T v) const {
+    return Column::IndexOf(NumericToSqlValue(v));
+  }
+
+  std::vector<T> ToVectorForTesting() const {
+    std::vector<T> result(row_map().size());
+    for (uint32_t i = 0; i < row_map().size(); ++i)
+      result[i] = (*this)[i];
+    return result;
+  }
+
   // Implements equality between two items of type |T|.
   static bool Equals(T a, T b) {
     // We need to use equal_to here as it could be T == double and because we
@@ -98,6 +110,13 @@ struct TypedColumn<base::Optional<T>> : public Column {
 
   // Inserts the value at the end of the column.
   void Append(base::Optional<T> v) { mutable_sparse_vector<T>()->Append(v); }
+
+  std::vector<base::Optional<T>> ToVectorForTesting() const {
+    std::vector<T> result(row_map().size());
+    for (uint32_t i = 0; i < row_map().size(); ++i)
+      result[i] = (*this)[i];
+    return result;
+  }
 
   // Implements equality between two items of type |T|.
   static bool Equals(base::Optional<T> a, base::Optional<T> b) {
@@ -147,6 +166,16 @@ struct TypedColumn<StringPool::Id> : public Column {
     mutable_sparse_vector<StringPool::Id>()->Append(v);
   }
 
+  // Returns the row containing the given value in the Column.
+  base::Optional<uint32_t> IndexOf(StringPool::Id v) const {
+    return Column::IndexOf(SqlValue::String(string_pool().Get(v).c_str()));
+  }
+
+  // Returns the row containing the given value in the Column.
+  base::Optional<uint32_t> IndexOf(NullTermStringView v) const {
+    return Column::IndexOf(SqlValue::String(v.c_str()));
+  }
+
   // Implements equality between two items of type |T|.
   static bool Equals(StringPool::Id a, StringPool::Id b) { return a == b; }
 
@@ -174,7 +203,7 @@ struct TypedColumn<base::Optional<StringPool::Id>>
     // TODO(lalitm): remove this special casing if we migrate all tables over
     // to macro tables and find that we can remove support for null stringids
     // in the stringpool.
-    return TypedColumn<StringPool::Id>::Append(v ? *v : StringPool::Id(0u));
+    return TypedColumn<StringPool::Id>::Append(v ? *v : StringPool::Id::Null());
   }
 
   // Implements equality between two items of type |T|.

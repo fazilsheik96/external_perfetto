@@ -36,13 +36,14 @@
 #include "src/trace_processor/importers/ftrace/ftrace_module.h"
 #include "src/trace_processor/importers/proto/packet_sequence_state.h"
 #include "src/trace_processor/metadata.h"
+#include "src/trace_processor/metadata_tracker.h"
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/slice_tracker.h"
 #include "src/trace_processor/stack_profile_tracker.h"
 #include "src/trace_processor/timestamped_trace_piece.h"
 #include "src/trace_processor/trace_processor_context.h"
 #include "src/trace_processor/track_tracker.h"
-#include "src/trace_processor/variadic.h"
+#include "src/trace_processor/types/variadic.h"
 
 #include "protos/perfetto/common/trace_stats.pbzero.h"
 #include "protos/perfetto/config/trace_config.pbzero.h"
@@ -173,7 +174,8 @@ ProtoTraceParser::ProtoTraceParser(TraceProcessorContext* context)
           context->storage->InternString("chrome_event.legacy_user_trace")) {
   // TODO(140860736): Once we support null values for
   // stack_profile_frame.symbol_set_id remove this hack
-  context_->storage->mutable_symbol_table()->Insert({0, 0, 0, 0});
+  context_->storage->mutable_symbol_table()->Insert(
+      {0, kNullStringId, kNullStringId, 0});
 }
 
 ProtoTraceParser::~ProtoTraceParser() = default;
@@ -443,18 +445,19 @@ void ProtoTraceParser::ParseStreamingProfilePacket(
       break;
     }
 
-    auto maybe_callstack_id =
-        stack_profile_tracker.FindCallstack(*callstack_it, &intern_lookup);
+    auto maybe_callstack_id = stack_profile_tracker.FindOrInsertCallstack(
+        *callstack_it, &intern_lookup);
     if (!maybe_callstack_id) {
       context_->storage->IncrementStats(stats::stackprofile_parser_error);
       PERFETTO_ELOG("StreamingProfilePacket referencing invalid callstack!");
       continue;
     }
 
-    int64_t callstack_id = *maybe_callstack_id;
+    uint32_t callstack_id = maybe_callstack_id->value;
 
     tables::CpuProfileStackSampleTable::Row sample_row{
-        sequence_state->state()->IncrementAndGetTrackEventTimeNs(*timestamp_it),
+        sequence_state->state()->IncrementAndGetTrackEventTimeNs(*timestamp_it *
+                                                                 1000),
         callstack_id, utid};
     storage->mutable_cpu_profile_stack_sample_table()->Insert(sample_row);
   }
@@ -462,47 +465,50 @@ void ProtoTraceParser::ParseStreamingProfilePacket(
 
 void ProtoTraceParser::ParseChromeBenchmarkMetadata(ConstBytes blob) {
   TraceStorage* storage = context_->storage.get();
+  MetadataTracker* metadata = context_->metadata_tracker.get();
+
   protos::pbzero::ChromeBenchmarkMetadata::Decoder packet(blob.data, blob.size);
   if (packet.has_benchmark_name()) {
     auto benchmark_name_id = storage->InternString(packet.benchmark_name());
-    storage->SetMetadata(metadata::benchmark_name,
-                         Variadic::String(benchmark_name_id));
+    metadata->SetMetadata(metadata::benchmark_name,
+                          Variadic::String(benchmark_name_id));
   }
   if (packet.has_benchmark_description()) {
     auto benchmark_description_id =
         storage->InternString(packet.benchmark_description());
-    storage->SetMetadata(metadata::benchmark_description,
-                         Variadic::String(benchmark_description_id));
+    metadata->SetMetadata(metadata::benchmark_description,
+                          Variadic::String(benchmark_description_id));
   }
   if (packet.has_label()) {
     auto label_id = storage->InternString(packet.label());
-    storage->SetMetadata(metadata::benchmark_label, Variadic::String(label_id));
+    metadata->SetMetadata(metadata::benchmark_label,
+                          Variadic::String(label_id));
   }
   if (packet.has_story_name()) {
     auto story_name_id = storage->InternString(packet.story_name());
-    storage->SetMetadata(metadata::benchmark_story_name,
-                         Variadic::String(story_name_id));
+    metadata->SetMetadata(metadata::benchmark_story_name,
+                          Variadic::String(story_name_id));
   }
   for (auto it = packet.story_tags(); it; ++it) {
     auto story_tag_id = storage->InternString(*it);
-    storage->AppendMetadata(metadata::benchmark_story_tags,
-                            Variadic::String(story_tag_id));
+    metadata->AppendMetadata(metadata::benchmark_story_tags,
+                             Variadic::String(story_tag_id));
   }
   if (packet.has_benchmark_start_time_us()) {
-    storage->SetMetadata(metadata::benchmark_start_time_us,
-                         Variadic::Integer(packet.benchmark_start_time_us()));
+    metadata->SetMetadata(metadata::benchmark_start_time_us,
+                          Variadic::Integer(packet.benchmark_start_time_us()));
   }
   if (packet.has_story_run_time_us()) {
-    storage->SetMetadata(metadata::benchmark_story_run_time_us,
-                         Variadic::Integer(packet.story_run_time_us()));
+    metadata->SetMetadata(metadata::benchmark_story_run_time_us,
+                          Variadic::Integer(packet.story_run_time_us()));
   }
   if (packet.has_story_run_index()) {
-    storage->SetMetadata(metadata::benchmark_story_run_index,
-                         Variadic::Integer(packet.story_run_index()));
+    metadata->SetMetadata(metadata::benchmark_story_run_index,
+                          Variadic::Integer(packet.story_run_index()));
   }
   if (packet.has_had_failures()) {
-    storage->SetMetadata(metadata::benchmark_had_failures,
-                         Variadic::Integer(packet.had_failures()));
+    metadata->SetMetadata(metadata::benchmark_had_failures,
+                          Variadic::Integer(packet.had_failures()));
   }
 }
 
@@ -511,8 +517,9 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
   protos::pbzero::ChromeEventBundle::Decoder bundle(blob.data, blob.size);
   ArgsTracker args(context_);
   if (bundle.has_metadata()) {
-    uint32_t row = storage->mutable_raw_events()->AddRawEvent(
-        ts, raw_chrome_metadata_event_id_, 0, 0);
+    RawId id = storage->mutable_raw_table()->Insert(
+        {ts, raw_chrome_metadata_event_id_, 0, 0});
+    auto inserter = args.AddArgsTo(id);
 
     // Metadata is proxied via a special event in the raw table to JSON export.
     for (auto it = bundle.metadata(); it; ++it) {
@@ -530,14 +537,15 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
         value = Variadic::Json(storage->InternString(metadata.json_value()));
       } else {
         context_->storage->IncrementStats(stats::empty_chrome_metadata);
+        continue;
       }
-      args.AddArg(TableId::kRawEvents, row, name_id, name_id, value);
+      args.AddArgsTo(id).AddArg(name_id, value);
     }
   }
 
   if (bundle.has_legacy_ftrace_output()) {
-    uint32_t row = storage->mutable_raw_events()->AddRawEvent(
-        ts, raw_chrome_legacy_system_trace_event_id_, 0, 0);
+    RawId id = storage->mutable_raw_table()->Insert(
+        {ts, raw_chrome_legacy_system_trace_event_id_, 0, 0});
 
     std::string data;
     for (auto it = bundle.legacy_ftrace_output(); it; ++it) {
@@ -545,7 +553,7 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
     }
     Variadic value =
         Variadic::String(storage->InternString(base::StringView(data)));
-    args.AddArg(TableId::kRawEvents, row, data_name_id_, data_name_id_, value);
+    args.AddArgsTo(id).AddArg(data_name_id_, value);
   }
 
   if (bundle.has_legacy_json_trace()) {
@@ -555,12 +563,11 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
           protos::pbzero::ChromeLegacyJsonTrace::USER_TRACE) {
         continue;
       }
-      uint32_t row = storage->mutable_raw_events()->AddRawEvent(
-          ts, raw_chrome_legacy_user_trace_event_id_, 0, 0);
+      RawId id = storage->mutable_raw_table()->Insert(
+          {ts, raw_chrome_legacy_user_trace_event_id_, 0, 0});
       Variadic value =
           Variadic::String(storage->InternString(legacy_trace.data()));
-      args.AddArg(TableId::kRawEvents, row, data_name_id_, data_name_id_,
-                  value);
+      args.AddArgsTo(id).AddArg(data_name_id_, value);
     }
   }
 }
@@ -570,7 +577,7 @@ void ProtoTraceParser::ParseMetatraceEvent(int64_t ts, ConstBytes blob) {
   auto utid = context_->process_tracker->GetOrCreateThread(event.thread_id());
 
   StringId cat_id = metatrace_id_;
-  StringId name_id = 0;
+  StringId name_id = kNullStringId;
   char fallback[64];
 
   if (event.has_event_id()) {
@@ -615,7 +622,8 @@ void ProtoTraceParser::ParseTraceConfig(ConstBytes blob) {
     base::Uuid uuid(uuid_lsb, uuid_msb);
     std::string str = uuid.ToPrettyString();
     StringId id = context_->storage->InternString(base::StringView(str));
-    context_->storage->SetMetadata(metadata::trace_uuid, Variadic::String(id));
+    context_->metadata_tracker->SetMetadata(metadata::trace_uuid,
+                                            Variadic::String(id));
   }
 }
 
@@ -623,10 +631,10 @@ void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
   protos::pbzero::ModuleSymbols::Decoder module_symbols(blob.data, blob.size);
   std::string hex_build_id = base::ToHex(module_symbols.build_id().data,
                                          module_symbols.build_id().size);
-  auto mapping_rows = context_->storage->FindMappingRow(
+  auto mapping_ids = context_->storage->FindMappingRow(
       context_->storage->InternString(module_symbols.path()),
       context_->storage->InternString(base::StringView(hex_build_id)));
-  if (mapping_rows.empty()) {
+  if (mapping_ids.empty()) {
     context_->storage->IncrementStats(stats::stackprofile_invalid_mapping_id);
     return;
   }
@@ -635,15 +643,14 @@ void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
 
     uint32_t symbol_set_id = context_->storage->symbol_table().row_count();
     bool frame_found = false;
-    for (int64_t mapping_row : mapping_rows) {
-      std::vector<int64_t> frame_rows =
-          context_->storage->stack_profile_frames().FindFrameRow(
-              static_cast<size_t>(mapping_row), address_symbols.address());
+    for (MappingId mapping_id : mapping_ids) {
+      std::vector<FrameId> frame_ids = context_->storage->FindFrameIds(
+          mapping_id, address_symbols.address());
 
-      for (const int64_t frame_row : frame_rows) {
-        PERFETTO_DCHECK(frame_row >= 0);
-        context_->storage->mutable_stack_profile_frames()->SetSymbolSetId(
-            static_cast<uint32_t>(frame_row), symbol_set_id);
+      for (const FrameId frame_id : frame_ids) {
+        auto* frames = context_->storage->mutable_stack_profile_frame_table();
+        uint32_t frame_row = *frames->id().IndexOf(frame_id);
+        frames->mutable_symbol_set_id()->Set(frame_row, symbol_set_id);
         frame_found = true;
       }
     }

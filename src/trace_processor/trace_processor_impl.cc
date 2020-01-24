@@ -23,13 +23,8 @@
 #include "perfetto/base/time.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
-#include "src/trace_processor/android_logs_table.h"
-#include "src/trace_processor/args_table.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
-#include "src/trace_processor/instants_table.h"
-#include "src/trace_processor/metadata_table.h"
-#include "src/trace_processor/process_table.h"
-#include "src/trace_processor/raw_table.h"
+#include "src/trace_processor/metadata_tracker.h"
 #include "src/trace_processor/register_additional_modules.h"
 #include "src/trace_processor/sched_slice_table.h"
 #include "src/trace_processor/span_join_operator_table.h"
@@ -37,9 +32,10 @@
 #include "src/trace_processor/sqlite/db_sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite3_str_split.h"
 #include "src/trace_processor/sqlite/sqlite_table.h"
-#include "src/trace_processor/stack_profile_frame_table.h"
+#include "src/trace_processor/sqlite_experimental_flamegraph_table.h"
+#include "src/trace_processor/sqlite_raw_table.h"
 #include "src/trace_processor/stats_table.h"
-#include "src/trace_processor/thread_table.h"
+#include "src/trace_processor/types/variadic.h"
 #include "src/trace_processor/window_operator_table.h"
 
 #include "src/trace_processor/metrics/metrics.descriptor.h"
@@ -183,11 +179,11 @@ void CreateBuiltinViews(sqlite3* db) {
   }
 
   sqlite3_exec(db,
-               "CREATE VIEW gpu_slice AS "
+               "CREATE VIEW instants AS "
                "SELECT "
-               "* "
-               "FROM internal_gpu_slice join internal_slice "
-               "ON internal_gpu_slice.slice_id = internal_slice.id;",
+               "*, "
+               "0.0 as value "
+               "FROM instant;",
                0, 0, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -199,6 +195,30 @@ void CreateBuiltinViews(sqlite3* db) {
   sqlite3_exec(db,
                "CREATE VIEW slices AS "
                "SELECT * FROM slice;",
+               0, 0, &error);
+  if (error) {
+    PERFETTO_ELOG("Error initializing: %s", error);
+    sqlite3_free(error);
+  }
+
+  sqlite3_exec(db,
+               "CREATE VIEW thread AS "
+               "SELECT "
+               "id as utid, "
+               "* "
+               "FROM internal_thread;",
+               0, 0, &error);
+  if (error) {
+    PERFETTO_ELOG("Error initializing: %s", error);
+    sqlite3_free(error);
+  }
+
+  sqlite3_exec(db,
+               "CREATE VIEW process AS "
+               "SELECT "
+               "id as upid, "
+               "* "
+               "FROM internal_process;",
                0, 0, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -361,25 +381,32 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
 
   SetupMetrics(this, *db_, &sql_metrics_);
 
-  ArgsTable::RegisterTable(*db_, context_.storage.get());
-  ProcessTable::RegisterTable(*db_, context_.storage.get());
-  SchedSliceTable::RegisterTable(*db_, context_.storage.get());
-  SqlStatsTable::RegisterTable(*db_, context_.storage.get());
-  ThreadTable::RegisterTable(*db_, context_.storage.get());
-  SpanJoinOperatorTable::RegisterTable(*db_, context_.storage.get());
-  WindowOperatorTable::RegisterTable(*db_, context_.storage.get());
-  InstantsTable::RegisterTable(*db_, context_.storage.get());
-  StatsTable::RegisterTable(*db_, context_.storage.get());
-  AndroidLogsTable::RegisterTable(*db_, context_.storage.get());
-  RawTable::RegisterTable(*db_, context_.storage.get());
-  StackProfileFrameTable::RegisterTable(*db_, context_.storage.get());
-  MetadataTable::RegisterTable(*db_, context_.storage.get());
+  const TraceStorage* storage = context_.storage.get();
+
+  SchedSliceTable::RegisterTable(*db_, storage);
+  SqlStatsTable::RegisterTable(*db_, storage);
+  StatsTable::RegisterTable(*db_, storage);
+
+  // Operator tables.
+  SpanJoinOperatorTable::RegisterTable(*db_, storage);
+  WindowOperatorTable::RegisterTable(*db_, storage);
+
+  // New style tables but with some custom logic.
+  SqliteExperimentalFlamegraphTable::RegisterTable(*db_, &context_);
+  SqliteRawTable::RegisterTable(*db_, context_.storage.get());
 
   // New style db-backed tables.
-  const TraceStorage* storage = context_.storage.get();
+  DbSqliteTable::RegisterTable(*db_, &storage->arg_table(),
+                               storage->arg_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->thread_table(),
+                               storage->thread_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->process_table(),
+                               storage->process_table().table_name());
 
   DbSqliteTable::RegisterTable(*db_, &storage->slice_table(),
                                storage->slice_table().table_name());
+  DbSqliteTable::RegisterTable(*db_, &storage->instant_table(),
+                               storage->instant_table().table_name());
   DbSqliteTable::RegisterTable(*db_, &storage->gpu_slice_table(),
                                storage->gpu_slice_table().table_name());
 
@@ -433,10 +460,19 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   DbSqliteTable::RegisterTable(
       *db_, &storage->stack_profile_mapping_table(),
       storage->stack_profile_mapping_table().table_name());
+  DbSqliteTable::RegisterTable(
+      *db_, &storage->stack_profile_frame_table(),
+      storage->stack_profile_frame_table().table_name());
+
+  DbSqliteTable::RegisterTable(*db_, &storage->android_log_table(),
+                               storage->android_log_table().table_name());
 
   DbSqliteTable::RegisterTable(
       *db_, &storage->vulkan_memory_allocations_table(),
       storage->vulkan_memory_allocations_table().table_name());
+
+  DbSqliteTable::RegisterTable(*db_, &storage->metadata_table(),
+                               storage->metadata_table().table_name());
 }
 
 TraceProcessorImpl::~TraceProcessorImpl() {
@@ -468,6 +504,9 @@ void TraceProcessorImpl::NotifyEndOfFile() {
   TraceProcessorStorageImpl::NotifyEndOfFile();
 
   SchedEventTracker::GetOrCreate(&context_)->FlushPendingEvents();
+  context_.metadata_tracker->SetMetadata(
+      metadata::trace_size_bytes,
+      Variadic::Integer(static_cast<int64_t>(bytes_parsed_)));
   BuildBoundsTable(*db_, context_.storage->GetTraceTimestampBoundsNs());
 
   // Create a snapshot of all tables and views created so far. This is so later
@@ -501,7 +540,12 @@ size_t TraceProcessorImpl::RestoreInitialTables() {
     auto it = ExecuteQuery(query);
     while (it.Next()) {
     }
-    PERFETTO_CHECK(it.Status().ok());
+    // Index deletion can legitimately fail. If one creates an index "i" on a
+    // table "t" but issues the deletion in the order (t, i), the DROP index i
+    // will fail with "no such index" because deleting the table "t"
+    // automatically deletes all associated indexes.
+    if (!it.Status().ok() && tn.first != "index")
+      PERFETTO_FATAL("%s -> %s", query.c_str(), it.Status().c_message());
   }
   return deletion_list.size();
 }

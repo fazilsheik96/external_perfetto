@@ -121,7 +121,7 @@ void HeapGraphTracker::FinalizeProfile(uint32_t seq_id) {
     sequence_state.object_id_to_row.emplace(obj.object_id, row);
     class_to_rows_[type_name].emplace_back(row);
     sequence_state.walker.AddNode(row, obj.self_size,
-                                  static_cast<int32_t>(type_name.id));
+                                  static_cast<int32_t>(type_name.raw_id()));
   }
 
   for (const SourceObject& obj : sequence_state.current_objects) {
@@ -187,48 +187,67 @@ void HeapGraphTracker::FinalizeProfile(uint32_t seq_id) {
     }
   }
 
-  auto* mapping_table =
-      context_->storage->mutable_stack_profile_mapping_table();
-
-  tables::StackProfileMappingTable::Row mapping_row{};
-  mapping_row.name = context_->storage->InternString("JAVA");
-  MappingId mapping_id = mapping_table->Insert(mapping_row);
-
-  uint32_t mapping_idx = *mapping_table->id().IndexOf(mapping_id);
-
   auto paths = sequence_state.walker.FindPathsFromRoot();
-  for (const auto& p : paths.children)
-    WriteFlamegraph(sequence_state, p.second, -1, 0, mapping_idx);
+  walkers_.emplace(
+      std::make_pair(sequence_state.current_upid, sequence_state.current_ts),
+      std::move(sequence_state.walker));
 
   sequence_state_.erase(seq_id);
 }
 
-void HeapGraphTracker::WriteFlamegraph(
-    const SequenceState& sequence_state,
-    const HeapGraphWalker::PathFromRoot& path,
-    int32_t parent_id,
-    uint32_t depth,
-    uint32_t mapping_row) {
-  TraceStorage::StackProfileFrames::Row row{};
-  row.name_id = StringId(static_cast<uint32_t>(path.class_name));
-  row.mapping_row = mapping_row;
-  int32_t frame_id = static_cast<int32_t>(
-      context_->storage->mutable_stack_profile_frames()->Insert(row));
+std::unique_ptr<tables::ExperimentalFlamegraphNodesTable>
+HeapGraphTracker::BuildFlamegraph(const int64_t current_ts,
+                                  const UniquePid current_upid) {
+  auto it = walkers_.find(std::make_pair(current_upid, current_ts));
+  if (it == walkers_.end())
+    return nullptr;
 
-  auto* callsites = context_->storage->mutable_stack_profile_callsite_table();
-  auto callsite_id = callsites->Insert({depth, parent_id, frame_id});
-  parent_id = static_cast<int32_t>(callsite_id.value);
-  depth++;
+  std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> tbl(
+      new tables::ExperimentalFlamegraphNodesTable(
+          context_->storage->mutable_string_pool(), nullptr));
 
-  tables::HeapProfileAllocationTable::Row alloc_row{
-      sequence_state.current_ts, sequence_state.current_upid, parent_id,
-      static_cast<int64_t>(path.count), static_cast<int64_t>(path.size)};
-  // TODO(fmayer): Maybe add a separate table for heap graph flamegraphs.
-  context_->storage->mutable_heap_profile_allocation_table()->Insert(alloc_row);
-  for (const auto& p : path.children) {
-    const HeapGraphWalker::PathFromRoot& child = p.second;
-    WriteFlamegraph(sequence_state, child, parent_id, depth, mapping_row);
+  HeapGraphWalker::PathFromRoot init_path = it->second.FindPathsFromRoot();
+  auto profile_type = context_->storage->InternString("graph");
+  auto java_mapping = context_->storage->InternString("JAVA");
+
+  std::vector<int32_t> node_to_cumulative_size(init_path.nodes.size());
+  std::vector<int32_t> node_to_cumulative_count(init_path.nodes.size());
+  // i > 0 is to skip the artifical root node.
+  for (size_t i = init_path.nodes.size() - 1; i > 0; --i) {
+    const HeapGraphWalker::PathFromRoot::Node& node = init_path.nodes[i];
+
+    node_to_cumulative_size[i] += node.size;
+    node_to_cumulative_count[i] += node.count;
+    node_to_cumulative_size[node.parent_id] += node_to_cumulative_size[i];
+    node_to_cumulative_count[node.parent_id] += node_to_cumulative_count[i];
   }
+
+  std::vector<uint32_t> node_to_row_idx(init_path.nodes.size());
+  // i = 1 is to skip the artifical root node.
+  for (size_t i = 1; i < init_path.nodes.size(); ++i) {
+    const HeapGraphWalker::PathFromRoot::Node& node = init_path.nodes[i];
+    PERFETTO_CHECK(node.parent_id < i);
+    base::Optional<uint32_t> parent_id;
+    if (node.parent_id != 0)
+      parent_id = node_to_row_idx[node.parent_id];
+    const uint32_t depth = node.depth - 1;  // -1 because we do not have the
+                                            // artificial root in the database.
+
+    tables::ExperimentalFlamegraphNodesTable::Row alloc_row{
+        current_ts, current_upid, profile_type, depth,
+        StringId::Raw(static_cast<uint32_t>(node.class_name)), java_mapping,
+        static_cast<int64_t>(node.count),
+        static_cast<int64_t>(node_to_cumulative_count[i]),
+        static_cast<int64_t>(node.size),
+        static_cast<int64_t>(node_to_cumulative_size[i]),
+        // For java dumps, set alloc_count == count, etc.
+        static_cast<int64_t>(node.count),
+        static_cast<int64_t>(node_to_cumulative_count[i]),
+        static_cast<int64_t>(node.size),
+        static_cast<int64_t>(node_to_cumulative_size[i]), parent_id};
+    node_to_row_idx[i] = *tbl->id().IndexOf(tbl->Insert(alloc_row));
+  }
+  return tbl;
 }
 
 void HeapGraphTracker::MarkReachable(int64_t row) {

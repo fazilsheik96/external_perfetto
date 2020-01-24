@@ -41,6 +41,7 @@ enum class FilterOp {
   kIsNull,
   kIsNotNull,
   kLike,
+  kGlob,
 };
 
 // Represents a constraint on a column.
@@ -146,6 +147,39 @@ class Column {
     PERFETTO_FATAL("For GCC");
   }
 
+  // Sets the value of the column at the given |row|.
+  void Set(uint32_t row, SqlValue value) {
+    PERFETTO_CHECK(value.type == type());
+    switch (type_) {
+      case ColumnType::kInt32: {
+        mutable_sparse_vector<int32_t>()->Set(
+            row, static_cast<int32_t>(value.long_value));
+        break;
+      }
+      case ColumnType::kUint32: {
+        mutable_sparse_vector<uint32_t>()->Set(
+            row, static_cast<uint32_t>(value.long_value));
+        break;
+      }
+      case ColumnType::kInt64: {
+        mutable_sparse_vector<int64_t>()->Set(
+            row, static_cast<int64_t>(value.long_value));
+        break;
+      }
+      case ColumnType::kDouble: {
+        mutable_sparse_vector<double>()->Set(row, value.double_value);
+        break;
+      }
+      case ColumnType::kString: {
+        PERFETTO_FATAL(
+            "Setting a generic value on a string column is not implemented");
+      }
+      case ColumnType::kId: {
+        PERFETTO_FATAL("Cannot set value on a id column");
+      }
+    }
+  }
+
   // Sorts |idx| in ascending or descending order (determined by |desc|) based
   // on the contents of this column.
   void StableSort(bool desc, std::vector<uint32_t>* idx) const;
@@ -175,6 +209,34 @@ class Column {
     }
 
     FilterIntoSlow(op, value, rm);
+  }
+
+  // Returns the minimum value in this column. Returns nullopt if this column
+  // is empty.
+  base::Optional<SqlValue> Min() const {
+    if (row_map().empty())
+      return base::nullopt;
+
+    if (IsSorted())
+      return Get(0);
+
+    Iterator b(this, 0);
+    Iterator e(this, row_map().size());
+    return *std::min_element(b, e, &compare::SqlValueComparator);
+  }
+
+  // Returns the minimum value in this column. Returns nullopt if this column
+  // is empty.
+  base::Optional<SqlValue> Max() const {
+    if (row_map().empty())
+      return base::nullopt;
+
+    if (IsSorted())
+      return Get(row_map().size() - 1);
+
+    Iterator b(this, 0);
+    Iterator e(this, row_map().size());
+    return *std::max_element(b, e, &compare::SqlValueComparator);
   }
 
   // Returns true if this column is considered an id column.
@@ -280,6 +342,8 @@ class Column {
     }
     PERFETTO_FATAL("Invalid type");
   }
+
+  const StringPool& string_pool() const { return *string_pool_; }
 
  private:
   enum class ColumnType {
@@ -421,6 +485,7 @@ class Column {
         rm->Intersect(RowMap(beg, row_map().size()));
         return true;
       }
+      case FilterOp::kGlob:
       case FilterOp::kNe:
       case FilterOp::kIsNull:
       case FilterOp::kIsNotNull:

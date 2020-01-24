@@ -36,11 +36,13 @@
 #include "src/trace_processor/ftrace_utils.h"
 #include "src/trace_processor/metadata.h"
 #include "src/trace_processor/stats.h"
+#include "src/trace_processor/tables/android_tables.h"
 #include "src/trace_processor/tables/counter_tables.h"
+#include "src/trace_processor/tables/metadata_tables.h"
 #include "src/trace_processor/tables/profiler_tables.h"
 #include "src/trace_processor/tables/slice_tables.h"
 #include "src/trace_processor/tables/track_tables.h"
-#include "src/trace_processor/variadic.h"
+#include "src/trace_processor/types/variadic.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -56,20 +58,7 @@ using UniqueTid = uint32_t;
 
 // StringId is an offset into |string_pool_|.
 using StringId = StringPool::Id;
-static const StringId kNullStringId = StringId(0);
-
-// Identifiers for all the tables in the database.
-enum class TableId : uint8_t {
-  kInvalid = 0,
-  kCounterValues = 1,
-  kRawEvents = 2,
-  kInstants = 3,
-  kSched = 4,
-  kNestableSlices = 5,
-  kMetadataTable = 6,
-  kTrack = 7,
-  kVulkanMemoryAllocation = 8,
-};
+static const StringId kNullStringId = StringId::Null();
 
 using ArgSetId = uint32_t;
 static const ArgSetId kInvalidArgSetId = 0;
@@ -80,7 +69,21 @@ using CounterId = tables::CounterTable::Id;
 
 using SliceId = tables::SliceTable::Id;
 
+using InstantId = tables::InstantTable::Id;
+
 using MappingId = tables::StackProfileMappingTable::Id;
+
+using FrameId = tables::StackProfileFrameTable::Id;
+
+using SymbolId = tables::SymbolTable::Id;
+
+using CallsiteId = tables::StackProfileCallsiteTable::Id;
+
+using MetadataId = tables::MetadataTable::Id;
+
+using RawId = tables::RawTable::Id;
+
+using VulkanAllocId = tables::VulkanMemoryAllocationsTable::Id;
 
 // TODO(lalitm): this is a temporary hack while migrating the counters table and
 // will be removed when the migration is complete.
@@ -109,158 +112,6 @@ class TraceStorage {
   TraceStorage(const Config& = Config());
 
   virtual ~TraceStorage();
-
-  // Information about a unique process seen in a trace.
-  struct Process {
-    explicit Process(uint32_t p) : pid(p) {}
-    int64_t start_ns = 0;
-    int64_t end_ns = 0;
-    StringId name_id = 0;
-    uint32_t pid = 0;
-    base::Optional<UniquePid> parent_upid;
-    base::Optional<uint32_t> uid;
-  };
-
-  // Information about a unique thread seen in a trace.
-  struct Thread {
-    explicit Thread(uint32_t t) : tid(t) {}
-    int64_t start_ns = 0;
-    int64_t end_ns = 0;
-    StringId name_id = 0;
-    base::Optional<UniquePid> upid;
-    uint32_t tid = 0;
-  };
-
-  // Generic key value storage which can be referenced by other tables.
-  class Args {
-   public:
-    struct Arg {
-      StringId flat_key = 0;
-      StringId key = 0;
-      Variadic value = Variadic::Integer(0);
-
-      TableId table;
-      uint32_t row;
-    };
-
-    struct ArgHasher {
-      uint64_t operator()(const Arg& arg) const noexcept {
-        base::Hash hash;
-        hash.Update(arg.key);
-        // We don't hash arg.flat_key because it's a subsequence of arg.key.
-        switch (arg.value.type) {
-          case Variadic::Type::kInt:
-            hash.Update(arg.value.int_value);
-            break;
-          case Variadic::Type::kUint:
-            hash.Update(arg.value.uint_value);
-            break;
-          case Variadic::Type::kString:
-            hash.Update(arg.value.string_value);
-            break;
-          case Variadic::Type::kReal:
-            hash.Update(arg.value.real_value);
-            break;
-          case Variadic::Type::kPointer:
-            hash.Update(arg.value.pointer_value);
-            break;
-          case Variadic::Type::kBool:
-            hash.Update(arg.value.bool_value);
-            break;
-          case Variadic::Type::kJson:
-            hash.Update(arg.value.json_value);
-            break;
-        }
-        return hash.digest();
-      }
-    };
-
-    const std::deque<ArgSetId>& set_ids() const { return set_ids_; }
-    const std::deque<StringId>& flat_keys() const { return flat_keys_; }
-    const std::deque<StringId>& keys() const { return keys_; }
-    const std::deque<Variadic>& arg_values() const { return arg_values_; }
-    uint32_t args_count() const {
-      return static_cast<uint32_t>(set_ids_.size());
-    }
-
-    ArgSetId AddArgSet(const std::vector<Arg>& args,
-                       uint32_t begin,
-                       uint32_t end) {
-      base::Hash hash;
-      for (uint32_t i = begin; i < end; i++) {
-        hash.Update(ArgHasher()(args[i]));
-      }
-
-      ArgSetHash digest = hash.digest();
-      auto it = arg_row_for_hash_.find(digest);
-      if (it != arg_row_for_hash_.end()) {
-        return set_ids_[it->second];
-      }
-
-      // The +1 ensures that nothing has an id == kInvalidArgSetId == 0.
-      ArgSetId id = static_cast<uint32_t>(arg_row_for_hash_.size()) + 1;
-      arg_row_for_hash_.emplace(digest, args_count());
-      for (uint32_t i = begin; i < end; i++) {
-        const auto& arg = args[i];
-        set_ids_.emplace_back(id);
-        flat_keys_.emplace_back(arg.flat_key);
-        keys_.emplace_back(arg.key);
-        arg_values_.emplace_back(arg.value);
-      }
-      return id;
-    }
-
-   private:
-    using ArgSetHash = uint64_t;
-
-    std::deque<ArgSetId> set_ids_;
-    std::deque<StringId> flat_keys_;
-    std::deque<StringId> keys_;
-    std::deque<Variadic> arg_values_;
-
-    std::unordered_map<ArgSetHash, uint32_t> arg_row_for_hash_;
-  };
-
-  class Tracks {
-   public:
-    inline uint32_t AddTrack(StringId name) {
-      names_.emplace_back(name);
-      return track_count() - 1;
-    }
-
-    uint32_t track_count() const {
-      return static_cast<uint32_t>(names_.size());
-    }
-
-    const std::deque<StringId>& names() const { return names_; }
-
-   private:
-    std::deque<StringId> names_;
-  };
-
-  class GpuContexts {
-   public:
-    inline void AddGpuContext(uint64_t context_id,
-                              UniquePid upid,
-                              uint32_t priority) {
-      context_ids_.emplace_back(context_id);
-      upids_.emplace_back(upid);
-      priorities_.emplace_back(priority);
-    }
-
-    uint32_t gpu_context_count() const {
-      return static_cast<uint32_t>(context_ids_.size());
-    }
-
-    const std::deque<uint64_t>& context_ids() const { return context_ids_; }
-    const std::deque<UniquePid>& upids() const { return upids_; }
-    const std::deque<uint32_t>& priorities() const { return priorities_; }
-
-   private:
-    std::deque<uint64_t> context_ids_;
-    std::deque<UniquePid> upids_;
-    std::deque<uint32_t> priorities_;
-  };
 
   class Slices {
    public:
@@ -474,116 +325,6 @@ class TraceStorage {
     std::deque<int64_t> times_ended_;
   };
 
-  class Instants {
-   public:
-    inline uint32_t AddInstantEvent(int64_t timestamp,
-                                    StringId name_id,
-                                    double value,
-                                    int64_t ref,
-                                    RefType type) {
-      timestamps_.emplace_back(timestamp);
-      name_ids_.emplace_back(name_id);
-      values_.emplace_back(value);
-      refs_.emplace_back(ref);
-      types_.emplace_back(type);
-      arg_set_ids_.emplace_back(kInvalidArgSetId);
-      return static_cast<uint32_t>(instant_count() - 1);
-    }
-
-    void set_ref(uint32_t row, int64_t ref) { refs_[row] = ref; }
-
-    void set_arg_set_id(uint32_t row, ArgSetId id) { arg_set_ids_[row] = id; }
-
-    size_t instant_count() const { return timestamps_.size(); }
-
-    const std::deque<int64_t>& timestamps() const { return timestamps_; }
-
-    const std::deque<StringId>& name_ids() const { return name_ids_; }
-
-    const std::deque<double>& values() const { return values_; }
-
-    const std::deque<int64_t>& refs() const { return refs_; }
-
-    const std::deque<RefType>& types() const { return types_; }
-
-    const std::deque<ArgSetId>& arg_set_ids() const { return arg_set_ids_; }
-
-   private:
-    std::deque<int64_t> timestamps_;
-    std::deque<StringId> name_ids_;
-    std::deque<double> values_;
-    std::deque<int64_t> refs_;
-    std::deque<RefType> types_;
-    std::deque<ArgSetId> arg_set_ids_;
-  };
-
-  class RawEvents {
-   public:
-    inline uint32_t AddRawEvent(int64_t timestamp,
-                                StringId name_id,
-                                uint32_t cpu,
-                                UniqueTid utid) {
-      timestamps_.emplace_back(timestamp);
-      name_ids_.emplace_back(name_id);
-      cpus_.emplace_back(cpu);
-      utids_.emplace_back(utid);
-      arg_set_ids_.emplace_back(kInvalidArgSetId);
-      return static_cast<uint32_t>(raw_event_count() - 1);
-    }
-
-    void set_arg_set_id(uint32_t row, ArgSetId id) { arg_set_ids_[row] = id; }
-
-    size_t raw_event_count() const { return timestamps_.size(); }
-
-    const std::deque<int64_t>& timestamps() const { return timestamps_; }
-
-    const std::deque<StringId>& name_ids() const { return name_ids_; }
-
-    const std::deque<uint32_t>& cpus() const { return cpus_; }
-
-    const std::deque<UniqueTid>& utids() const { return utids_; }
-
-    const std::deque<ArgSetId>& arg_set_ids() const { return arg_set_ids_; }
-
-   private:
-    std::deque<int64_t> timestamps_;
-    std::deque<StringId> name_ids_;
-    std::deque<uint32_t> cpus_;
-    std::deque<UniqueTid> utids_;
-    std::deque<ArgSetId> arg_set_ids_;
-  };
-
-  class AndroidLogs {
-   public:
-    inline size_t AddLogEvent(int64_t timestamp,
-                              UniqueTid utid,
-                              uint8_t prio,
-                              StringId tag_id,
-                              StringId msg_id) {
-      timestamps_.emplace_back(timestamp);
-      utids_.emplace_back(utid);
-      prios_.emplace_back(prio);
-      tag_ids_.emplace_back(tag_id);
-      msg_ids_.emplace_back(msg_id);
-      return size() - 1;
-    }
-
-    size_t size() const { return timestamps_.size(); }
-
-    const std::deque<int64_t>& timestamps() const { return timestamps_; }
-    const std::deque<UniqueTid>& utids() const { return utids_; }
-    const std::deque<uint8_t>& prios() const { return prios_; }
-    const std::deque<StringId>& tag_ids() const { return tag_ids_; }
-    const std::deque<StringId>& msg_ids() const { return msg_ids_; }
-
-   private:
-    std::deque<int64_t> timestamps_;
-    std::deque<UniqueTid> utids_;
-    std::deque<uint8_t> prios_;
-    std::deque<StringId> tag_ids_;
-    std::deque<StringId> msg_ids_;
-  };
-
   struct Stats {
     using IndexMap = std::map<int, int64_t>;
     int64_t value = 0;
@@ -591,146 +332,11 @@ class TraceStorage {
   };
   using StatsMap = std::array<Stats, stats::kNumKeys>;
 
-  class Metadata {
-   public:
-    const std::deque<metadata::KeyIDs>& keys() const { return keys_; }
-    const std::deque<Variadic>& values() const { return values_; }
-
-    uint32_t SetScalarMetadata(metadata::KeyIDs key, Variadic value) {
-      PERFETTO_DCHECK(key < metadata::kNumKeys);
-      PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kSingle);
-      PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
-
-      // Already set - on release builds, overwrite the previous value.
-      auto it = scalar_indices.find(key);
-      if (it != scalar_indices.end()) {
-        PERFETTO_DFATAL("Setting a scalar metadata entry more than once.");
-        uint32_t index = static_cast<uint32_t>(it->second);
-        values_[index] = value;
-        return index;
-      }
-      // First time setting this key.
-      keys_.push_back(key);
-      values_.push_back(value);
-      uint32_t index = static_cast<uint32_t>(keys_.size() - 1);
-      scalar_indices[key] = index;
-      return index;
-    }
-
-    uint32_t AppendMetadata(metadata::KeyIDs key, Variadic value) {
-      PERFETTO_DCHECK(key < metadata::kNumKeys);
-      PERFETTO_DCHECK(metadata::kKeyTypes[key] == metadata::kMulti);
-      PERFETTO_DCHECK(value.type == metadata::kValueTypes[key]);
-
-      keys_.push_back(key);
-      values_.push_back(value);
-      return static_cast<uint32_t>(keys_.size() - 1);
-    }
-
-    const Variadic& GetScalarMetadata(metadata::KeyIDs key) const {
-      PERFETTO_DCHECK(scalar_indices.count(key) == 1);
-      return values_.at(scalar_indices.at(key));
-    }
-
-    bool MetadataExists(metadata::KeyIDs key) const {
-      return scalar_indices.count(key) >= 1;
-    }
-
-    void OverwriteMetadata(uint32_t index, Variadic value) {
-      PERFETTO_DCHECK(index < values_.size());
-      values_[index] = value;
-    }
-
-   private:
-    std::deque<metadata::KeyIDs> keys_;
-    std::deque<Variadic> values_;
-    // Extraneous state to track locations of entries that should have at most
-    // one row. Used only to maintain uniqueness during insertions.
-    std::map<metadata::KeyIDs, uint32_t> scalar_indices;
-  };
-
-  class StackProfileFrames {
-   public:
-    struct Row {
-      StringId name_id;
-      int64_t mapping_row;
-      int64_t rel_pc;
-
-      bool operator==(const Row& other) const {
-        return std::tie(name_id, mapping_row, rel_pc) ==
-               std::tie(other.name_id, other.mapping_row, other.rel_pc);
-      }
-    };
-
-    uint32_t size() const { return static_cast<uint32_t>(names_.size()); }
-
-    uint32_t Insert(const Row& row) {
-      names_.emplace_back(row.name_id);
-      mappings_.emplace_back(row.mapping_row);
-      rel_pcs_.emplace_back(row.rel_pc);
-      symbol_set_ids_.emplace_back(0);
-      size_t row_number = names_.size() - 1;
-      index_[std::make_pair(row.mapping_row, row.rel_pc)].emplace_back(
-          row_number);
-      return static_cast<uint32_t>(row_number);
-    }
-
-    std::vector<int64_t> FindFrameRow(size_t mapping_row,
-                                      uint64_t rel_pc) const {
-      auto it = index_.find(std::make_pair(mapping_row, rel_pc));
-      if (it == index_.end())
-        return {};
-      return it->second;
-    }
-
-    void SetSymbolSetId(uint32_t row_idx, uint32_t symbol_set_id) {
-      PERFETTO_CHECK(row_idx < symbol_set_ids_.size());
-      symbol_set_ids_[row_idx] = symbol_set_id;
-    }
-
-    const std::deque<StringId>& names() const { return names_; }
-    const std::deque<int64_t>& mappings() const { return mappings_; }
-    const std::deque<int64_t>& rel_pcs() const { return rel_pcs_; }
-    const std::deque<uint32_t>& symbol_set_ids() const {
-      return symbol_set_ids_;
-    }
-
-   private:
-    std::deque<StringId> names_;
-    std::deque<int64_t> mappings_;
-    std::deque<int64_t> rel_pcs_;
-    std::deque<uint32_t> symbol_set_ids_;
-
-    std::map<std::pair<size_t /* mapping row */, uint64_t /* rel_pc */>,
-             std::vector<int64_t>>
-        index_;
-  };
-
-  UniqueTid AddEmptyThread(uint32_t tid) {
-    unique_threads_.emplace_back(tid);
-    return static_cast<UniqueTid>(unique_threads_.size() - 1);
-  }
-
-  UniquePid AddEmptyProcess(uint32_t pid) {
-    unique_processes_.emplace_back(pid);
-    return static_cast<UniquePid>(unique_processes_.size() - 1);
-  }
-
   // Return an unqiue identifier for the contents of each string.
   // The string is copied internally and can be destroyed after this called.
   // Virtual for testing.
   virtual StringId InternString(base::StringView str) {
     return string_pool_.InternString(str);
-  }
-
-  Process* GetMutableProcess(UniquePid upid) {
-    PERFETTO_DCHECK(upid < unique_processes_.size());
-    return &unique_processes_[upid];
-  }
-
-  Thread* GetMutableThread(UniqueTid utid) {
-    PERFETTO_DCHECK(utid < unique_threads_.size());
-    return &unique_threads_[utid];
   }
 
   // Example usage: SetStats(stats::android_log_num_failed, 42);
@@ -759,24 +365,6 @@ class TraceStorage {
     PERFETTO_DCHECK(key < stats::kNumKeys);
     PERFETTO_DCHECK(stats::kTypes[key] == stats::kIndexed);
     stats_[key].indexed_values[index] = value;
-  }
-
-  // Example usage:
-  // SetMetadata(metadata::benchmark_name,
-  //             Variadic::String(storage->InternString("foo"));
-  // Returns the row of the new entry.
-  // Virtual for testing.
-  virtual uint32_t SetMetadata(metadata::KeyIDs key, Variadic value) {
-    return metadata_.SetScalarMetadata(key, value);
-  }
-
-  // Example usage:
-  // AppendMetadata(metadata::benchmark_story_tags,
-  //                Variadic::String(storage->InternString("bar"));
-  // Returns the row of the new entry.
-  // Virtual for testing.
-  virtual uint32_t AppendMetadata(metadata::KeyIDs key, Variadic value) {
-    return metadata_.AppendMetadata(key, value);
   }
 
   class ScopedStatsTracer {
@@ -824,17 +412,11 @@ class TraceStorage {
     return string_pool_.Get(id);
   }
 
-  const Process& GetProcess(UniquePid upid) const {
-    PERFETTO_DCHECK(upid < unique_processes_.size());
-    return unique_processes_[upid];
-  }
+  const tables::ThreadTable& thread_table() const { return thread_table_; }
+  tables::ThreadTable* mutable_thread_table() { return &thread_table_; }
 
-  // Virtual for testing.
-  virtual const Thread& GetThread(UniqueTid utid) const {
-    // Allow utid == 0 for idle thread retrieval.
-    PERFETTO_DCHECK(utid < unique_threads_.size());
-    return unique_threads_[utid];
-  }
+  const tables::ProcessTable& process_table() const { return process_table_; }
+  tables::ProcessTable* mutable_process_table() { return &process_table_; }
 
   const tables::TrackTable& track_table() const { return track_table_; }
   tables::TrackTable* mutable_track_table() { return &track_table_; }
@@ -929,22 +511,28 @@ class TraceStorage {
   const SqlStats& sql_stats() const { return sql_stats_; }
   SqlStats* mutable_sql_stats() { return &sql_stats_; }
 
-  const Instants& instants() const { return instants_; }
-  Instants* mutable_instants() { return &instants_; }
+  const tables::InstantTable& instant_table() const { return instant_table_; }
+  tables::InstantTable* mutable_instant_table() { return &instant_table_; }
 
-  const AndroidLogs& android_logs() const { return android_log_; }
-  AndroidLogs* mutable_android_log() { return &android_log_; }
+  const tables::AndroidLogTable& android_log_table() const {
+    return android_log_table_;
+  }
+  tables::AndroidLogTable* mutable_android_log_table() {
+    return &android_log_table_;
+  }
 
   const StatsMap& stats() const { return stats_; }
 
-  const Metadata& metadata() const { return metadata_; }
-  Metadata* mutable_metadata() { return &metadata_; }
+  const tables::MetadataTable& metadata_table() const {
+    return metadata_table_;
+  }
+  tables::MetadataTable* mutable_metadata_table() { return &metadata_table_; }
 
-  const Args& args() const { return args_; }
-  Args* mutable_args() { return &args_; }
+  const tables::ArgTable& arg_table() const { return arg_table_; }
+  tables::ArgTable* mutable_arg_table() { return &arg_table_; }
 
-  const RawEvents& raw_events() const { return raw_events_; }
-  RawEvents* mutable_raw_events() { return &raw_events_; }
+  const tables::RawTable& raw_table() const { return raw_table_; }
+  tables::RawTable* mutable_raw_table() { return &raw_table_; }
 
   const tables::StackProfileMappingTable& stack_profile_mapping_table() const {
     return stack_profile_mapping_table_;
@@ -953,11 +541,11 @@ class TraceStorage {
     return &stack_profile_mapping_table_;
   }
 
-  const StackProfileFrames& stack_profile_frames() const {
-    return stack_profile_frames_;
+  const tables::StackProfileFrameTable& stack_profile_frame_table() const {
+    return stack_profile_frame_table_;
   }
-  StackProfileFrames* mutable_stack_profile_frames() {
-    return &stack_profile_frames_;
+  tables::StackProfileFrameTable* mutable_stack_profile_frame_table() {
+    return &stack_profile_frame_table_;
   }
 
   const tables::StackProfileCallsiteTable& stack_profile_callsite_table()
@@ -975,6 +563,7 @@ class TraceStorage {
   tables::HeapProfileAllocationTable* mutable_heap_profile_allocation_table() {
     return &heap_profile_allocation_table_;
   }
+
   const tables::CpuProfileStackSampleTable& cpu_profile_stack_sample_table()
       const {
     return cpu_profile_stack_sample_table_;
@@ -1019,14 +608,7 @@ class TraceStorage {
   }
 
   const StringPool& string_pool() const { return string_pool_; }
-
-  // |unique_processes_| always contains at least 1 element because the 0th ID
-  // is reserved to indicate an invalid process.
-  size_t process_count() const { return unique_processes_.size(); }
-
-  // |unique_threads_| always contains at least 1 element because the 0th ID
-  // is reserved to indicate an invalid thread.
-  size_t thread_count() const { return unique_threads_.size(); }
+  StringPool* mutable_string_pool() { return &string_pool_; }
 
   // Number of interned strings in the pool. Includes the empty string w/ ID=0.
   size_t string_count() const { return string_pool_.size(); }
@@ -1036,7 +618,8 @@ class TraceStorage {
   std::pair<int64_t, int64_t> GetTraceTimestampBoundsNs() const;
 
   // TODO(lalitm): remove this when we have a better home.
-  std::vector<int64_t> FindMappingRow(StringId name, StringId build_id) const {
+  std::vector<MappingId> FindMappingRow(StringId name,
+                                        StringId build_id) const {
     auto it = stack_profile_mapping_index_.find(std::make_pair(name, build_id));
     if (it == stack_profile_mapping_index_.end())
       return {};
@@ -1044,9 +627,62 @@ class TraceStorage {
   }
 
   // TODO(lalitm): remove this when we have a better home.
-  void InsertMappingRow(StringId name, StringId build_id, uint32_t row) {
+  void InsertMappingId(StringId name, StringId build_id, MappingId row) {
     auto pair = std::make_pair(name, build_id);
     stack_profile_mapping_index_[pair].emplace_back(row);
+  }
+
+  // TODO(lalitm): remove this when we have a better home.
+  std::vector<FrameId> FindFrameIds(MappingId mapping_row,
+                                    uint64_t rel_pc) const {
+    auto it =
+        stack_profile_frame_index_.find(std::make_pair(mapping_row, rel_pc));
+    if (it == stack_profile_frame_index_.end())
+      return {};
+    return it->second;
+  }
+
+  // TODO(lalitm): remove this when we have a better home.
+  void InsertFrameRow(MappingId mapping_row, uint64_t rel_pc, FrameId row) {
+    auto pair = std::make_pair(mapping_row, rel_pc);
+    stack_profile_frame_index_[pair].emplace_back(row);
+  }
+
+  Variadic GetArgValue(uint32_t row) const {
+    Variadic v;
+    v.type = *GetVariadicTypeForId(arg_table_.value_type()[row]);
+
+    // Force initialization of union to stop GCC complaining.
+    v.int_value = 0;
+
+    switch (v.type) {
+      case Variadic::Type::kBool:
+        v.bool_value = static_cast<bool>(*arg_table_.int_value()[row]);
+        break;
+      case Variadic::Type::kInt:
+        v.int_value = *arg_table_.int_value()[row];
+        break;
+      case Variadic::Type::kUint:
+        v.uint_value = static_cast<uint64_t>(*arg_table_.int_value()[row]);
+        break;
+      case Variadic::Type::kString:
+        v.string_value = arg_table_.string_value()[row];
+        break;
+      case Variadic::Type::kPointer:
+        v.pointer_value = static_cast<uint64_t>(*arg_table_.int_value()[row]);
+        break;
+      case Variadic::Type::kReal:
+        v.real_value = *arg_table_.real_value()[row];
+        break;
+      case Variadic::Type::kJson:
+        v.json_value = arg_table_.string_value()[row];
+        break;
+    }
+    return v;
+  }
+
+  StringId GetIdForVariadicType(Variadic::Type type) const {
+    return variadic_type_ids_[type];
   }
 
  private:
@@ -1058,9 +694,23 @@ class TraceStorage {
   TraceStorage(TraceStorage&&) = delete;
   TraceStorage& operator=(TraceStorage&&) = delete;
 
+  base::Optional<Variadic::Type> GetVariadicTypeForId(StringId id) const {
+    auto it =
+        std::find(variadic_type_ids_.begin(), variadic_type_ids_.end(), id);
+    if (it == variadic_type_ids_.end())
+      return base::nullopt;
+
+    int64_t idx = std::distance(variadic_type_ids_.begin(), it);
+    return static_cast<Variadic::Type>(idx);
+  }
+
   // TODO(lalitm): remove this when we find a better home for this.
   using MappingKey = std::pair<StringId /* name */, StringId /* build id */>;
-  std::map<MappingKey, std::vector<int64_t>> stack_profile_mapping_index_;
+  std::map<MappingKey, std::vector<MappingId>> stack_profile_mapping_index_;
+
+  // TODO(lalitm): remove this when we find a better home for this.
+  using FrameKey = std::pair<MappingId, uint64_t /* rel_pc */>;
+  std::map<FrameKey, std::vector<FrameId>> stack_profile_frame_index_;
 
   // One entry for each unique string in the trace.
   StringPool string_pool_;
@@ -1071,7 +721,7 @@ class TraceStorage {
   // Extra data extracted from the trace. Includes:
   // * metadata from chrome and benchmarking infrastructure
   // * descriptions of android packages
-  Metadata metadata_{};
+  tables::MetadataTable metadata_table_{&string_pool_, nullptr};
 
   // Metadata for tracks.
   tables::TrackTable track_table_{&string_pool_, nullptr};
@@ -1094,22 +744,15 @@ class TraceStorage {
   tables::GpuCounterTrackTable gpu_counter_track_table_{&string_pool_,
                                                         &counter_track_table_};
 
-  // Metadata for gpu tracks.
-  GpuContexts gpu_contexts_;
-
   // One entry for each CPU in the trace.
   Slices slices_;
 
   // Args for all other tables.
-  Args args_;
+  tables::ArgTable arg_table_{&string_pool_, nullptr};
 
-  // One entry for each UniquePid, with UniquePid as the index.
-  // Never hold on to pointers to Process, as vector resize will
-  // invalidate them.
-  std::vector<Process> unique_processes_;
-
-  // One entry for each UniqueTid, with UniqueTid as the index.
-  std::deque<Thread> unique_threads_;
+  // Information about all the threads and processes in the trace.
+  tables::ThreadTable thread_table_{&string_pool_, nullptr};
+  tables::ProcessTable process_table_{&string_pool_, nullptr};
 
   // Slices coming from userspace events (e.g. Chromium TRACE_EVENT macros).
   tables::SliceTable slice_table_{&string_pool_, nullptr};
@@ -1123,7 +766,7 @@ class TraceStorage {
 
   // Additional attributes for gpu track slices (sub-type of
   // NestableSlices).
-  tables::GpuSliceTable gpu_slice_table_{&string_pool_, nullptr};
+  tables::GpuSliceTable gpu_slice_table_{&string_pool_, &slice_table_};
 
   // The values from the Counter events from the trace. This includes CPU
   // frequency events as well systrace trace_marker counter events.
@@ -1134,18 +777,19 @@ class TraceStorage {
   // These are instantaneous events in the trace. They have no duration
   // and do not have a value that make sense to track over time.
   // e.g. signal events
-  Instants instants_;
+  tables::InstantTable instant_table_{&string_pool_, nullptr};
 
   // Raw events are every ftrace event in the trace. The raw event includes
   // the timestamp and the pid. The args for the raw event will be in the
   // args table. This table can be used to generate a text version of the
   // trace.
-  RawEvents raw_events_;
-  AndroidLogs android_log_;
+  tables::RawTable raw_table_{&string_pool_, nullptr};
+  tables::AndroidLogTable android_log_table_{&string_pool_, nullptr};
 
   tables::StackProfileMappingTable stack_profile_mapping_table_{&string_pool_,
                                                                 nullptr};
-  StackProfileFrames stack_profile_frames_;
+  tables::StackProfileFrameTable stack_profile_frame_table_{&string_pool_,
+                                                            nullptr};
   tables::StackProfileCallsiteTable stack_profile_callsite_table_{&string_pool_,
                                                                   nullptr};
   tables::HeapProfileAllocationTable heap_profile_allocation_table_{
@@ -1161,6 +805,10 @@ class TraceStorage {
 
   tables::VulkanMemoryAllocationsTable vulkan_memory_allocations_table_{
       &string_pool_, nullptr};
+
+  // The below array allow us to map between enums and their string
+  // representations.
+  std::array<StringId, Variadic::kMaxType + 1> variadic_type_ids_;
 };
 
 }  // namespace trace_processor
@@ -1179,15 +827,14 @@ struct hash<::perfetto::trace_processor::TrackId> {
 };
 
 template <>
-struct hash<
-    ::perfetto::trace_processor::TraceStorage::StackProfileFrames::Row> {
+struct hash<::perfetto::trace_processor::tables::StackProfileFrameTable::Row> {
   using argument_type =
-      ::perfetto::trace_processor::TraceStorage::StackProfileFrames::Row;
+      ::perfetto::trace_processor::tables::StackProfileFrameTable::Row;
   using result_type = size_t;
 
   result_type operator()(const argument_type& r) const {
-    return std::hash<::perfetto::trace_processor::StringId>{}(r.name_id) ^
-           std::hash<int64_t>{}(r.mapping_row) ^ std::hash<int64_t>{}(r.rel_pc);
+    return std::hash<::perfetto::trace_processor::StringId>{}(r.name) ^
+           std::hash<int64_t>{}(r.mapping) ^ std::hash<int64_t>{}(r.rel_pc);
   }
 };
 

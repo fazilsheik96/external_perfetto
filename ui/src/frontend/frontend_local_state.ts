@@ -99,6 +99,7 @@ export class FrontendLocalState {
   showNotePreview = false;
   localOnlyMode = false;
   sidebarVisible = true;
+  showPanningHint = false;
   // This is used to calculate the tracks within a Y range for area selection.
   areaY: Range = {};
   visibleTracks = new Set<string>();
@@ -107,6 +108,7 @@ export class FrontendLocalState {
   currentTab?: Tab;
   scrollToTrackId?: string|number;
   httpRpcState: HttpRpcState = {connected: false};
+  newVersionAvailable = false;
   private scrollBarWidth?: number;
 
   private _omniboxState: OmniboxState = {
@@ -224,6 +226,7 @@ export class FrontendLocalState {
   selectArea(
       startSec: number, endSec: number,
       tracks = this._selectedArea.area ? this._selectedArea.area.tracks : []) {
+    this.showPanningHint = true;
     this._selectedArea = {
       area: {startSec, endSec, tracks},
       lastUpdate: Date.now() / 1000

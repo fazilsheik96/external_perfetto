@@ -20,11 +20,11 @@ import {Actions} from '../common/actions';
 import {MeminfoCounters, VmstatCounters} from '../common/protos';
 import {
   AdbRecordingTarget,
+  getBuiltinChromeCategoryList,
   getDefaultRecordingTargets,
   isAdbTarget,
   isAndroidTarget,
   isChromeTarget,
-  isLinuxTarget,
   RecordingTarget
 } from '../common/state';
 import {MAX_TIME, RecordMode} from '../common/state';
@@ -592,11 +592,13 @@ function ChromeSettings(cssClass: string) {
 }
 
 function ChromeCategoriesSelection() {
-  // The categories are displayed only if the extension is installed, because
-  // they come from the chrome.debugging API, not available from normal web
-  // pages.
-  const categories = globals.state.chromeCategories;
-  if (!categories) return [];
+  // If we are attempting to record via the Chrome extension, we receive the
+  // list of actually supported categories via DevTools. Otherwise, we fall back
+  // to an integrated list of categories from a recent version of Chrome.
+  let categories = globals.state.chromeCategories;
+  if (!categories || !isChromeTarget(globals.state.recordingTarget)) {
+    categories = getBuiltinChromeCategoryList();
+  }
 
   // Show "disabled-by-default" categories last.
   const categoriesMap = new Map<string, string>();
@@ -613,9 +615,10 @@ function ChromeCategoriesSelection() {
     categoriesMap.set(
         cat, `${cat.replace(disabledPrefix, '')} (high overhead)`);
   });
+
   return m(Dropdown, {
     title: 'Additional Chrome categories',
-    cssClass: '.multicolumn.two-columns.chrome-categories',
+    cssClass: '.multicolumn.two-columns',
     options: categoriesMap,
     set: (cfg, val) => cfg.chromeCategoriesSelected = val,
     get: (cfg) => cfg.chromeCategoriesSelected
@@ -743,7 +746,7 @@ function RecordingPlatformSelection() {
           ),
       m('.chip',
         {onclick: addAndroidDevice},
-        m('button', 'Add Device'),
+        m('button', 'Add ADB Device'),
         m('i.material-icons', 'add')));
 }
 
@@ -850,7 +853,7 @@ function RecordingSnippet() {
          'Start Recording'.`)) :
         [];
   }
-  return m(CodeSnippet, {text: getRecordCommand(target), hardWhitespace: true});
+  return m(CodeSnippet, {text: getRecordCommand(target)});
 }
 
 function getRecordCommand(target: RecordingTarget) {
@@ -895,29 +898,16 @@ function recordingButtons() {
           onclick: onStartRecordingPressed
         },
         'Start Recording');
-  const showCmd =
-      m(`button`,
-        {
-          onclick: () => {
-            location.href = '#!/record?p=instructions';
-            globals.rafScheduler.scheduleFullRedraw();
-          }
-        },
-        'Show Command');
 
   const buttons: m.Children = [];
 
   if (isAndroidTarget(target)) {
-    if (!recInProgress) {
-      buttons.push(showCmd);
-      if (isAdbTarget(target)) buttons.push(start);
+    if (!recInProgress && isAdbTarget(target)) {
+      buttons.push(start);
     }
   } else if (isChromeTarget(target) && state.extensionInstalled) {
     buttons.push(start);
-  } else if (isLinuxTarget(target)) {
-    buttons.push(showCmd);
   }
-
   return m('.button', buttons);
 }
 
@@ -973,7 +963,9 @@ async function addAndroidDevice() {
   try {
     device = await new AdbOverWebUsb().findDevice();
   } catch (e) {
-    console.error(`No device found: ${e.name}: ${e.message}`);
+    const err = `No device found: ${e.name}: ${e.message}`;
+    console.error(err, e);
+    alert(err);
     return;
   }
 

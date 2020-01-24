@@ -30,6 +30,11 @@
 namespace perfetto {
 namespace trace_processor {
 
+std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> BuildNativeFlamegraph(
+    TraceStorage* storage,
+    UniquePid upid,
+    int64_t timestamp);
+
 class TraceProcessorContext;
 
 class HeapProfileTracker {
@@ -77,10 +82,10 @@ class HeapProfileTracker {
   struct SequenceState {
     std::vector<SourceAllocation> pending_allocs;
 
-    std::unordered_map<std::pair<UniquePid, int64_t>,
+    std::unordered_map<std::pair<UniquePid, CallsiteId>,
                        tables::HeapProfileAllocationTable::Row>
         prev_alloc;
-    std::unordered_map<std::pair<UniquePid, int64_t>,
+    std::unordered_map<std::pair<UniquePid, CallsiteId>,
                        tables::HeapProfileAllocationTable::Row>
         prev_free;
 
