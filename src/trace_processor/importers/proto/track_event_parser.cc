@@ -30,6 +30,7 @@
 #include "protos/perfetto/trace/track_event/chrome_compositor_scheduler_state.pbzero.h"
 #include "protos/perfetto/trace/track_event/chrome_histogram_sample.pbzero.h"
 #include "protos/perfetto/trace/track_event/chrome_keyed_service.pbzero.h"
+#include "protos/perfetto/trace/track_event/chrome_latency_info.pbzero.h"
 #include "protos/perfetto/trace/track_event/chrome_legacy_ipc.pbzero.h"
 #include "protos/perfetto/trace/track_event/chrome_process_descriptor.pbzero.h"
 #include "protos/perfetto/trace/track_event/chrome_thread_descriptor.pbzero.h"
@@ -167,6 +168,8 @@ TrackEventParser::TrackEventParser(TraceProcessorContext* context)
           context->storage->InternString("histogram_sample.name")),
       chrome_histogram_sample_sample_args_key_id_(
           context->storage->InternString("histogram_sample.sample")),
+      chrome_latency_info_trace_id_key_id_(
+          context->storage->InternString("latency_info.trace_id")),
       chrome_legacy_ipc_class_ids_{
           {context->storage->InternString("UNSPECIFIED"),
            context->storage->InternString("AUTOMATION"),
@@ -265,7 +268,7 @@ UniquePid TrackEventParser::ParseProcessDescriptor(
   protos::pbzero::ProcessDescriptor::Decoder decoder(process_descriptor);
   UniquePid upid = context_->process_tracker->GetOrCreateProcess(
       static_cast<uint32_t>(decoder.pid()));
-  if (decoder.has_process_name()) {
+  if (decoder.has_process_name() && decoder.process_name().size) {
     // Don't override system-provided names.
     context_->process_tracker->SetProcessNameIfUnset(
         upid, context_->storage->InternString(decoder.process_name()));
@@ -306,7 +309,7 @@ UniqueTid TrackEventParser::ParseThreadDescriptor(
       static_cast<uint32_t>(decoder.tid()),
       static_cast<uint32_t>(decoder.pid()));
   StringId name_id = kNullStringId;
-  if (decoder.has_thread_name()) {
+  if (decoder.has_thread_name() && decoder.thread_name().size) {
     name_id = context_->storage->InternString(decoder.thread_name());
   } else if (decoder.has_chrome_thread_type()) {
     // TODO(skyostil): Remove parsing for legacy chrome_thread_type field.
@@ -456,6 +459,12 @@ void TrackEventParser::ParseTrackEvent(
   base::Optional<UniqueTid> utid;
   base::Optional<UniqueTid> upid;
 
+  // All events in legacy JSON require a thread ID, but for some types of events
+  // (e.g. async events or process/global-scoped instants), we don't store it in
+  // the slice/track model. To pass the utid through to the json export, we
+  // store it in an arg.
+  base::Optional<UniqueTid> legacy_passthrough_utid;
+
   // Determine track from track_uuid specified in either TrackEvent or
   // TrackEventDefaults. If a non-default track is not set, we either:
   //   a) fall back to the track specified by the sequence's (or event's) pid +
@@ -481,32 +490,52 @@ void TrackEventParser::ParseTrackEvent(
     } else {
       auto process_track_row =
           context_->storage->process_track_table().id().IndexOf(track_id);
-      if (process_track_row)
+      if (process_track_row) {
         upid = storage->process_track_table().upid()[*process_track_row];
+        if (sequence_state->state()->pid_and_tid_valid()) {
+          uint32_t pid = static_cast<uint32_t>(sequence_state->state()->pid());
+          uint32_t tid = static_cast<uint32_t>(sequence_state->state()->tid());
+          UniqueTid utid_candidate = procs->UpdateThread(tid, pid);
+          if (storage->thread_table().upid()[utid_candidate] == upid)
+            legacy_passthrough_utid = utid_candidate;
+        }
+      }
     }
-  } else if ((!event.has_track_uuid() || !event.has_type()) &&
-             (sequence_state->state()->pid_and_tid_valid() ||
-              (legacy_event.has_pid_override() &&
-               legacy_event.has_tid_override()))) {
-    uint32_t pid = static_cast<uint32_t>(sequence_state->state()->pid());
-    uint32_t tid = static_cast<uint32_t>(sequence_state->state()->tid());
-    if (legacy_event.has_pid_override())
-      pid = static_cast<uint32_t>(legacy_event.pid_override());
-    if (legacy_event.has_tid_override())
-      tid = static_cast<uint32_t>(legacy_event.tid_override());
-
-    utid = procs->UpdateThread(tid, pid);
-    upid = storage->thread_table().upid()[*utid];
-    track_id = track_tracker->InternThreadTrack(*utid);
   } else {
-    track_id = track_tracker->GetOrCreateDefaultDescriptorTrack();
-  }
+    bool pid_tid_state_valid = sequence_state->state()->pid_and_tid_valid();
 
-  // All events in legacy JSON require a thread ID, but for some types of events
-  // (e.g. async events or process/global-scoped instants), we don't store it in
-  // the slice/track model. To pass the utid through to the json export, we
-  // store it in an arg.
-  base::Optional<UniqueTid> legacy_passthrough_utid;
+    // We have a 0-value |track_uuid|. Nevertheless, we should only fall back if
+    // we have either no |track_uuid| specified at all or |track_uuid| was set
+    // explicitly to 0 (e.g. to override a default track_uuid) and we have a
+    // legacy phase. Events with real phases should use |track_uuid| to specify
+    // a different track (or use the pid/tid_override fields).
+    bool fallback_to_legacy_pid_tid_tracks =
+        (!event.has_track_uuid() || !event.has_type()) && pid_tid_state_valid;
+
+    // Always allow fallback if we have a process override.
+    fallback_to_legacy_pid_tid_tracks |= legacy_event.has_pid_override();
+
+    // A thread override requires a valid pid.
+    fallback_to_legacy_pid_tid_tracks |=
+        legacy_event.has_tid_override() && pid_tid_state_valid;
+
+    if (fallback_to_legacy_pid_tid_tracks) {
+      uint32_t pid = static_cast<uint32_t>(sequence_state->state()->pid());
+      uint32_t tid = static_cast<uint32_t>(sequence_state->state()->tid());
+      if (legacy_event.has_pid_override()) {
+        pid = static_cast<uint32_t>(legacy_event.pid_override());
+        tid = static_cast<uint32_t>(-1);
+      }
+      if (legacy_event.has_tid_override())
+        tid = static_cast<uint32_t>(legacy_event.tid_override());
+
+      utid = procs->UpdateThread(tid, pid);
+      upid = storage->thread_table().upid()[*utid];
+      track_id = track_tracker->InternThreadTrack(*utid);
+    } else {
+      track_id = track_tracker->GetOrCreateDefaultDescriptorTrack();
+    }
+  }
 
   // TODO(eseckler): Replace phase with type and remove handling of
   // legacy_event.phase() once it is no longer used by producers.
@@ -575,6 +604,7 @@ void TrackEventParser::ParseTrackEvent(
             track_id = context_->track_tracker
                            ->GetOrCreateLegacyChromeGlobalInstantTrack();
             legacy_passthrough_utid = utid;
+            utid = base::nullopt;
             break;
           case LegacyEvent::SCOPE_PROCESS:
             if (!upid) {
@@ -588,6 +618,7 @@ void TrackEventParser::ParseTrackEvent(
                 context_->track_tracker->InternLegacyChromeProcessInstantTrack(
                     *upid);
             legacy_passthrough_utid = utid;
+            utid = base::nullopt;
             break;
         }
         break;
@@ -640,6 +671,9 @@ void TrackEventParser::ParseTrackEvent(
     }
     if (event.has_chrome_histogram_sample()) {
       ParseChromeHistogramSample(event.chrome_histogram_sample(), inserter);
+    }
+    if (event.has_chrome_latency_info()) {
+      ParseChromeLatencyInfo(event.chrome_latency_info(), inserter);
     }
 
     if (legacy_passthrough_utid) {
@@ -749,36 +783,15 @@ void TrackEventParser::ParseTrackEvent(
       int64_t duration_ns = 0;
       int64_t tidelta = 0;
 
-      switch (legacy_event.instant_event_scope()) {
-        case LegacyEvent::SCOPE_UNSPECIFIED:
-        case LegacyEvent::SCOPE_THREAD: {
-          auto opt_slice_id = slice_tracker->Scoped(
-              ts, track_id, category_id, name_id, duration_ns, args_callback);
-          if (opt_slice_id.has_value()) {
-            auto* thread_slices = storage->mutable_thread_slices();
-            PERFETTO_DCHECK(!thread_slices->slice_count() ||
-                            thread_slices->slice_ids().back() <
-                                opt_slice_id.value());
-            thread_slices->AddThreadSlice(opt_slice_id.value(), tts,
-                                          duration_ns, ticount, tidelta);
-          }
-          break;
-        }
-        case LegacyEvent::SCOPE_GLOBAL: {
-          slice_tracker->Scoped(ts, track_id, category_id, name_id, duration_ns,
-                                args_callback);
-          break;
-        }
-        case LegacyEvent::SCOPE_PROCESS: {
-          slice_tracker->Scoped(ts, track_id, category_id, name_id, duration_ns,
-                                args_callback);
-          break;
-        }
-        default: {
-          PERFETTO_FATAL("Unknown instant event scope: %u",
-                         legacy_event.instant_event_scope());
-          break;
-        }
+      auto opt_slice_id = slice_tracker->Scoped(
+          ts, track_id, category_id, name_id, duration_ns, args_callback);
+      if (utid && opt_slice_id.has_value()) {
+        auto* thread_slices = storage->mutable_thread_slices();
+        PERFETTO_DCHECK(!thread_slices->slice_count() ||
+                        thread_slices->slice_ids().back() <
+                            opt_slice_id.value());
+        thread_slices->AddThreadSlice(opt_slice_id.value(), tts, duration_ns,
+                                      ticount, tidelta);
       }
       break;
     }
@@ -898,8 +911,9 @@ void TrackEventParser::ParseLegacyEventAsRawEvent(
     return;
   }
 
-  RawId id = context_->storage->mutable_raw_table()->Insert(
-      {ts, raw_legacy_event_id_, 0, *utid});
+  RawId id = context_->storage->mutable_raw_table()
+                 ->Insert({ts, raw_legacy_event_id_, 0, *utid})
+                 .id;
 
   ArgsTracker args(context_);
   auto inserter = args.AddArgsTo(id);
@@ -1236,6 +1250,18 @@ void TrackEventParser::ParseChromeKeyedService(
     inserter->AddArg(chrome_keyed_service_name_args_key_id_,
 
                      Variadic::String(action_id));
+  }
+}
+
+void TrackEventParser::ParseChromeLatencyInfo(
+    protozero::ConstBytes chrome_latency_info,
+    ArgsTracker::BoundInserter* inserter) {
+  protos::pbzero::ChromeLatencyInfo::Decoder event(chrome_latency_info.data,
+                                                   chrome_latency_info.size);
+
+  if (event.has_trace_id()) {
+    inserter->AddArg(chrome_latency_info_trace_id_key_id_,
+                     Variadic::Integer(event.trace_id()));
   }
 }
 

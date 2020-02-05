@@ -382,6 +382,9 @@ void ProtoTraceParser::ParseProfilePacket(
 
     int pid = static_cast<int>(entry.pid());
 
+    if (entry.disconnected())
+      context_->storage->IncrementIndexedStats(
+          stats::heapprofd_client_disconnected, pid);
     if (entry.buffer_corrupted())
       context_->storage->IncrementIndexedStats(
           stats::heapprofd_buffer_corrupted, pid);
@@ -445,20 +448,17 @@ void ProtoTraceParser::ParseStreamingProfilePacket(
       break;
     }
 
-    auto maybe_callstack_id = stack_profile_tracker.FindOrInsertCallstack(
+    auto opt_cs_id = stack_profile_tracker.FindOrInsertCallstack(
         *callstack_it, &intern_lookup);
-    if (!maybe_callstack_id) {
+    if (!opt_cs_id) {
       context_->storage->IncrementStats(stats::stackprofile_parser_error);
       PERFETTO_ELOG("StreamingProfilePacket referencing invalid callstack!");
       continue;
     }
 
-    uint32_t callstack_id = maybe_callstack_id->value;
-
-    tables::CpuProfileStackSampleTable::Row sample_row{
-        sequence_state->state()->IncrementAndGetTrackEventTimeNs(*timestamp_it *
-                                                                 1000),
-        callstack_id, utid};
+    int64_t ts = sequence_state->state()->IncrementAndGetTrackEventTimeNs(
+        *timestamp_it * 1000);
+    tables::CpuProfileStackSampleTable::Row sample_row{ts, *opt_cs_id, utid};
     storage->mutable_cpu_profile_stack_sample_table()->Insert(sample_row);
   }
 }
@@ -517,8 +517,9 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
   protos::pbzero::ChromeEventBundle::Decoder bundle(blob.data, blob.size);
   ArgsTracker args(context_);
   if (bundle.has_metadata()) {
-    RawId id = storage->mutable_raw_table()->Insert(
-        {ts, raw_chrome_metadata_event_id_, 0, 0});
+    RawId id = storage->mutable_raw_table()
+                   ->Insert({ts, raw_chrome_metadata_event_id_, 0, 0})
+                   .id;
     auto inserter = args.AddArgsTo(id);
 
     // Metadata is proxied via a special event in the raw table to JSON export.
@@ -544,8 +545,10 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
   }
 
   if (bundle.has_legacy_ftrace_output()) {
-    RawId id = storage->mutable_raw_table()->Insert(
-        {ts, raw_chrome_legacy_system_trace_event_id_, 0, 0});
+    RawId id =
+        storage->mutable_raw_table()
+            ->Insert({ts, raw_chrome_legacy_system_trace_event_id_, 0, 0})
+            .id;
 
     std::string data;
     for (auto it = bundle.legacy_ftrace_output(); it; ++it) {
@@ -563,8 +566,10 @@ void ProtoTraceParser::ParseChromeEvents(int64_t ts, ConstBytes blob) {
           protos::pbzero::ChromeLegacyJsonTrace::USER_TRACE) {
         continue;
       }
-      RawId id = storage->mutable_raw_table()->Insert(
-          {ts, raw_chrome_legacy_user_trace_event_id_, 0, 0});
+      RawId id =
+          storage->mutable_raw_table()
+              ->Insert({ts, raw_chrome_legacy_user_trace_event_id_, 0, 0})
+              .id;
       Variadic value =
           Variadic::String(storage->InternString(legacy_trace.data()));
       args.AddArgsTo(id).AddArg(data_name_id_, value);
@@ -629,11 +634,18 @@ void ProtoTraceParser::ParseTraceConfig(ConstBytes blob) {
 
 void ProtoTraceParser::ParseModuleSymbols(ConstBytes blob) {
   protos::pbzero::ModuleSymbols::Decoder module_symbols(blob.data, blob.size);
-  std::string hex_build_id = base::ToHex(module_symbols.build_id().data,
-                                         module_symbols.build_id().size);
+  StringId build_id;
+  // TODO(b/148109467): Remove workaround once all active Chrome versions
+  // write raw bytes instead of a string as build_id.
+  if (module_symbols.build_id().size == 33) {
+    build_id = context_->storage->InternString(module_symbols.build_id());
+  } else {
+    build_id = context_->storage->InternString(base::StringView(base::ToHex(
+        module_symbols.build_id().data, module_symbols.build_id().size)));
+  }
+
   auto mapping_ids = context_->storage->FindMappingRow(
-      context_->storage->InternString(module_symbols.path()),
-      context_->storage->InternString(base::StringView(hex_build_id)));
+      context_->storage->InternString(module_symbols.path()), build_id);
   if (mapping_ids.empty()) {
     context_->storage->IncrementStats(stats::stackprofile_invalid_mapping_id);
     return;

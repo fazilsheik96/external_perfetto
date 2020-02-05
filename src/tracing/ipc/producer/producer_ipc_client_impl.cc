@@ -186,7 +186,9 @@ void ProducerIPCClientImpl::OnServiceRequest(
     PERFETTO_CHECK(shmem_fd);
 
     // TODO(primiano): handle mmap failure in case of OOM.
-    shared_memory_ = PosixSharedMemory::AttachToFd(std::move(shmem_fd));
+    shared_memory_ =
+        PosixSharedMemory::AttachToFd(std::move(shmem_fd),
+                                      /*require_seals_if_supported=*/false);
     shared_buffer_page_size_kb_ =
         cmd.setup_tracing().shared_buffer_page_size_kb();
     shared_memory_arbiter_ = SharedMemoryArbiter::CreateInstance(
@@ -358,9 +360,8 @@ std::unique_ptr<TraceWriter> ProducerIPCClientImpl::CreateTraceWriter(
                                                    buffer_exhausted_policy);
 }
 
-SharedMemoryArbiter* ProducerIPCClientImpl::GetInProcessShmemArbiter() {
-  PERFETTO_DLOG("Cannot GetInProcessShmemArbiter() via the IPC layer.");
-  return nullptr;
+SharedMemoryArbiter* ProducerIPCClientImpl::MaybeSharedMemoryArbiter() {
+  return shared_memory_arbiter_.get();
 }
 
 void ProducerIPCClientImpl::NotifyFlushComplete(FlushRequestID req_id) {

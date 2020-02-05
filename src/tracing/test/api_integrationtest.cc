@@ -72,7 +72,11 @@
 // Trace categories used in the tests.
 PERFETTO_DEFINE_CATEGORIES(PERFETTO_CATEGORY(test),
                            PERFETTO_CATEGORY(foo),
-                           PERFETTO_CATEGORY(bar));
+                           PERFETTO_CATEGORY(bar),
+                           PERFETTO_CATEGORY(cat),
+                           // TODO(skyostil): Figure out how to represent
+                           // disabled-by-default categories
+                           {TRACE_DISABLED_BY_DEFAULT("cat")});
 PERFETTO_TRACK_EVENT_STATIC_STORAGE();
 
 // For testing interning of complex objects.
@@ -91,6 +95,52 @@ struct hash<SourceLocation> {
   }
 };
 }  // namespace std
+
+// Represents an opaque (from Perfetto's point of view) thread identifier (e.g.,
+// base::PlatformThreadId in Chromium).
+struct MyThreadId {
+  MyThreadId(int pid_, int tid_) : pid(pid_), tid(tid_) {}
+
+  const int pid = 0;
+  const int tid = 0;
+};
+
+// Represents an opaque timestamp (e.g., base::TimeTicks in Chromium).
+class MyTimestamp {
+ public:
+  explicit MyTimestamp(uint64_t ts_) : ts(ts_) {}
+
+  const uint64_t ts;
+};
+
+namespace perfetto {
+namespace legacy {
+
+template <>
+bool ConvertThreadId(const MyThreadId& thread,
+                     uint64_t* track_uuid_out,
+                     int32_t* pid_override_out,
+                     int32_t* tid_override_out) {
+  if (!thread.pid && !thread.tid)
+    return false;
+  if (!thread.pid) {
+    // Thread in current process.
+    *track_uuid_out = perfetto::ThreadTrack::ForThread(thread.tid).uuid;
+  } else {
+    // Thread in another process.
+    *pid_override_out = thread.pid;
+    *tid_override_out = thread.tid;
+  }
+  return true;
+}
+
+template <>
+uint64_t ConvertTimestampToTraceTimeNs(const MyTimestamp& timestamp) {
+  return timestamp.ts;
+}
+
+}  // namespace legacy
+}  // namespace perfetto
 
 namespace {
 
@@ -235,6 +285,16 @@ struct TestTracingSessionHandle {
   perfetto::TracingSession* get() { return session.get(); }
   std::unique_ptr<perfetto::TracingSession> session;
   WaitableTestEvent on_stop;
+};
+
+class MyDebugAnnotation : public perfetto::DebugAnnotation {
+ public:
+  ~MyDebugAnnotation() override = default;
+
+  void Add(
+      perfetto::protos::pbzero::DebugAnnotation* annotation) const override {
+    annotation->set_legacy_json_value(R"({"key": 123})");
+  }
 };
 
 // -------------------------
@@ -398,9 +458,42 @@ class PerfettoApiTest : public ::testing::Test {
         case perfetto::protos::gen::TrackEvent::TYPE_INSTANT:
           slice += "I";
           break;
-        default:
-        case perfetto::protos::gen::TrackEvent::TYPE_UNSPECIFIED:
+        case perfetto::protos::gen::TrackEvent::TYPE_UNSPECIFIED: {
+          EXPECT_TRUE(track_event.has_legacy_event());
           EXPECT_FALSE(track_event.type());
+          auto legacy_event = track_event.legacy_event();
+          slice += "Legacy_" +
+                   std::string(1, static_cast<char>(legacy_event.phase()));
+          break;
+        }
+        default:
+          ADD_FAILURE();
+      }
+      if (track_event.has_legacy_event()) {
+        auto legacy_event = track_event.legacy_event();
+        std::stringstream id;
+        if (legacy_event.has_unscoped_id()) {
+          id << "(unscoped_id=" << legacy_event.unscoped_id() << ")";
+        } else if (legacy_event.has_local_id()) {
+          id << "(local_id=" << legacy_event.local_id() << ")";
+        } else if (legacy_event.has_global_id()) {
+          id << "(global_id=" << legacy_event.global_id() << ")";
+        } else if (legacy_event.has_bind_id()) {
+          id << "(bind_id=" << legacy_event.bind_id() << ")";
+        }
+        if (legacy_event.has_id_scope())
+          id << "(id_scope=\"" << legacy_event.id_scope() << "\")";
+        if (legacy_event.use_async_tts())
+          id << "(use_async_tts)";
+        if (legacy_event.bind_to_enclosing())
+          id << "(bind_to_enclosing)";
+        if (legacy_event.has_flow_direction())
+          id << "(flow_direction=" << legacy_event.flow_direction() << ")";
+        if (legacy_event.has_pid_override())
+          id << "(pid_override=" << legacy_event.pid_override() << ")";
+        if (legacy_event.has_tid_override())
+          id << "(tid_override=" << legacy_event.tid_override() << ")";
+        slice += id.str();
       }
       if (!track_event.category_iids().empty())
         slice += ":" + categories[track_event.category_iids()[0]];
@@ -1270,22 +1363,21 @@ TEST_F(PerfettoApiTest, TrackEventTypedArgsWithInterningByHashing) {
   tracing_session->get()->StartBlocking();
 
   size_t body_iid;
-  TRACE_EVENT_BEGIN(
-      "foo", "EventWithState", [&](perfetto::EventContext ctx) {
-        // Test using a dynamically created interned value.
-        body_iid = InternedLogMessageBodyHashed::Get(
-            &ctx, std::string("Though this ") + "be madness,");
-        auto log = ctx.event()->set_log_message();
-        log->set_body_iid(body_iid);
+  TRACE_EVENT_BEGIN("foo", "EventWithState", [&](perfetto::EventContext ctx) {
+    // Test using a dynamically created interned value.
+    body_iid = InternedLogMessageBodyHashed::Get(
+        &ctx, std::string("Though this ") + "be madness,");
+    auto log = ctx.event()->set_log_message();
+    log->set_body_iid(body_iid);
 
-        auto body_iid2 =
-            InternedLogMessageBodyHashed::Get(&ctx, "Though this be madness,");
-        EXPECT_EQ(body_iid, body_iid2);
+    auto body_iid2 =
+        InternedLogMessageBodyHashed::Get(&ctx, "Though this be madness,");
+    EXPECT_EQ(body_iid, body_iid2);
 
-        auto body_iid3 =
-            InternedLogMessageBodyHashed::Get(&ctx, "yet there is method in’t");
-        EXPECT_NE(body_iid, body_iid3);
-      });
+    auto body_iid3 =
+        InternedLogMessageBodyHashed::Get(&ctx, "yet there is method in’t");
+    EXPECT_NE(body_iid, body_iid3);
+  });
   TRACE_EVENT_END("foo");
 
   tracing_session->get()->StopBlocking();
@@ -1455,23 +1547,15 @@ TEST_F(PerfettoApiTest, TrackEventCustomDebugAnnotations) {
   ds_cfg->set_name("track_event");
   ds_cfg->set_legacy_config("test");
 
-  class MyDebugAnnotation : public perfetto::DebugAnnotation {
-   public:
-    ~MyDebugAnnotation() override = default;
-
-    void Add(
-        perfetto::protos::pbzero::DebugAnnotation* annotation) const override {
-      annotation->set_legacy_json_value(R"({"key": 123})");
-    }
-  };
-
   // Create a new trace session.
   auto* tracing_session = NewTrace(cfg);
   tracing_session->get()->StartBlocking();
 
+  std::unique_ptr<MyDebugAnnotation> owned_annotation(new MyDebugAnnotation());
+
   TRACE_EVENT_BEGIN("test", "E", "custom_arg", MyDebugAnnotation());
   TRACE_EVENT_BEGIN("test", "E", "normal_arg", "x", "custom_arg",
-                    MyDebugAnnotation());
+                    std::move(owned_annotation));
   perfetto::TrackEvent::Flush();
 
   tracing_session->get()->StopBlocking();
@@ -1949,10 +2033,19 @@ TEST_F(PerfettoApiTest, GetDataSourceLockedFromCallbacks) {
 }
 
 TEST_F(PerfettoApiTest, LegacyTraceEvents) {
-  // TODO(skyostil): For now we just test that all variants of legacy trace
-  // points compile. Test actual functionality when implemented.
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  // Create a new trace session.
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
 
   // Basic events.
+  TRACE_EVENT_INSTANT0("cat", "LegacyEvent", TRACE_EVENT_SCOPE_GLOBAL);
   TRACE_EVENT_BEGIN1("cat", "LegacyEvent", "arg", 123);
   TRACE_EVENT_END2("cat", "LegacyEvent", "arg", "string", "arg2", 0.123f);
 
@@ -1965,17 +2058,167 @@ TEST_F(PerfettoApiTest, LegacyTraceEvents) {
 
   // Event with timestamp.
   TRACE_EVENT_INSTANT_WITH_TIMESTAMP0("cat", "LegacyInstantEvent",
-                                      TRACE_EVENT_SCOPE_GLOBAL, 123456789ul);
+                                      TRACE_EVENT_SCOPE_GLOBAL,
+                                      MyTimestamp{123456789ul});
 
   // Event with id, thread id and timestamp (and dynamic name).
   TRACE_EVENT_COPY_BEGIN_WITH_ID_TID_AND_TIMESTAMP0(
-      "cat", std::string("LegacyWithIdTidAndTimestamp").c_str(), 1, 2, 3);
+      "cat", std::string("LegacyWithIdTidAndTimestamp").c_str(), 1,
+      MyThreadId(123, 456), MyTimestamp{3});
 
   // Event with id.
-  TRACE_COUNTER_ID1("cat", "LegacyCounter", 1234, 9000);
+  TRACE_COUNTER1("cat", "LegacyCounter", 1234);
+  TRACE_COUNTER_ID1("cat", "LegacyCounterWithId", 1234, 9000);
 
   // Metadata event.
   TRACE_EVENT_METADATA1("cat", "LegacyMetadata", "obsolete", true);
+
+  perfetto::TrackEvent::Flush();
+  tracing_session->get()->StopBlocking();
+  auto slices = ReadSlicesFromTrace(tracing_session->get());
+  EXPECT_THAT(
+      slices,
+      ElementsAre(
+          "I:cat.LegacyEvent", "B:cat.LegacyEvent(arg=(int)123)",
+          "E.LegacyEvent(arg=(string)string,arg2=(double)0.123)",
+          "B:cat.ScopedLegacyEvent", "E",
+          "B(bind_id=3671771902)(flow_direction=1):disabled-by-default-cat."
+          "LegacyFlowEvent",
+          "I:cat.LegacyInstantEvent",
+          "Legacy_S(unscoped_id=1)(pid_override=123)(tid_override=456):cat."
+          "LegacyWithIdTidAndTimestamp",
+          "Legacy_C:cat.LegacyCounter(value=(int)1234)",
+          "Legacy_C(unscoped_id=1234):cat.LegacyCounterWithId(value=(int)9000)",
+          "Legacy_M:cat.LegacyMetadata"));
+}
+
+TEST_F(PerfettoApiTest, LegacyTraceEventsWithCustomAnnotation) {
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  // Create a new trace session.
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  MyDebugAnnotation annotation;
+  TRACE_EVENT_BEGIN1("cat", "LegacyEvent", "arg", annotation);
+
+  std::unique_ptr<MyDebugAnnotation> owned_annotation(new MyDebugAnnotation());
+  TRACE_EVENT_BEGIN1("cat", "LegacyEvent", "arg", std::move(owned_annotation));
+
+  perfetto::TrackEvent::Flush();
+  tracing_session->get()->StopBlocking();
+  auto slices = ReadSlicesFromTrace(tracing_session->get());
+  EXPECT_THAT(slices,
+              ElementsAre("B:cat.LegacyEvent(arg=(json){\"key\": 123})",
+                          "B:cat.LegacyEvent(arg=(json){\"key\": 123})"));
+}
+
+TEST_F(PerfettoApiTest, LegacyTraceEventsWithConcurrentSessions) {
+  // Make sure that a uniquely owned debug annotation can be written into
+  // multiple concurrent tracing sessions.
+
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  auto* tracing_session2 = NewTrace(cfg);
+  tracing_session2->get()->StartBlocking();
+
+  std::unique_ptr<MyDebugAnnotation> owned_annotation(new MyDebugAnnotation());
+  TRACE_EVENT_BEGIN1("cat", "LegacyEvent", "arg", std::move(owned_annotation));
+
+  perfetto::TrackEvent::Flush();
+  tracing_session->get()->StopBlocking();
+  auto slices = ReadSlicesFromTrace(tracing_session->get());
+  EXPECT_THAT(slices,
+              ElementsAre("B:cat.LegacyEvent(arg=(json){\"key\": 123})"));
+
+  tracing_session2->get()->StopBlocking();
+  slices = ReadSlicesFromTrace(tracing_session2->get());
+  EXPECT_THAT(slices,
+              ElementsAre("B:cat.LegacyEvent(arg=(json){\"key\": 123})"));
+}
+
+TEST_F(PerfettoApiTest, LegacyTraceEventsWithId) {
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  TRACE_EVENT_ASYNC_BEGIN0("cat", "UnscopedId", 0x1000);
+  TRACE_EVENT_ASYNC_BEGIN0("cat", "LocalId", TRACE_ID_LOCAL(0x2000));
+  TRACE_EVENT_ASYNC_BEGIN0("cat", "GlobalId", TRACE_ID_GLOBAL(0x3000));
+  TRACE_EVENT_ASYNC_BEGIN0(
+      "cat", "WithScope",
+      TRACE_ID_WITH_SCOPE("scope string", TRACE_ID_GLOBAL(0x4000)));
+
+  perfetto::TrackEvent::Flush();
+  tracing_session->get()->StopBlocking();
+  auto slices = ReadSlicesFromTrace(tracing_session->get());
+  EXPECT_THAT(slices, ElementsAre("Legacy_S(unscoped_id=4096):cat.UnscopedId",
+                                  "Legacy_S(local_id=8192):cat.LocalId",
+                                  "Legacy_S(global_id=12288):cat.GlobalId",
+                                  "Legacy_S(global_id=16384)(id_scope=\"scope "
+                                  "string\"):cat.WithScope"));
+}
+
+TEST_F(PerfettoApiTest, LegacyTraceEventsWithFlow) {
+  // Setup the trace config.
+  perfetto::TraceConfig cfg;
+  cfg.set_duration_ms(500);
+  cfg.add_buffers()->set_size_kb(1024);
+  auto* ds_cfg = cfg.add_data_sources()->mutable_config();
+  ds_cfg->set_name("track_event");
+
+  auto* tracing_session = NewTrace(cfg);
+  tracing_session->get()->StartBlocking();
+
+  const uint64_t flow_id = 1234;
+  {
+    TRACE_EVENT_WITH_FLOW1("cat", "LatencyInfo.Flow", TRACE_ID_GLOBAL(flow_id),
+                           TRACE_EVENT_FLAG_FLOW_OUT, "step", "Begin");
+  }
+
+  {
+    TRACE_EVENT_WITH_FLOW2("cat", "LatencyInfo.Flow", TRACE_ID_GLOBAL(flow_id),
+                           TRACE_EVENT_FLAG_FLOW_IN | TRACE_EVENT_FLAG_FLOW_OUT,
+                           "step", "Middle", "value", false);
+  }
+
+  {
+    TRACE_EVENT_WITH_FLOW1("cat", "LatencyInfo.Flow", TRACE_ID_GLOBAL(flow_id),
+                           TRACE_EVENT_FLAG_FLOW_IN, "step", "End");
+  }
+
+  perfetto::TrackEvent::Flush();
+  tracing_session->get()->StopBlocking();
+  auto slices = ReadSlicesFromTrace(tracing_session->get());
+  EXPECT_THAT(slices,
+              ElementsAre("B(bind_id=1234)(flow_direction=2):cat.LatencyInfo."
+                          "Flow(step=(string)Begin)",
+                          "E",
+                          "B(bind_id=1234)(flow_direction=3):cat.LatencyInfo."
+                          "Flow(step=(string)Middle,value=(bool)0)",
+                          "E",
+                          "B(bind_id=1234)(flow_direction=1):cat.LatencyInfo."
+                          "Flow(step=(string)End)",
+                          "E"));
 }
 
 }  // namespace

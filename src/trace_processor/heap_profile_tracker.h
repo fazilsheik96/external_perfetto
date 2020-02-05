@@ -18,6 +18,7 @@
 #define SRC_TRACE_PROCESSOR_HEAP_PROFILE_TRACKER_H_
 
 #include <deque>
+#include <set>
 #include <unordered_map>
 
 #include "perfetto/ext/base/optional.h"
@@ -89,7 +90,27 @@ class HeapProfileTracker {
                        tables::HeapProfileAllocationTable::Row>
         prev_free;
 
-    uint64_t last_profile_packet_index = 0;
+    // For continuous dumps, we only store the delta in the data-base. To do
+    // this, we subtract the previous dump's value. Sometimes, we should not
+    // do that subtraction, because heapprofd garbage collects stacks that
+    // have no unfreed allocations. If the application then allocations again
+    // at that stack, it gets recreated and initialized to zero.
+    //
+    // To correct for this, we add the previous' stacks value to the current
+    // one, and then handle it as normal. If it is the first time we see a
+    // SourceCallstackId for a CallsiteId, we put the previous value into
+    // the correction maps below.
+    std::map<std::pair<UniquePid, StackProfileTracker::SourceCallstackId>,
+             std::set<CallsiteId>>
+        seen_callstacks;
+    std::map<StackProfileTracker::SourceCallstackId,
+             tables::HeapProfileAllocationTable::Row>
+        alloc_correction;
+    std::map<StackProfileTracker::SourceCallstackId,
+             tables::HeapProfileAllocationTable::Row>
+        free_correction;
+
+    base::Optional<uint64_t> prev_index;
   };
   std::map<uint32_t, SequenceState> sequence_state_;
   TraceProcessorContext* const context_;

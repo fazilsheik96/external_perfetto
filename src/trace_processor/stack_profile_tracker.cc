@@ -68,9 +68,18 @@ base::Optional<MappingId> StackProfileTracker::AddMapping(
       context_->storage->GetString(raw_build_id);
   StringId build_id = GetEmptyStringId();
   if (raw_build_id_str.size() > 0) {
-    std::string hex_build_id =
-        base::ToHex(raw_build_id_str.c_str(), raw_build_id_str.size());
-    build_id = context_->storage->InternString(base::StringView(hex_build_id));
+    // If the build_id is 33 characters long, we assume it's a Breakpad debug
+    // identifier which is already in Hex and doesn't need conversion.
+    // TODO(b/148109467): Remove workaround once all active Chrome versions
+    // write raw bytes instead of a string as build_id.
+    if (raw_build_id_str.size() == 33) {
+      build_id = raw_build_id;
+    } else {
+      std::string hex_build_id =
+          base::ToHex(raw_build_id_str.c_str(), raw_build_id_str.size());
+      build_id =
+          context_->storage->InternString(base::StringView(hex_build_id));
+    }
   }
 
   tables::StackProfileMappingTable::Row row{
@@ -107,7 +116,7 @@ base::Optional<MappingId> StackProfileTracker::AddMapping(
       }
     }
     if (!cur_id) {
-      MappingId mapping_id = mappings->Insert(row);
+      MappingId mapping_id = mappings->Insert(row).id;
       context_->storage->InsertMappingId(row.name, row.build_id, mapping_id);
       cur_id = mapping_id;
     }
@@ -130,15 +139,15 @@ base::Optional<FrameId> StackProfileTracker::AddFrame(
   }
   const StringId& str_id = opt_str_id.value();
 
-  auto maybe_mapping = FindOrInsertMapping(frame.mapping_id, intern_lookup);
-  if (!maybe_mapping) {
+  auto opt_mapping = FindOrInsertMapping(frame.mapping_id, intern_lookup);
+  if (!opt_mapping) {
     context_->storage->IncrementStats(stats::stackprofile_invalid_mapping_id);
     PERFETTO_ELOG("Invalid mapping for frame %" PRIu64, id);
     return base::nullopt;
   }
-  MappingId mapping_id = *maybe_mapping;
+  MappingId mapping_id = *opt_mapping;
 
-  tables::StackProfileFrameTable::Row row{str_id, mapping_id.value,
+  tables::StackProfileFrameTable::Row row{str_id, mapping_id,
                                           static_cast<int64_t>(frame.rel_pc)};
 
   auto* frames = context_->storage->mutable_stack_profile_frame_table();
@@ -162,7 +171,7 @@ base::Optional<FrameId> StackProfileTracker::AddFrame(
       }
     }
     if (!cur_id) {
-      cur_id = frames->Insert(row);
+      cur_id = frames->Insert(row).id;
       context_->storage->InsertFrameRow(
           mapping_id, static_cast<uint64_t>(row.rel_pc), *cur_id);
     }
@@ -176,24 +185,20 @@ base::Optional<CallsiteId> StackProfileTracker::AddCallstack(
     SourceCallstackId id,
     const SourceCallstack& frame_ids,
     const InternLookup* intern_lookup) {
-  // TODO(fmayer): This should be NULL.
+  if (frame_ids.size() == 0)
+    return base::nullopt;
+
   base::Optional<CallsiteId> parent_id;
-  for (size_t depth = 0; depth < frame_ids.size(); ++depth) {
-    auto maybe_frame_id = FindOrInsertFrame(frame_ids[depth], intern_lookup);
-    if (!maybe_frame_id) {
+  for (uint32_t depth = 0; depth < frame_ids.size(); ++depth) {
+    auto opt_frame_id = FindOrInsertFrame(frame_ids[depth], intern_lookup);
+    if (!opt_frame_id) {
       context_->storage->IncrementStats(stats::stackprofile_invalid_frame_id);
       PERFETTO_ELOG("Unknown frame in callstack; ignoring.");
       return base::nullopt;
     }
-    FrameId frame_id = *maybe_frame_id;
+    FrameId frame_id = *opt_frame_id;
 
-    // TODO(fmayer): Store roots as having null parent_id instead of -1.
-    int64_t db_parent_id = -1;
-    if (parent_id)
-      db_parent_id = parent_id->value;
-    tables::StackProfileCallsiteTable::Row row{static_cast<int64_t>(depth),
-                                               db_parent_id, frame_id.value};
-
+    tables::StackProfileCallsiteTable::Row row{depth, parent_id, frame_id};
     CallsiteId self_id;
     auto callsite_it = callsite_idx_.find(row);
     if (callsite_it != callsite_idx_.end()) {
@@ -201,11 +206,12 @@ base::Optional<CallsiteId> StackProfileTracker::AddCallstack(
     } else {
       auto* callsite =
           context_->storage->mutable_stack_profile_callsite_table();
-      self_id = callsite->Insert(row);
+      self_id = callsite->Insert(row).id;
       callsite_idx_.emplace(row, self_id);
     }
     parent_id = self_id;
   }
+  PERFETTO_DCHECK(parent_id);  // The loop ran at least once.
   callstack_ids_.emplace(id, *parent_id);
   return parent_id;
 }

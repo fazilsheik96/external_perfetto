@@ -26,12 +26,11 @@
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/metadata_tracker.h"
 #include "src/trace_processor/register_additional_modules.h"
-#include "src/trace_processor/sched_slice_table.h"
 #include "src/trace_processor/span_join_operator_table.h"
 #include "src/trace_processor/sql_stats_table.h"
-#include "src/trace_processor/sqlite/db_sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite3_str_split.h"
 #include "src/trace_processor/sqlite/sqlite_table.h"
+#include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/sqlite_experimental_flamegraph_table.h"
 #include "src/trace_processor/sqlite_raw_table.h"
 #include "src/trace_processor/stats_table.h"
@@ -185,6 +184,20 @@ void CreateBuiltinViews(sqlite3* db) {
                "0.0 as value "
                "FROM instant;",
                0, 0, &error);
+
+  if (error) {
+    PERFETTO_ELOG("Error initializing: %s", error);
+    sqlite3_free(error);
+  }
+
+  sqlite3_exec(db,
+               "CREATE VIEW sched AS "
+               "SELECT "
+               "*, "
+               "ts + dur as ts_end "
+               "FROM sched_slice;",
+               0, 0, &error);
+
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
@@ -360,13 +373,22 @@ void SetupMetrics(TraceProcessor* tp,
       PERFETTO_ELOG("Error initializing RepeatedField");
   }
 }
+
+void EnsureSqliteInitialized() {
+  // sqlite3_initialize isn't actually thread-safe despite being documented
+  // as such; we need to make sure multiple TraceProcessorImpl instances don't
+  // call it concurrently and only gets called once per process, instead.
+  static bool init_once = [] { return sqlite3_initialize() == SQLITE_OK; }();
+  PERFETTO_CHECK(init_once);
+}
+
 }  // namespace
 
 TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
     : TraceProcessorStorageImpl(cfg) {
   RegisterAdditionalModules(&context_);
   sqlite3* db = nullptr;
-  PERFETTO_CHECK(sqlite3_initialize() == SQLITE_OK);
+  EnsureSqliteInitialized();
   PERFETTO_CHECK(sqlite3_open(":memory:", &db) == SQLITE_OK);
   InitializeSqlite(db);
   CreateBuiltinTables(db);
@@ -381,9 +403,11 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
 
   SetupMetrics(this, *db_, &sql_metrics_);
 
+  // Setup the query cache.
+  query_cache_.reset(new QueryCache());
+
   const TraceStorage* storage = context_.storage.get();
 
-  SchedSliceTable::RegisterTable(*db_, storage);
   SqlStatsTable::RegisterTable(*db_, storage);
   StatsTable::RegisterTable(*db_, storage);
 
@@ -393,86 +417,49 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
 
   // New style tables but with some custom logic.
   SqliteExperimentalFlamegraphTable::RegisterTable(*db_, &context_);
-  SqliteRawTable::RegisterTable(*db_, context_.storage.get());
+  SqliteRawTable::RegisterTable(*db_, query_cache_.get(),
+                                context_.storage.get());
 
   // New style db-backed tables.
-  DbSqliteTable::RegisterTable(*db_, &storage->arg_table(),
-                               storage->arg_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->thread_table(),
-                               storage->thread_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->process_table(),
-                               storage->process_table().table_name());
+  RegisterDbTable(storage->arg_table());
+  RegisterDbTable(storage->thread_table());
+  RegisterDbTable(storage->process_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->slice_table(),
-                               storage->slice_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->instant_table(),
-                               storage->instant_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->gpu_slice_table(),
-                               storage->gpu_slice_table().table_name());
+  RegisterDbTable(storage->slice_table());
+  RegisterDbTable(storage->sched_slice_table());
+  RegisterDbTable(storage->instant_table());
+  RegisterDbTable(storage->gpu_slice_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->track_table(),
-                               storage->track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->thread_track_table(),
-                               storage->thread_track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->process_track_table(),
-                               storage->process_track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->gpu_track_table(),
-                               storage->gpu_track_table().table_name());
+  RegisterDbTable(storage->track_table());
+  RegisterDbTable(storage->thread_track_table());
+  RegisterDbTable(storage->process_track_table());
+  RegisterDbTable(storage->gpu_track_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->counter_table(),
-                               storage->counter_table().table_name());
+  RegisterDbTable(storage->counter_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->counter_track_table(),
-                               storage->counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->process_counter_track_table(),
-      storage->process_counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->thread_counter_track_table(),
-      storage->thread_counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->cpu_counter_track_table(),
-                               storage->cpu_counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->irq_counter_track_table(),
-                               storage->irq_counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->softirq_counter_track_table(),
-      storage->softirq_counter_track_table().table_name());
-  DbSqliteTable::RegisterTable(*db_, &storage->gpu_counter_track_table(),
-                               storage->gpu_counter_track_table().table_name());
+  RegisterDbTable(storage->counter_track_table());
+  RegisterDbTable(storage->process_counter_track_table());
+  RegisterDbTable(storage->thread_counter_track_table());
+  RegisterDbTable(storage->cpu_counter_track_table());
+  RegisterDbTable(storage->irq_counter_track_table());
+  RegisterDbTable(storage->softirq_counter_track_table());
+  RegisterDbTable(storage->gpu_counter_track_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->heap_graph_object_table(),
-                               storage->heap_graph_object_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->heap_graph_reference_table(),
-      storage->heap_graph_reference_table().table_name());
+  RegisterDbTable(storage->heap_graph_object_table());
+  RegisterDbTable(storage->heap_graph_reference_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->symbol_table(),
-                               storage->symbol_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->heap_profile_allocation_table(),
-      storage->heap_profile_allocation_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->cpu_profile_stack_sample_table(),
-      storage->cpu_profile_stack_sample_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->stack_profile_callsite_table(),
-      storage->stack_profile_callsite_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->stack_profile_mapping_table(),
-      storage->stack_profile_mapping_table().table_name());
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->stack_profile_frame_table(),
-      storage->stack_profile_frame_table().table_name());
+  RegisterDbTable(storage->symbol_table());
+  RegisterDbTable(storage->heap_profile_allocation_table());
+  RegisterDbTable(storage->cpu_profile_stack_sample_table());
+  RegisterDbTable(storage->stack_profile_callsite_table());
+  RegisterDbTable(storage->stack_profile_mapping_table());
+  RegisterDbTable(storage->stack_profile_frame_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->android_log_table(),
-                               storage->android_log_table().table_name());
+  RegisterDbTable(storage->android_log_table());
 
-  DbSqliteTable::RegisterTable(
-      *db_, &storage->vulkan_memory_allocations_table(),
-      storage->vulkan_memory_allocations_table().table_name());
+  RegisterDbTable(storage->vulkan_memory_allocations_table());
 
-  DbSqliteTable::RegisterTable(*db_, &storage->metadata_table(),
-                               storage->metadata_table().table_name());
+  RegisterDbTable(storage->metadata_table());
 }
 
 TraceProcessorImpl::~TraceProcessorImpl() {

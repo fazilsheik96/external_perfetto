@@ -85,7 +85,8 @@ export class HeapProfileController extends Controller<'main'> {
                           selectedHeapProfile.viewingOption :
                           DEFAULT_VIEWING_OPTION,
                       selection.ts,
-                      selectedHeapProfile.upid)
+                      selectedHeapProfile.upid,
+                      selectedHeapProfile.type)
                   .then(flamegraphData => {
                     if (flamegraphData !== undefined && selection &&
                         selection.kind === selectedHeapProfile.kind &&
@@ -119,6 +120,7 @@ export class HeapProfileController extends Controller<'main'> {
       id: heapProfile.id,
       upid: heapProfile.upid,
       ts: heapProfile.ts,
+      type: heapProfile.type,
       expandedCallsite: heapProfile.expandedCallsite,
       viewingOption: heapProfile.viewingOption
     };
@@ -130,6 +132,7 @@ export class HeapProfileController extends Controller<'main'> {
          (this.lastSelectedHeapProfile !== undefined &&
           (this.lastSelectedHeapProfile.id !== selection.id ||
            this.lastSelectedHeapProfile.ts !== selection.ts ||
+           this.lastSelectedHeapProfile.type !== selection.type ||
            this.lastSelectedHeapProfile.upid !== selection.upid ||
            this.lastSelectedHeapProfile.viewingOption !==
                selection.viewingOption ||
@@ -151,8 +154,8 @@ export class HeapProfileController extends Controller<'main'> {
 
 
   async getFlamegraphData(
-      baseKey: string, viewingOption: string, ts: number,
-      upid: number): Promise<CallsiteInfo[]> {
+      baseKey: string, viewingOption: string, ts: number, upid: number,
+      type: string): Promise<CallsiteInfo[]> {
     let currentData: CallsiteInfo[];
     const key = `${baseKey}-${viewingOption}`;
     if (this.flamegraphDatasets.has(key)) {
@@ -163,7 +166,7 @@ export class HeapProfileController extends Controller<'main'> {
       // Collecting data for drawing flamegraph for selected heap profile.
       // Data needs to be in following format:
       // id, name, parent_id, depth, total_size
-      const tableName = await this.prepareViewsAndTables(ts, upid);
+      const tableName = await this.prepareViewsAndTables(ts, upid, type);
       currentData =
           await this.getFlamegraphDataFromTables(tableName, viewingOption);
       this.flamegraphDatasets.set(key, currentData);
@@ -175,59 +178,83 @@ export class HeapProfileController extends Controller<'main'> {
       tableName: string, viewingOption = DEFAULT_VIEWING_OPTION) {
     let orderBy = '';
     let sizeIndex = 4;
+    let selfIndex = 9;
+    // TODO(fmayer): Improve performance so this is no longer necessary.
+    // Alternatively consider collapsing frames of the same label.
+    const maxDepth = 100;
     switch (viewingOption) {
       case SPACE_MEMORY_ALLOCATED_NOT_FREED_KEY:
-        orderBy = `where cumulative_size > 0 order by depth, parent_id,
+        orderBy = `where cumulative_size > 0 and depth < ${
+            maxDepth} order by depth, parent_id,
             cumulative_size desc, name`;
         sizeIndex = 4;
+        selfIndex = 9;
         break;
       case ALLOC_SPACE_MEMORY_ALLOCATED_KEY:
-        orderBy = `where cumulative_alloc_size > 0 order by depth, parent_id,
+        orderBy = `where cumulative_alloc_size > 0 and depth < ${
+            maxDepth} order by depth, parent_id,
             cumulative_alloc_size desc, name`;
         sizeIndex = 5;
+        selfIndex = 9;
         break;
       case OBJECTS_ALLOCATED_NOT_FREED_KEY:
-        orderBy = `where cumulative_count > 0 order by depth, parent_id,
+        orderBy = `where cumulative_count > 0 and depth < ${
+            maxDepth} order by depth, parent_id,
             cumulative_count desc, name`;
         sizeIndex = 6;
+        selfIndex = 10;
         break;
       case OBJECTS_ALLOCATED_KEY:
-        orderBy = `where cumulative_alloc_count > 0 order by depth, parent_id,
+        orderBy = `where cumulative_alloc_count > 0 and depth < ${
+            maxDepth} order by depth, parent_id,
             cumulative_alloc_count desc, name`;
         sizeIndex = 7;
+        selfIndex = 10;
         break;
       default:
         break;
     }
 
     const callsites = await this.args.engine.query(
-        `SELECT id, name, parent_id, depth, cumulative_size,
-        cumulative_alloc_size, cumulative_count,
-        cumulative_alloc_count, map_name, size from ${tableName} ${orderBy}`);
+        `SELECT id, IFNULL(DEMANGLE(name), name), IFNULL(parent_id, -1), depth,
+        cumulative_size, cumulative_alloc_size, cumulative_count,
+        cumulative_alloc_count, map_name, size, count from ${tableName} ${
+            orderBy}`);
 
     const flamegraphData: CallsiteInfo[] = new Array();
     const hashToindex: Map<number, number> = new Map();
     for (let i = 0; i < callsites.numRecords; i++) {
       const hash = callsites.columns[0].longValues![i];
-      const name = callsites.columns[1].stringValues![i];
+      let name = callsites.columns[1].stringValues![i];
       const parentHash = callsites.columns[2].longValues![i];
       const depth = +callsites.columns[3].longValues![i];
       const totalSize = +callsites.columns[sizeIndex].longValues![i];
       const mapping = callsites.columns[8].stringValues![i];
-      const selfSize = +callsites.columns[9].longValues![i];
+      const selfSize = +callsites.columns[selfIndex].longValues![i];
       const parentId =
           hashToindex.has(+parentHash) ? hashToindex.get(+parentHash)! : -1;
+      if (depth === maxDepth - 1) {
+        name += ' [tree truncated]';
+      }
       hashToindex.set(+hash, i);
       // Instead of hash, we will store index of callsite in this original array
       // as an id of callsite. That way, we have quicker access to parent and it
       // will stay unique.
-      flamegraphData.push(
-          {id: i, totalSize, depth, parentId, name, selfSize, mapping});
+      flamegraphData.push({
+        id: i,
+        totalSize,
+        depth,
+        parentId,
+        name,
+        selfSize,
+        mapping,
+        merged: false
+      });
     }
     return flamegraphData;
   }
 
-  private async prepareViewsAndTables(ts: number, upid: number):
+  private async prepareViewsAndTables(ts: number, upid: number, type: string):
       Promise<string> {
     // Creating unique names for views so we can reuse and not delete them
     // for each marker.
@@ -239,7 +266,7 @@ export class HeapProfileController extends Controller<'main'> {
         select id, name, map_name, parent_id, depth, cumulative_size,
           cumulative_alloc_size, cumulative_count, cumulative_alloc_count,
           size, alloc_size, count, alloc_count
-        from experimental_flamegraph(${ts}, ${upid}, 'native')`);
+        from experimental_flamegraph(${ts}, ${upid}, '${type}')`);
     return tableNameGroupedCallsitesForFlamegraph;
   }
 

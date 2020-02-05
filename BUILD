@@ -58,7 +58,9 @@ perfetto_cc_library(
     srcs = [
         ":src_base_base",
         ":src_base_unix_socket",
-        ":src_ipc_ipc",
+        ":src_ipc_client",
+        ":src_ipc_common",
+        ":src_ipc_host",
     ],
     hdrs = [
         ":include_perfetto_base_base",
@@ -161,7 +163,9 @@ perfetto_cc_library(
         ":src_android_internal_lazy_library_loader",
         ":src_base_base",
         ":src_base_unix_socket",
-        ":src_ipc_ipc",
+        ":src_ipc_client",
+        ":src_ipc_common",
+        ":src_ipc_host",
         ":src_perfetto_cmd_perfetto_atoms",
         ":src_protozero_protozero",
         ":src_traced_probes_android_log_android_log",
@@ -178,9 +182,13 @@ perfetto_cc_library(
         ":src_traced_probes_sys_stats_sys_stats",
         ":src_traced_service_service",
         ":src_tracing_common",
-        ":src_tracing_consumer_api_deprecated",
-        ":src_tracing_ipc",
-        ":src_tracing_tracing",
+        ":src_tracing_consumer_api_deprecated_consumer_api_deprecated",
+        ":src_tracing_core_core",
+        ":src_tracing_core_service",
+        ":src_tracing_ipc_common",
+        ":src_tracing_ipc_consumer_consumer",
+        ":src_tracing_ipc_producer_producer",
+        ":src_tracing_ipc_service_service",
     ],
     hdrs = [
         ":include_perfetto_base_base",
@@ -540,19 +548,33 @@ filegroup(
     ],
 )
 
-# GN target: //src/ipc:ipc
+# GN target: //src/ipc:client
 filegroup(
-    name = "src_ipc_ipc",
+    name = "src_ipc_client",
+    srcs = [
+        "src/ipc/client_impl.cc",
+        "src/ipc/client_impl.h",
+        "src/ipc/service_proxy.cc",
+    ],
+)
+
+# GN target: //src/ipc:common
+filegroup(
+    name = "src_ipc_common",
     srcs = [
         "src/ipc/buffered_frame_deserializer.cc",
         "src/ipc/buffered_frame_deserializer.h",
-        "src/ipc/client_impl.cc",
-        "src/ipc/client_impl.h",
         "src/ipc/deferred.cc",
+        "src/ipc/virtual_destructors.cc",
+    ],
+)
+
+# GN target: //src/ipc:host
+filegroup(
+    name = "src_ipc_host",
+    srcs = [
         "src/ipc/host_impl.cc",
         "src/ipc/host_impl.h",
-        "src/ipc/service_proxy.cc",
-        "src/ipc/virtual_destructors.cc",
     ],
 )
 
@@ -663,6 +685,7 @@ filegroup(
         "src/trace_processor/db/table.cc",
         "src/trace_processor/db/table.h",
         "src/trace_processor/db/typed_column.h",
+        "src/trace_processor/db/typed_column_internal.h",
     ],
 )
 
@@ -741,6 +764,7 @@ filegroup(
     srcs = [
         "src/trace_processor/sqlite/db_sqlite_table.cc",
         "src/trace_processor/sqlite/db_sqlite_table.h",
+        "src/trace_processor/sqlite/query_cache.h",
         "src/trace_processor/sqlite/query_constraints.cc",
         "src/trace_processor/sqlite/query_constraints.h",
         "src/trace_processor/sqlite/scoped_db.h",
@@ -800,13 +824,7 @@ filegroup(
 filegroup(
     name = "src_trace_processor_lib",
     srcs = [
-        "src/trace_processor/filtered_row_index.cc",
-        "src/trace_processor/filtered_row_index.h",
         "src/trace_processor/read_trace.cc",
-        "src/trace_processor/row_iterators.cc",
-        "src/trace_processor/row_iterators.h",
-        "src/trace_processor/sched_slice_table.cc",
-        "src/trace_processor/sched_slice_table.h",
         "src/trace_processor/span_join_operator_table.cc",
         "src/trace_processor/span_join_operator_table.h",
         "src/trace_processor/sql_stats_table.cc",
@@ -817,12 +835,6 @@ filegroup(
         "src/trace_processor/sqlite_raw_table.h",
         "src/trace_processor/stats_table.cc",
         "src/trace_processor/stats_table.h",
-        "src/trace_processor/storage_columns.cc",
-        "src/trace_processor/storage_columns.h",
-        "src/trace_processor/storage_schema.cc",
-        "src/trace_processor/storage_schema.h",
-        "src/trace_processor/storage_table.cc",
-        "src/trace_processor/storage_table.h",
         "src/trace_processor/trace_processor.cc",
         "src/trace_processor/trace_processor_impl.cc",
         "src/trace_processor/trace_processor_impl.h",
@@ -1123,16 +1135,101 @@ filegroup(
     ],
 )
 
-# GN target: //src/tracing:client_api
+# GN target: //src/tracing/consumer_api_deprecated:consumer_api_deprecated
 filegroup(
-    name = "src_tracing_client_api",
+    name = "src_tracing_consumer_api_deprecated_consumer_api_deprecated",
+    srcs = [
+        "src/tracing/consumer_api_deprecated/consumer_api_deprecated.cc",
+    ],
+)
+
+# GN target: //src/tracing/core:core
+filegroup(
+    name = "src_tracing_core_core",
+    srcs = [
+        "src/tracing/core/id_allocator.cc",
+        "src/tracing/core/id_allocator.h",
+        "src/tracing/core/null_trace_writer.cc",
+        "src/tracing/core/null_trace_writer.h",
+        "src/tracing/core/patch_list.h",
+        "src/tracing/core/shared_memory_abi.cc",
+        "src/tracing/core/shared_memory_arbiter_impl.cc",
+        "src/tracing/core/shared_memory_arbiter_impl.h",
+        "src/tracing/core/startup_trace_writer.cc",
+        "src/tracing/core/startup_trace_writer_registry.cc",
+        "src/tracing/core/trace_packet.cc",
+        "src/tracing/core/trace_writer_impl.cc",
+        "src/tracing/core/trace_writer_impl.h",
+        "src/tracing/core/virtual_destructors.cc",
+    ],
+)
+
+# GN target: //src/tracing/core:service
+filegroup(
+    name = "src_tracing_core_service",
+    srcs = [
+        "src/tracing/core/metatrace_writer.cc",
+        "src/tracing/core/metatrace_writer.h",
+        "src/tracing/core/packet_stream_validator.cc",
+        "src/tracing/core/packet_stream_validator.h",
+        "src/tracing/core/trace_buffer.cc",
+        "src/tracing/core/trace_buffer.h",
+        "src/tracing/core/tracing_service_impl.cc",
+        "src/tracing/core/tracing_service_impl.h",
+    ],
+)
+
+# GN target: //src/tracing/ipc/consumer:consumer
+filegroup(
+    name = "src_tracing_ipc_consumer_consumer",
+    srcs = [
+        "src/tracing/ipc/consumer/consumer_ipc_client_impl.cc",
+        "src/tracing/ipc/consumer/consumer_ipc_client_impl.h",
+    ],
+)
+
+# GN target: //src/tracing/ipc/producer:producer
+filegroup(
+    name = "src_tracing_ipc_producer_producer",
+    srcs = [
+        "src/tracing/ipc/producer/producer_ipc_client_impl.cc",
+        "src/tracing/ipc/producer/producer_ipc_client_impl.h",
+    ],
+)
+
+# GN target: //src/tracing/ipc/service:service
+filegroup(
+    name = "src_tracing_ipc_service_service",
+    srcs = [
+        "src/tracing/ipc/service/consumer_ipc_service.cc",
+        "src/tracing/ipc/service/consumer_ipc_service.h",
+        "src/tracing/ipc/service/producer_ipc_service.cc",
+        "src/tracing/ipc/service/producer_ipc_service.h",
+        "src/tracing/ipc/service/service_ipc_host_impl.cc",
+        "src/tracing/ipc/service/service_ipc_host_impl.h",
+    ],
+)
+
+# GN target: //src/tracing/ipc:common
+filegroup(
+    name = "src_tracing_ipc_common",
+    srcs = [
+        "src/tracing/ipc/default_socket.cc",
+        "src/tracing/ipc/memfd.cc",
+        "src/tracing/ipc/memfd.h",
+        "src/tracing/ipc/posix_shared_memory.cc",
+        "src/tracing/ipc/posix_shared_memory.h",
+    ],
+)
+
+# GN target: //src/tracing:client_api_base
+filegroup(
+    name = "src_tracing_client_api_base",
     srcs = [
         "src/tracing/data_source.cc",
         "src/tracing/debug_annotation.cc",
         "src/tracing/event_context.cc",
-        "src/tracing/internal/in_process_tracing_backend.cc",
         "src/tracing/internal/in_process_tracing_backend.h",
-        "src/tracing/internal/system_tracing_backend.cc",
         "src/tracing/internal/system_tracing_backend.h",
         "src/tracing/internal/tracing_muxer_impl.cc",
         "src/tracing/internal/tracing_muxer_impl.h",
@@ -1141,6 +1238,7 @@ filegroup(
         "src/tracing/tracing.cc",
         "src/tracing/track.cc",
         "src/tracing/track_event_category_registry.cc",
+        "src/tracing/track_event_legacy.cc",
         "src/tracing/virtual_destructors.cc",
     ],
 )
@@ -1153,31 +1251,11 @@ filegroup(
     ],
 )
 
-# GN target: //src/tracing:consumer_api_deprecated
+# GN target: //src/tracing:in_process_backend
 filegroup(
-    name = "src_tracing_consumer_api_deprecated",
+    name = "src_tracing_in_process_backend",
     srcs = [
-        "src/tracing/api_impl/consumer_api.cc",
-    ],
-)
-
-# GN target: //src/tracing:ipc
-filegroup(
-    name = "src_tracing_ipc",
-    srcs = [
-        "src/tracing/ipc/consumer/consumer_ipc_client_impl.cc",
-        "src/tracing/ipc/consumer/consumer_ipc_client_impl.h",
-        "src/tracing/ipc/default_socket.cc",
-        "src/tracing/ipc/posix_shared_memory.cc",
-        "src/tracing/ipc/posix_shared_memory.h",
-        "src/tracing/ipc/producer/producer_ipc_client_impl.cc",
-        "src/tracing/ipc/producer/producer_ipc_client_impl.h",
-        "src/tracing/ipc/service/consumer_ipc_service.cc",
-        "src/tracing/ipc/service/consumer_ipc_service.h",
-        "src/tracing/ipc/service/producer_ipc_service.cc",
-        "src/tracing/ipc/service/producer_ipc_service.h",
-        "src/tracing/ipc/service/service_ipc_host_impl.cc",
-        "src/tracing/ipc/service/service_ipc_host_impl.h",
+        "src/tracing/internal/in_process_tracing_backend.cc",
     ],
 )
 
@@ -1189,32 +1267,11 @@ filegroup(
     ],
 )
 
-# GN target: //src/tracing:tracing
+# GN target: //src/tracing:system_process_backend
 filegroup(
-    name = "src_tracing_tracing",
+    name = "src_tracing_system_process_backend",
     srcs = [
-        "src/tracing/core/id_allocator.cc",
-        "src/tracing/core/id_allocator.h",
-        "src/tracing/core/metatrace_writer.cc",
-        "src/tracing/core/metatrace_writer.h",
-        "src/tracing/core/null_trace_writer.cc",
-        "src/tracing/core/null_trace_writer.h",
-        "src/tracing/core/packet_stream_validator.cc",
-        "src/tracing/core/packet_stream_validator.h",
-        "src/tracing/core/patch_list.h",
-        "src/tracing/core/shared_memory_abi.cc",
-        "src/tracing/core/shared_memory_arbiter_impl.cc",
-        "src/tracing/core/shared_memory_arbiter_impl.h",
-        "src/tracing/core/startup_trace_writer.cc",
-        "src/tracing/core/startup_trace_writer_registry.cc",
-        "src/tracing/core/trace_buffer.cc",
-        "src/tracing/core/trace_buffer.h",
-        "src/tracing/core/trace_packet.cc",
-        "src/tracing/core/trace_writer_impl.cc",
-        "src/tracing/core/trace_writer_impl.h",
-        "src/tracing/core/tracing_service_impl.cc",
-        "src/tracing/core/tracing_service_impl.h",
-        "src/tracing/core/virtual_destructors.cc",
+        "src/tracing/internal/system_tracing_backend.cc",
     ],
 )
 
@@ -2346,6 +2403,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/track_event/chrome_compositor_scheduler_state.proto",
         "protos/perfetto/trace/track_event/chrome_histogram_sample.proto",
         "protos/perfetto/trace/track_event/chrome_keyed_service.proto",
+        "protos/perfetto/trace/track_event/chrome_latency_info.proto",
         "protos/perfetto/trace/track_event/chrome_legacy_ipc.proto",
         "protos/perfetto/trace/track_event/chrome_process_descriptor.proto",
         "protos/perfetto/trace/track_event/chrome_thread_descriptor.proto",
@@ -2420,13 +2478,21 @@ perfetto_cc_library(
     srcs = [
         ":src_base_base",
         ":src_base_unix_socket",
-        ":src_ipc_ipc",
+        ":src_ipc_client",
+        ":src_ipc_common",
+        ":src_ipc_host",
         ":src_protozero_protozero",
-        ":src_tracing_client_api",
+        ":src_tracing_client_api_base",
         ":src_tracing_common",
-        ":src_tracing_ipc",
+        ":src_tracing_core_core",
+        ":src_tracing_core_service",
+        ":src_tracing_in_process_backend",
+        ":src_tracing_ipc_common",
+        ":src_tracing_ipc_consumer_consumer",
+        ":src_tracing_ipc_producer_producer",
+        ":src_tracing_ipc_service_service",
         ":src_tracing_platform_posix",
-        ":src_tracing_tracing",
+        ":src_tracing_system_process_backend",
     ],
     hdrs = [
         ":include_perfetto_base_base",
@@ -2504,14 +2570,17 @@ perfetto_cc_binary(
         ":src_android_internal_lazy_library_loader",
         ":src_base_base",
         ":src_base_unix_socket",
-        ":src_ipc_ipc",
+        ":src_ipc_client",
+        ":src_ipc_common",
         ":src_perfetto_cmd_perfetto_atoms",
         ":src_perfetto_cmd_perfetto_cmd",
         ":src_perfetto_cmd_trigger_producer",
         ":src_protozero_protozero",
         ":src_tracing_common",
-        ":src_tracing_ipc",
-        ":src_tracing_tracing",
+        ":src_tracing_core_core",
+        ":src_tracing_ipc_common",
+        ":src_tracing_ipc_consumer_consumer",
+        ":src_tracing_ipc_producer_producer",
     ],
     visibility = [
         "//visibility:public",

@@ -32,6 +32,9 @@ namespace trace_processor {
 
 class TraceProcessorContext;
 
+size_t NumberOfArrays(base::StringView type);
+base::StringView NormalizeTypeName(base::StringView type);
+
 class HeapGraphTracker : public HeapGraphWalker::Delegate, public Destructible {
  public:
   struct SourceObject {
@@ -107,8 +110,8 @@ class HeapGraphTracker : public HeapGraphWalker::Delegate, public Destructible {
     std::vector<SourceRoot> current_roots;
     std::map<uint64_t, StringPool::Id> interned_type_names;
     std::map<uint64_t, StringPool::Id> interned_field_names;
-    std::map<uint64_t, int64_t> object_id_to_row;
-    uint64_t prev_index = 0;
+    std::map<uint64_t, uint32_t> object_id_to_row;
+    base::Optional<uint64_t> prev_index;
     HeapGraphWalker walker;
   };
 

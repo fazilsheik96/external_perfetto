@@ -45,13 +45,11 @@ std::vector<MergedCallsite> GetMergedCallsites(TraceStorage* storage,
   const tables::StackProfileMappingTable& mapping_tbl =
       storage->stack_profile_mapping_table();
 
-  // TODO(fmayer): Clean up types and remove the static_cast.
-  uint32_t frame_idx = *frames_tbl.id().IndexOf(
-      FrameId(static_cast<uint32_t>(callsites_tbl.frame_id()[callstack_row])));
+  uint32_t frame_idx =
+      *frames_tbl.id().IndexOf(callsites_tbl.frame_id()[callstack_row]);
 
-  // TODO(fmayer): Clean up types and remove the static_cast.
-  uint32_t mapping_idx = *mapping_tbl.id().IndexOf(
-      MappingId(static_cast<uint32_t>(frames_tbl.mapping()[frame_idx])));
+  uint32_t mapping_idx =
+      *mapping_tbl.id().IndexOf(frames_tbl.mapping()[frame_idx]);
   StringId mapping_name = mapping_tbl.name()[mapping_idx];
 
   base::Optional<uint32_t> symbol_set_id =
@@ -101,10 +99,10 @@ std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> BuildNativeFlamegraph(
   // Aggregate callstacks by frame name / mapping name. Use symbolization data.
   for (uint32_t i = 0; i < callsites_tbl.row_count(); ++i) {
     base::Optional<uint32_t> parent_idx;
-    // TODO(fmayer): Clean up types and remove the conditional and static_cast.
-    if (callsites_tbl.parent_id()[i] != -1) {
-      auto parent_id = static_cast<uint32_t>(callsites_tbl.parent_id()[i]);
-      parent_idx = callsites_tbl.id().IndexOf(CallsiteId(parent_id));
+
+    auto opt_parent_id = callsites_tbl.parent_id()[i];
+    if (opt_parent_id) {
+      parent_idx = callsites_tbl.id().IndexOf(*opt_parent_id);
       parent_idx = callsite_to_merged_callsite[*parent_idx];
       PERFETTO_CHECK(*parent_idx < i);
     }
@@ -128,9 +126,9 @@ std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> BuildNativeFlamegraph(
         row.name = merged_callsite.frame_name;
         row.map_name = merged_callsite.mapping_name;
         if (parent_idx)
-          row.parent_id = tbl->id()[*parent_idx].value;
+          row.parent_id = tbl->id()[*parent_idx];
 
-        parent_idx = *tbl->id().IndexOf(tbl->Insert(std::move(row)));
+        parent_idx = tbl->Insert(std::move(row)).row;
         PERFETTO_CHECK(merged_callsites_to_table_idx.size() ==
                        tbl->row_count());
       }
@@ -164,19 +162,17 @@ std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> BuildNativeFlamegraph(
                 tables::HeapProfileAllocationTable::ColumnIndex::callsite_id))
             .long_value;
 
-    PERFETTO_CHECK((size < 0 && count < 0) || (size >= 0 && count >= 0));
+    PERFETTO_CHECK((size <= 0 && count <= 0) || (size >= 0 && count >= 0));
     uint32_t merged_idx =
         callsite_to_merged_callsite[*callsites_tbl.id().IndexOf(
             CallsiteId(static_cast<uint32_t>(callsite_id)))];
-    if (size > 0) {
-      // TODO(fmayer): Clean up types and remove the static_cast.
+    if (count > 0) {
       tbl->mutable_alloc_size()->Set(merged_idx,
                                      tbl->alloc_size()[merged_idx] + size);
       tbl->mutable_alloc_count()->Set(merged_idx,
                                       tbl->alloc_count()[merged_idx] + count);
     }
 
-    // TODO(fmayer): Clean up types and remove the static_cast.
     tbl->mutable_size()->Set(merged_idx, tbl->size()[merged_idx] + size);
     tbl->mutable_count()->Set(merged_idx, tbl->count()[merged_idx] + count);
   }
@@ -227,11 +223,27 @@ HeapProfileTracker::~HeapProfileTracker() = default;
 void HeapProfileTracker::SetProfilePacketIndex(uint32_t seq_id,
                                                uint64_t index) {
   SequenceState& sequence_state = sequence_state_[seq_id];
-  if (sequence_state.last_profile_packet_index != 0 &&
-      sequence_state.last_profile_packet_index + 1 != index) {
+  bool dropped_packet = false;
+  // heapprofd starts counting at index = 0.
+  if (!sequence_state.prev_index && index != 0) {
+    dropped_packet = true;
+  }
+
+  if (sequence_state.prev_index && *sequence_state.prev_index + 1 != index) {
+    dropped_packet = true;
+  }
+
+  if (dropped_packet) {
+    if (sequence_state.prev_index) {
+      PERFETTO_ELOG("Missing packets between %" PRIu64 " and %" PRIu64,
+                    *sequence_state.prev_index, index);
+    } else {
+      PERFETTO_ELOG("Invalid first packet index %" PRIu64 " (!= 0)", index);
+    }
+
     context_->storage->IncrementStats(stats::heapprofd_missing_packet);
   }
-  sequence_state.last_profile_packet_index = index;
+  sequence_state.prev_index = index;
 }
 
 void HeapProfileTracker::AddAllocation(
@@ -240,28 +252,26 @@ void HeapProfileTracker::AddAllocation(
     const SourceAllocation& alloc,
     const StackProfileTracker::InternLookup* intern_lookup) {
   SequenceState& sequence_state = sequence_state_[seq_id];
-  auto maybe_callstack_id = stack_profile_tracker->FindOrInsertCallstack(
+
+  auto opt_callstack_id = stack_profile_tracker->FindOrInsertCallstack(
       alloc.callstack_id, intern_lookup);
-  if (!maybe_callstack_id)
+  if (!opt_callstack_id)
     return;
 
-  CallsiteId callstack_id = *maybe_callstack_id;
+  CallsiteId callstack_id = *opt_callstack_id;
 
   UniquePid upid = context_->process_tracker->GetOrCreateProcess(
       static_cast<uint32_t>(alloc.pid));
 
   tables::HeapProfileAllocationTable::Row alloc_row{
-      alloc.timestamp, upid, callstack_id.value,
+      alloc.timestamp, upid, callstack_id,
       static_cast<int64_t>(alloc.alloc_count),
       static_cast<int64_t>(alloc.self_allocated)};
 
   tables::HeapProfileAllocationTable::Row free_row{
-      alloc.timestamp, upid, callstack_id.value,
+      alloc.timestamp, upid, callstack_id,
       -static_cast<int64_t>(alloc.free_count),
       -static_cast<int64_t>(alloc.self_freed)};
-
-  tables::HeapProfileAllocationTable::Row alloc_delta = alloc_row;
-  tables::HeapProfileAllocationTable::Row free_delta = free_row;
 
   auto prev_alloc_it = sequence_state.prev_alloc.find({upid, callstack_id});
   if (prev_alloc_it == sequence_state.prev_alloc.end()) {
@@ -271,8 +281,6 @@ void HeapProfileTracker::AddAllocation(
   }
 
   tables::HeapProfileAllocationTable::Row& prev_alloc = prev_alloc_it->second;
-  alloc_delta.count -= prev_alloc.count;
-  alloc_delta.size -= prev_alloc.size;
 
   auto prev_free_it = sequence_state.prev_free.find({upid, callstack_id});
   if (prev_free_it == sequence_state.prev_free.end()) {
@@ -282,15 +290,59 @@ void HeapProfileTracker::AddAllocation(
   }
 
   tables::HeapProfileAllocationTable::Row& prev_free = prev_free_it->second;
+
+  std::set<CallsiteId>& callstacks_for_source_callstack_id =
+      sequence_state.seen_callstacks[std::make_pair(upid, alloc.callstack_id)];
+  bool new_callstack;
+  std::tie(std::ignore, new_callstack) =
+      callstacks_for_source_callstack_id.emplace(callstack_id);
+
+  if (new_callstack) {
+    sequence_state.alloc_correction[alloc.callstack_id] = prev_alloc;
+    sequence_state.free_correction[alloc.callstack_id] = prev_free;
+  }
+
+  auto alloc_correction_it =
+      sequence_state.alloc_correction.find(alloc.callstack_id);
+  if (alloc_correction_it != sequence_state.alloc_correction.end()) {
+    const auto& alloc_correction = alloc_correction_it->second;
+    alloc_row.count += alloc_correction.count;
+    alloc_row.size += alloc_correction.size;
+  }
+
+  auto free_correction_it =
+      sequence_state.free_correction.find(alloc.callstack_id);
+  if (free_correction_it != sequence_state.free_correction.end()) {
+    const auto& free_correction = free_correction_it->second;
+    free_row.count += free_correction.count;
+    free_row.size += free_correction.size;
+  }
+
+  tables::HeapProfileAllocationTable::Row alloc_delta = alloc_row;
+  tables::HeapProfileAllocationTable::Row free_delta = free_row;
+
+  alloc_delta.count -= prev_alloc.count;
+  alloc_delta.size -= prev_alloc.size;
+
   free_delta.count -= prev_free.count;
   free_delta.size -= prev_free.size;
 
-  if (alloc_delta.count)
+  if (alloc_delta.count < 0 || alloc_delta.size < 0 || free_delta.count > 0 ||
+      free_delta.size > 0) {
+    PERFETTO_DLOG("Non-monotonous allocation.");
+    context_->storage->IncrementIndexedStats(stats::heapprofd_malformed_packet,
+                                             static_cast<int>(upid));
+    return;
+  }
+
+  if (alloc_delta.count) {
     context_->storage->mutable_heap_profile_allocation_table()->Insert(
         alloc_delta);
-  if (free_delta.count)
+  }
+  if (free_delta.count) {
     context_->storage->mutable_heap_profile_allocation_table()->Insert(
         free_delta);
+  }
 
   prev_alloc = alloc_row;
   prev_free = free_row;

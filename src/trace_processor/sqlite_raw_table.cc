@@ -50,8 +50,9 @@ std::tuple<uint32_t, uint32_t> ParseKernelReleaseVersion(
 }
 }  // namespace
 
-SqliteRawTable::SqliteRawTable(sqlite3* db, const TraceStorage* storage)
-    : DbSqliteTable(db, &storage->raw_table()), storage_(storage) {
+SqliteRawTable::SqliteRawTable(sqlite3* db, Context context)
+    : DbSqliteTable(db, {context.cache, &context.storage->raw_table()}),
+      storage_(context.storage) {
   auto fn = [](sqlite3_context* ctx, int argc, sqlite3_value** argv) {
     auto* thiz = static_cast<SqliteRawTable*>(sqlite3_user_data(ctx));
     thiz->ToSystrace(ctx, argc, argv);
@@ -63,8 +64,11 @@ SqliteRawTable::SqliteRawTable(sqlite3* db, const TraceStorage* storage)
 
 SqliteRawTable::~SqliteRawTable() = default;
 
-void SqliteRawTable::RegisterTable(sqlite3* db, const TraceStorage* storage) {
-  SqliteTable::Register<SqliteRawTable>(db, storage, "raw");
+void SqliteRawTable::RegisterTable(sqlite3* db,
+                                   QueryCache* cache,
+                                   const TraceStorage* storage) {
+  SqliteTable::Register<SqliteRawTable, Context>(db, Context{cache, storage},
+                                                 "raw");
 }
 
 bool SqliteRawTable::ParseGfpFlags(Variadic value, base::StringWriter* writer) {
@@ -101,6 +105,8 @@ void SqliteRawTable::FormatSystraceArgs(NullTermStringView event_name,
   // the proto field order is also the order of insertion (which happens to
   // be true but proabably shouldn't be relied on).
   RowMap rm = storage_->arg_table().FilterToRowMap({set_ids.eq(arg_set_id)});
+  if (rm.empty())
+    return;
 
   uint32_t start_row = rm.Get(0);
   using ValueWriter = std::function<void(const Variadic&)>;

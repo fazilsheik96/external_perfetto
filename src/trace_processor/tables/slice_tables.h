@@ -18,6 +18,7 @@
 #define SRC_TRACE_PROCESSOR_TABLES_SLICE_TABLES_H_
 
 #include "src/trace_processor/tables/macros.h"
+#include "src/trace_processor/tables/track_tables.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -28,7 +29,7 @@ namespace tables {
   PERFETTO_TP_ROOT_TABLE(PARENT, C)                  \
   C(int64_t, ts, Column::Flag::kSorted)              \
   C(int64_t, dur)                                    \
-  C(uint32_t, track_id)                              \
+  C(TrackTable::Id, track_id)                        \
   C(StringPool::Id, category)                        \
   C(StringPool::Id, name)                            \
   C(uint32_t, depth)                                 \
@@ -49,13 +50,28 @@ PERFETTO_TP_TABLE(PERFETTO_TP_SLICE_TABLE_DEF);
 
 PERFETTO_TP_TABLE(PERFETTO_TP_INSTANT_TABLE_DEF);
 
+#define PERFETTO_TP_SCHED_SLICE_TABLE_DEF(NAME, PARENT, C) \
+  NAME(SchedSliceTable, "sched_slice")                     \
+  PERFETTO_TP_ROOT_TABLE(PARENT, C)                        \
+  C(int64_t, ts, Column::Flag::kSorted)                    \
+  C(int64_t, dur)                                          \
+  C(uint32_t, cpu)                                         \
+  C(uint32_t, utid)                                        \
+  C(StringPool::Id, end_state)                             \
+  C(int32_t, priority)
+
+PERFETTO_TP_TABLE(PERFETTO_TP_SCHED_SLICE_TABLE_DEF);
+
 #define PERFETTO_TP_GPU_SLICES_DEF(NAME, PARENT, C) \
   NAME(GpuSliceTable, "gpu_slice")                  \
   PARENT(PERFETTO_TP_SLICE_TABLE_DEF, C)            \
   C(base::Optional<int64_t>, context_id)            \
   C(base::Optional<int64_t>, render_target)         \
+  C(StringPool::Id, render_target_name)             \
   C(base::Optional<int64_t>, render_pass)           \
+  C(StringPool::Id, render_pass_name)               \
   C(base::Optional<int64_t>, command_buffer)        \
+  C(StringPool::Id, command_buffer_name)            \
   C(base::Optional<uint32_t>, frame_id)             \
   C(base::Optional<uint32_t>, submission_id)        \
   C(base::Optional<uint32_t>, hw_queue_id)

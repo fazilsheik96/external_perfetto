@@ -1328,7 +1328,7 @@ TEST_F(ProtoTraceParserTest, TrackEventWithTrackDescriptors) {
   EXPECT_CALL(*slice_, Scoped(1015000, TrackId{0}, cat_2, ev_2, 0, _))
       .WillOnce(Return(1u));
 
-  EXPECT_CALL(*slice_, Scoped(1016000, TrackId{2}, cat_3, ev_3, 0, _))
+  EXPECT_CALL(*slice_, Scoped(1016000, TrackId{3}, cat_3, ev_3, 0, _))
       .WillOnce(Return(2u));
 
   EXPECT_CALL(*slice_,
@@ -1337,12 +1337,13 @@ TEST_F(ProtoTraceParserTest, TrackEventWithTrackDescriptors) {
 
   context_.sorter->ExtractEventsForced();
 
-  // First track is "Thread track 1"; second is "Async track 1", third is
-  // "Thread track 2".
-  EXPECT_EQ(storage_->track_table().row_count(), 3u);
+  // First track is "Thread track 1"; second is "Async track 1", third is global
+  // default track (parent of async track), fourth is "Thread track 2".
+  EXPECT_EQ(storage_->track_table().row_count(), 4u);
   EXPECT_EQ(storage_->track_table().name().GetString(0), "Thread track 1");
   EXPECT_EQ(storage_->track_table().name().GetString(1), "Async track 1");
-  EXPECT_EQ(storage_->track_table().name().GetString(2), "Thread track 2");
+  EXPECT_EQ(storage_->track_table().name().GetString(2), "Default Track");
+  EXPECT_EQ(storage_->track_table().name().GetString(3), "Thread track 2");
   EXPECT_EQ(storage_->thread_track_table().row_count(), 2u);
   EXPECT_EQ(storage_->thread_track_table().utid()[0], 1u);
   EXPECT_EQ(storage_->thread_track_table().utid()[1], 2u);
@@ -2390,6 +2391,11 @@ TEST_F(ProtoTraceParserTest, ParseCPUProfileSamplesIntoTable) {
 
     auto mapping = interned_data->add_mappings();
     mapping->set_iid(1);
+    mapping->set_build_id(1);
+
+    auto build_id = interned_data->add_build_ids();
+    build_id->set_iid(1);
+    build_id->set_str("3BBCFBD372448A727265C3E7C4D954F91");
 
     auto frame = interned_data->add_frames();
     frame->set_iid(1);
@@ -2441,16 +2447,23 @@ TEST_F(ProtoTraceParserTest, ParseCPUProfileSamplesIntoTable) {
   EXPECT_EQ(samples.row_count(), 3u);
 
   EXPECT_EQ(samples.ts()[0], 11000);
-  EXPECT_EQ(samples.callsite_id()[0], 0);
+  EXPECT_EQ(samples.callsite_id()[0], CallsiteId{0});
   EXPECT_EQ(samples.utid()[0], 1u);
 
   EXPECT_EQ(samples.ts()[1], 26000);
-  EXPECT_EQ(samples.callsite_id()[1], 1);
+  EXPECT_EQ(samples.callsite_id()[1], CallsiteId{1});
   EXPECT_EQ(samples.utid()[1], 1u);
 
   EXPECT_EQ(samples.ts()[2], 68000);
-  EXPECT_EQ(samples.callsite_id()[2], 0);
+  EXPECT_EQ(samples.callsite_id()[2], CallsiteId{0});
   EXPECT_EQ(samples.utid()[2], 1u);
+
+  // Breakpad build_ids should not be modified/mangled.
+  ASSERT_STREQ(
+      context_.storage
+          ->GetString(storage_->stack_profile_mapping_table().build_id()[0])
+          .c_str(),
+      "3BBCFBD372448A727265C3E7C4D954F91");
 }
 
 }  // namespace
