@@ -97,9 +97,17 @@ void HeapGraphTracker::AddInternedTypeName(uint32_t seq_id,
 
 void HeapGraphTracker::AddInternedFieldName(uint32_t seq_id,
                                             uint64_t intern_id,
-                                            StringPool::Id strid) {
+                                            base::StringView str) {
   SequenceState& sequence_state = GetOrCreateSequence(seq_id);
-  sequence_state.interned_field_names.emplace(intern_id, strid);
+  size_t space = str.find(' ');
+  base::StringView type_name;
+  if (space != base::StringView::npos) {
+    type_name = str.substr(0, space);
+    str = str.substr(space + 1);
+  }
+  sequence_state.interned_fields.emplace(
+      intern_id, InternedField{context_->storage->InternString(str),
+                               context_->storage->InternString(type_name)});
 }
 
 void HeapGraphTracker::SetPacketIndex(uint32_t seq_id, uint64_t index) {
@@ -154,8 +162,7 @@ void HeapGraphTracker::FinalizeProfile(uint32_t seq_id) {
         NormalizeTypeName(context_->storage->GetString(type_name));
     class_to_rows_[context_->storage->InternString(normalized_type)]
         .emplace_back(row);
-    sequence_state.walker.AddNode(row, obj.self_size,
-                                  static_cast<int32_t>(type_name.raw_id()));
+    sequence_state.walker.AddNode(row, obj.self_size, type_name.raw_id());
   }
 
   for (const SourceObject& obj : sequence_state.current_objects) {
@@ -184,17 +191,18 @@ void HeapGraphTracker::FinalizeProfile(uint32_t seq_id) {
       if (inserted)
         sequence_state.walker.AddEdge(owner_row, owned_row);
 
-      auto field_name_it =
-          sequence_state.interned_field_names.find(ref.field_name_id);
-      if (field_name_it == sequence_state.interned_field_names.end()) {
+      auto field_it = sequence_state.interned_fields.find(ref.field_name_id);
+      if (field_it == sequence_state.interned_fields.end()) {
         context_->storage->IncrementIndexedStats(
             stats::heap_graph_invalid_string_id,
             static_cast<int>(sequence_state.current_upid));
         continue;
       }
-      StringPool::Id field_name = field_name_it->second;
+      const InternedField& interned_field = field_it->second;
+      StringPool::Id field_name = interned_field.name;
       context_->storage->mutable_heap_graph_reference_table()->Insert(
-          {reference_set_id, owner_row, owned_row, field_name,
+          {reference_set_id, owner_row, owned_row, interned_field.name,
+           interned_field.type_name,
            /*deobfuscated_field_name=*/base::nullopt});
       uint32_t row =
           context_->storage->heap_graph_reference_table().row_count() - 1;
@@ -266,18 +274,20 @@ HeapGraphTracker::BuildFlamegraph(const int64_t current_ts,
       parent_id = node_to_id[node.parent_id];
     const uint32_t depth = node.depth;
 
-    tables::ExperimentalFlamegraphNodesTable::Row alloc_row{
-        current_ts, current_upid, profile_type, depth,
-        StringId::Raw(static_cast<uint32_t>(node.class_name)), java_mapping,
-        static_cast<int64_t>(node.count),
-        static_cast<int64_t>(node_to_cumulative_count[i]),
-        static_cast<int64_t>(node.size),
-        static_cast<int64_t>(node_to_cumulative_size[i]),
-        // For java dumps, set alloc_count == count, etc.
-        static_cast<int64_t>(node.count),
-        static_cast<int64_t>(node_to_cumulative_count[i]),
-        static_cast<int64_t>(node.size),
-        static_cast<int64_t>(node_to_cumulative_size[i]), parent_id};
+    tables::ExperimentalFlamegraphNodesTable::Row alloc_row{};
+    alloc_row.ts = current_ts;
+    alloc_row.upid = current_upid;
+    alloc_row.profile_type = profile_type;
+    alloc_row.depth = depth;
+    alloc_row.name = StringId::Raw(node.class_name);
+    alloc_row.map_name = java_mapping;
+    alloc_row.count = static_cast<int64_t>(node.count);
+    alloc_row.cumulative_count =
+        static_cast<int64_t>(node_to_cumulative_count[i]);
+    alloc_row.size = static_cast<int64_t>(node.size);
+    alloc_row.cumulative_size =
+        static_cast<int64_t>(node_to_cumulative_size[i]);
+    alloc_row.parent_id = parent_id;
     node_to_id[i] = tbl->Insert(alloc_row).id;
   }
   return tbl;

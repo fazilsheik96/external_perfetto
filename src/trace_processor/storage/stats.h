@@ -14,8 +14,8 @@
  * limitations under the License.
  */
 
-#ifndef SRC_TRACE_PROCESSOR_STATS_H_
-#define SRC_TRACE_PROCESSOR_STATS_H_
+#ifndef SRC_TRACE_PROCESSOR_STORAGE_STATS_H_
+#define SRC_TRACE_PROCESSOR_STORAGE_STATS_H_
 
 #include <stddef.h>
 
@@ -129,7 +129,8 @@ namespace stats {
   F(sched_waking_out_of_order,                kSingle,  kError,    kAnalysis), \
   F(compact_sched_switch_skipped,             kSingle,  kInfo,     kAnalysis), \
   F(compact_sched_waking_skipped,             kSingle,  kInfo,     kAnalysis), \
-  F(empty_chrome_metadata,                    kSingle,  kError,    kTrace)
+  F(empty_chrome_metadata,                    kSingle,  kError,    kTrace),    \
+  F(perf_cpu_lost_records,                    kIndexed, kDataLoss, kTrace)
 // clang-format on
 
 enum Type {
@@ -182,4 +183,4 @@ constexpr Source kSources[] = {PERFETTO_TP_STATS(PERFETTO_TP_STATS_SOURCE)};
 }  // namespace trace_processor
 }  // namespace perfetto
 
-#endif  // SRC_TRACE_PROCESSOR_STATS_H_
+#endif  // SRC_TRACE_PROCESSOR_STORAGE_STATS_H_

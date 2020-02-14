@@ -14,20 +14,27 @@
  * limitations under the License.
  */
 
-#include "src/tracing/internal/system_tracing_backend.h"
+#include "src/trace_processor/importers/json/json_tracker.h"
 
-#include "perfetto/base/logging.h"
+#include "test/gtest_and_gmock.h"
+
+#include <json/value.h>
 
 namespace perfetto {
-namespace internal {
+namespace trace_processor {
+namespace {
 
-// static
-SystemTracingBackend* SystemTracingBackend::GetInstance() {
-  PERFETTO_ELOG(
-      "System tracing backend not supported by the current build "
-      "configuration");
-  return nullptr;
+TEST(JsonTrackerTest, Ns) {
+  JsonTracker tracker(nullptr);
+  tracker.SetTimeUnit(json::TimeUnit::kNs);
+  ASSERT_EQ(tracker.CoerceToTs(Json::Value(42)).value_or(-1), 42);
 }
 
-}  // namespace internal
+TEST(JsonTraceUtilsTest, Us) {
+  JsonTracker tracker(nullptr);
+  ASSERT_EQ(tracker.CoerceToTs(Json::Value(42)).value_or(-1), 42000);
+}
+
+}  // namespace
+}  // namespace trace_processor
 }  // namespace perfetto

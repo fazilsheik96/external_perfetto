@@ -18,8 +18,10 @@
 
 #include "src/trace_processor/process_tracker.h"
 #include "src/trace_processor/trace_processor_context.h"
-
 #include "perfetto/base/logging.h"
+
+#include "protos/perfetto/trace/profiling/profile_common.pbzero.h"
+#include "protos/perfetto/trace/profiling/profile_packet.pbzero.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -141,7 +143,7 @@ std::unique_ptr<tables::ExperimentalFlamegraphNodesTable> BuildNativeFlamegraph(
   // PASS OVER ALLOCATIONS:
   // Aggregate allocations into the newly built tree.
   auto filtered = allocation_tbl.Filter(
-      {allocation_tbl.ts().eq(timestamp), allocation_tbl.upid().eq(upid)});
+      {allocation_tbl.ts().le(timestamp), allocation_tbl.upid().eq(upid)});
 
   if (filtered.row_count() == 0) {
     return nullptr;

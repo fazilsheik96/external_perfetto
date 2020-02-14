@@ -140,6 +140,10 @@ source_set("daemon") {
     "../../base:unix_socket",
     "../../tracing/core",
     "../../tracing/ipc/producer",
+    "../common:callstack_trie",
+    "../common:interner",
+    "../common:interning_output",
+    "../common:unwind_support",
   ]
   public_deps = [
     "../../../gn:libunwindstack",
@@ -155,7 +159,6 @@ source_set("daemon") {
     "bookkeeping_dump.h",
     "heapprofd_producer.cc",
     "heapprofd_producer.h",
-    "interner.h",
     "java_hprof_producer.cc",
     "java_hprof_producer.h",
     "page_idle_checker.cc",
@@ -165,8 +168,6 @@ source_set("daemon") {
     "unwinding.cc",
     "unwinding.h",
     "unwound_messages.h",
-    "utils.cc",
-    "utils.h",
   ]
 }
 
@@ -202,12 +203,12 @@ perfetto_unittest_source_set("unittests") {
     "../../base",
     "../../base:test_support",
     "../../tracing/core",
+    "../common:unwind_support",
   ]
   sources = [
     "bookkeeping_unittest.cc",
     "client_unittest.cc",
     "heapprofd_producer_unittest.cc",
-    "interner_unittest.cc",
     "page_idle_checker_unittest.cc",
     "proc_utils_unittest.cc",
     "sampler_unittest.cc",
@@ -248,6 +249,7 @@ perfetto_fuzzer_test("unwinding_fuzzer") {
     "../../../gn:default_deps",
     "../../base",
     "../../tracing/core",
+    "../common:unwind_support",
   ]
 }
 

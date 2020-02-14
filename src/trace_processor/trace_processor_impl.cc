@@ -26,16 +26,17 @@
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/metadata_tracker.h"
 #include "src/trace_processor/register_additional_modules.h"
-#include "src/trace_processor/span_join_operator_table.h"
 #include "src/trace_processor/sql_stats_table.h"
+#include "src/trace_processor/sqlite/span_join_operator_table.h"
 #include "src/trace_processor/sqlite/sqlite3_str_split.h"
 #include "src/trace_processor/sqlite/sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
+#include "src/trace_processor/sqlite/window_operator_table.h"
+#include "src/trace_processor/sqlite_experimental_counter_dur_table.h"
 #include "src/trace_processor/sqlite_experimental_flamegraph_table.h"
 #include "src/trace_processor/sqlite_raw_table.h"
 #include "src/trace_processor/stats_table.h"
 #include "src/trace_processor/types/variadic.h"
-#include "src/trace_processor/window_operator_table.h"
 
 #include "src/trace_processor/metrics/metrics.descriptor.h"
 #include "src/trace_processor/metrics/metrics.h"
@@ -419,6 +420,8 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   SqliteExperimentalFlamegraphTable::RegisterTable(*db_, &context_);
   SqliteRawTable::RegisterTable(*db_, query_cache_.get(),
                                 context_.storage.get());
+  SqliteExperimentalCounterDurTable::RegisterTable(*db_, query_cache_.get(),
+                                                   storage->counter_table());
 
   // New style db-backed tables.
   RegisterDbTable(storage->arg_table());

@@ -18,8 +18,8 @@
 
 #include "src/trace_processor/importers/proto/heap_graph_tracker.h"
 #include "src/trace_processor/process_tracker.h"
+#include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/trace_processor_context.h"
-#include "src/trace_processor/trace_storage.h"
 
 #include "protos/perfetto/trace/profiling/heap_graph.pbzero.h"
 
@@ -172,8 +172,7 @@ void HeapGraphModule::ParseHeapGraph(uint32_t seq_id,
     const char* str = reinterpret_cast<const char*>(entry.str().data);
     auto str_view = base::StringView(str, entry.str().size);
 
-    heap_graph_tracker->AddInternedFieldName(
-        seq_id, entry.iid(), context_->storage->InternString(str_view));
+    heap_graph_tracker->AddInternedFieldName(seq_id, entry.iid(), str_view);
   }
   for (auto it = heap_graph.roots(); it; ++it) {
     protos::pbzero::HeapGraphRoot::Decoder entry(*it);
@@ -245,9 +244,17 @@ void HeapGraphModule::ParseDeobfuscationMapping(protozero::ConstBytes blob) {
       std::string merged_obfuscated = cls.obfuscated_name().ToStdString() +
                                       "." +
                                       member.obfuscated_name().ToStdString();
-      std::string merged_deobfuscated =
-          cls.deobfuscated_name().ToStdString() + "." +
+      std::string merged_deobfuscated;
+      std::string member_deobfuscated_name =
           member.deobfuscated_name().ToStdString();
+      if (member_deobfuscated_name.find('.') == std::string::npos) {
+        // Name relative to class.
+        merged_deobfuscated = cls.deobfuscated_name().ToStdString() + "." +
+                              member_deobfuscated_name;
+      } else {
+        // Fully qualified name.
+        merged_deobfuscated = std::move(member_deobfuscated_name);
+      }
 
       auto obfuscated_field_name_id = context_->storage->string_pool().GetId(
           base::StringView(merged_obfuscated));

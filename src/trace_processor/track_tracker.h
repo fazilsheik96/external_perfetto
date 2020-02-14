@@ -17,8 +17,8 @@
 #ifndef SRC_TRACE_PROCESSOR_TRACK_TRACKER_H_
 #define SRC_TRACE_PROCESSOR_TRACK_TRACKER_H_
 
+#include "src/trace_processor/storage/trace_storage.h"
 #include "src/trace_processor/trace_processor_context.h"
-#include "src/trace_processor/trace_storage.h"
 
 namespace perfetto {
 namespace trace_processor {
@@ -51,6 +51,9 @@ class TrackTracker {
   TrackId InternAndroidAsyncTrack(StringId name,
                                   UniquePid upid,
                                   int64_t cookie);
+
+  // Interns a track for perf event stack samples, with process-wide grouping.
+  TrackId InternPerfStackTrack(UniquePid upid);
 
   // Interns a track for legacy Chrome process-scoped instant events into the
   // storage.
@@ -198,6 +201,7 @@ class TrackTracker {
   std::map<uint64_t /* uuid */, DescriptorTrackReservation>
       reserved_descriptor_tracks_;
   std::map<uint64_t /* uuid */, TrackId> resolved_descriptor_tracks_;
+  std::map<UniquePid, TrackId> perf_stack_tracks_;
 
   std::map<StringId, TrackId> global_counter_tracks_by_name_;
   std::map<std::pair<StringId, uint32_t>, TrackId> cpu_counter_tracks_;

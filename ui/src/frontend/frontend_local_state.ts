@@ -94,9 +94,9 @@ export class FrontendLocalState {
   perfDebug = false;
   hoveredUtid = -1;
   hoveredPid = -1;
-  hoveredTimestamp = -1;
+  hoveredLogsTimestamp = -1;
+  hoveredNoteTimestamp = -1;
   vidTimestamp = -1;
-  showNotePreview = false;
   localOnlyMode = false;
   sidebarVisible = true;
   showPanningHint = false;
@@ -155,20 +155,21 @@ export class FrontendLocalState {
   }
 
   // Sets the timestamp at which a vertical line will be drawn.
-  setHoveredTimestamp(ts: number) {
-    if (this.hoveredTimestamp === ts) return;
-    this.hoveredTimestamp = ts;
+  setHoveredLogsTimestamp(ts: number) {
+    if (this.hoveredLogsTimestamp === ts) return;
+    this.hoveredLogsTimestamp = ts;
+    globals.rafScheduler.scheduleRedraw();
+  }
+
+  setHoveredNoteTimestamp(ts: number) {
+    if (this.hoveredNoteTimestamp === ts) return;
+    this.hoveredNoteTimestamp = ts;
     globals.rafScheduler.scheduleRedraw();
   }
 
   setVidTimestamp(ts: number) {
     if (this.vidTimestamp === ts) return;
     this.vidTimestamp = ts;
-    globals.rafScheduler.scheduleRedraw();
-  }
-
-  setShowNotePreview(show: boolean) {
-    this.showNotePreview = show;
     globals.rafScheduler.scheduleRedraw();
   }
 
@@ -234,6 +235,35 @@ export class FrontendLocalState {
     };
     this.selectAreaDebounced();
     globals.frontendLocalState.currentTab = 'cpu_slices';
+    globals.rafScheduler.scheduleFullRedraw();
+  }
+
+  toggleTrackSelection(id: string, isTrackGroup = false) {
+    const area = this._selectedArea.area;
+    if (!area) return;
+    const index = area.tracks.indexOf(id);
+    if (index > -1) {
+      area.tracks.splice(index, 1);
+      if (isTrackGroup) {  // Also remove all child tracks.
+        for (const childTrack of globals.state.trackGroups[id].tracks) {
+          const childIndex = area.tracks.indexOf(childTrack);
+          if (childIndex > -1) {
+            area.tracks.splice(childIndex, 1);
+          }
+        }
+      }
+    } else {
+      area.tracks.push(id);
+      if (isTrackGroup) {  // Also add all child tracks.
+        for (const childTrack of globals.state.trackGroups[id].tracks) {
+          if (!area.tracks.includes(childTrack)) {
+            area.tracks.push(childTrack);
+          }
+        }
+      }
+    }
+    this._selectedArea.lastUpdate = Date.now() / 1000;
+    this.selectAreaDebounced();
     globals.rafScheduler.scheduleFullRedraw();
   }
 

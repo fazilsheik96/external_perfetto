@@ -28,6 +28,7 @@ executable("traced_perf") {
 
 source_set("traced_perf_main") {
   deps = [
+    ":proc_descriptors",
     ":producer",
     "../../../gn:default_deps",
     "../../../src/base",
@@ -41,17 +42,23 @@ source_set("traced_perf_main") {
 
 source_set("producer") {
   public_deps = [
-    ":unwind_support",
+    ":regs_parsing",
     "../../../include/perfetto/tracing/core",
   ]
   deps = [
+    ":proc_descriptors",
     "../../../gn:default_deps",
     "../../../protos/perfetto/config:cpp",
     "../../../protos/perfetto/config/profiling:zero",
     "../../../protos/perfetto/trace:zero",
+    "../../../protos/perfetto/trace/profiling:zero",
     "../../../src/base",
     "../../../src/base:unix_socket",
     "../../../src/tracing/ipc/producer",
+    "../common:callstack_trie",
+    "../common:interner",
+    "../common:interning_output",
+    "../common:unwind_support",
   ]
   sources = [
     "event_config.h",
@@ -62,7 +69,7 @@ source_set("producer") {
   ]
 }
 
-source_set("unwind_support") {
+source_set("regs_parsing") {
   public_deps = [ "../../../gn:libunwindstack" ]
   deps = [
     "../../../gn:bionic_kernel_uapi_headers",
@@ -70,10 +77,22 @@ source_set("unwind_support") {
     "../../../src/base",
   ]
   sources = [
-    "unwind_support.cc",
-    "unwind_support.h",
+    "regs_parsing.cc",
+    "regs_parsing.h",
   ]
 }
+
+source_set("proc_descriptors") {
+  deps = [
+    "../../../gn:default_deps",
+    "../../../src/base",
+  ]
+  sources = [
+    "proc_descriptors.cc",
+    "proc_descriptors.h",
+  ]
+}
+
 source_set("producer_unittests") {
   testonly = true
   deps = [

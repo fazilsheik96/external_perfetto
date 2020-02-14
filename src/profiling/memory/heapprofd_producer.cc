@@ -360,7 +360,8 @@ void HeapprofdProducer::SetupDataSource(DataSourceInstanceID id,
   data_source.normalized_cmdlines = std::move(normalized_cmdlines);
   data_source.stop_timeout_ms = ds_config.stop_timeout_ms();
 
-  WriteFixedInternings(data_source.trace_writer.get());
+  InterningOutputTracker::WriteFixedInterningsPacket(
+      data_source.trace_writer.get());
   data_sources_.emplace(id, std::move(data_source));
   PERFETTO_DLOG("Set up data source.");
 
@@ -757,8 +758,7 @@ void HeapprofdProducer::SocketDelegate::OnDataAvailable(
     int raw_fd = pending_process.shmem.fd();
     // TODO(fmayer): Full buffer could deadlock us here.
     if (!self->Send(&data_source.client_configuration,
-                    sizeof(data_source.client_configuration), &raw_fd, 1,
-                    base::UnixSocket::BlockingMode::kBlocking)) {
+                    sizeof(data_source.client_configuration), &raw_fd, 1)) {
       // If Send fails, the socket will have been Shutdown, and the raw socket
       // closed.
       producer_->pending_processes_.erase(it);

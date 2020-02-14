@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2019 The Android Open Source Project
+ * Copyright (C) 2020 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,24 +14,13 @@
  * limitations under the License.
  */
 
-#ifndef SRC_PROFILING_MEMORY_UTILS_H_
-#define SRC_PROFILING_MEMORY_UTILS_H_
-
-#include <unistd.h>
+#include "src/trace_processor/importers/json/json_tracker.h"
 
 namespace perfetto {
-namespace profiling {
+namespace trace_processor {
 
-ssize_t ReadAtOffsetClobberSeekPos(int fd,
-                                   void* buf,
-                                   size_t count,
-                                   off64_t addr);
+JsonTracker::JsonTracker(TraceProcessorContext*) {}
+JsonTracker::~JsonTracker() = default;
 
-ssize_t WriteAtOffsetClobberSeekPos(int fd,
-                                    void* buf,
-                                    size_t count,
-                                    off64_t addr);
-}
+}  // namespace trace_processor
 }  // namespace perfetto
-
-#endif  // SRC_PROFILING_MEMORY_UTILS_H_
