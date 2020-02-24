@@ -40,8 +40,7 @@
 //
 #define PERFETTO_INTERNAL_DECLARE_CATEGORIES(...)                             \
   namespace internal {                                                        \
-  constexpr ::perfetto::internal::TrackEventCategory kCategories[] = {        \
-      __VA_ARGS__};                                                           \
+  constexpr ::perfetto::Category kCategories[] = {__VA_ARGS__};               \
   constexpr size_t kCategoryCount =                                           \
       sizeof(kCategories) / sizeof(kCategories[0]);                           \
   /* The per-instance enable/disable state per category */                    \
@@ -103,22 +102,21 @@
 // if so, emits one trace event with the given arguments.
 #define PERFETTO_INTERNAL_TRACK_EVENT(category, ...)                      \
   do {                                                                    \
-    using namespace ::PERFETTO_TRACK_EVENT_NAMESPACE;                     \
-    using namespace ::perfetto::internal;                                 \
+    namespace tns = ::PERFETTO_TRACK_EVENT_NAMESPACE;                     \
     /* Compute the category index outside the lambda to work around a */  \
     /* GCC 7 bug */                                                       \
     constexpr auto PERFETTO_UID(kCatIndex) =                              \
         PERFETTO_GET_CATEGORY_INDEX(category);                            \
-    if (internal::IsDynamicCategory(category)) {                          \
-      TrackEvent::CallIfEnabled([&](uint32_t instances) {                 \
-        TrackEvent::TraceForCategory<PERFETTO_UID(kCatIndex)>(            \
+    if (tns::internal::IsDynamicCategory(category)) {                     \
+      tns::TrackEvent::CallIfEnabled([&](uint32_t instances) {            \
+        tns::TrackEvent::TraceForCategory<PERFETTO_UID(kCatIndex)>(       \
             instances, category, ##__VA_ARGS__);                          \
       });                                                                 \
     } else {                                                              \
-      TrackEvent::CallIfCategoryEnabled<PERFETTO_UID(kCatIndex)>(         \
+      tns::TrackEvent::CallIfCategoryEnabled<PERFETTO_UID(kCatIndex)>(    \
           [&](uint32_t instances) {                                       \
             /* TODO(skyostil): Get rid of the category name parameter. */ \
-            TrackEvent::TraceForCategory<PERFETTO_UID(kCatIndex)>(        \
+            tns::TrackEvent::TraceForCategory<PERFETTO_UID(kCatIndex)>(   \
                 instances, nullptr, ##__VA_ARGS__);                       \
           });                                                             \
     }                                                                     \
@@ -127,14 +125,14 @@
 #define PERFETTO_INTERNAL_SCOPED_TRACK_EVENT(category, name, ...)             \
   struct {                                                                    \
     struct EventFinalizer {                                                   \
-      /* The int parameter is an implementation detail. It allows the      */ \
+      /* The parameter is an implementation detail. It allows the          */ \
       /* anonymous struct to use aggregate initialization to invoke the    */ \
       /* lambda (which emits the BEGIN event and returns an integer)       */ \
       /* with the proper reference capture for any                         */ \
       /* TrackEventArgumentFunction in |__VA_ARGS__|. This is required so  */ \
       /* that the scoped event is exactly ONE line and can't escape the    */ \
       /* scope if used in a single line if statement.                      */ \
-      EventFinalizer(int) {}                                                  \
+      EventFinalizer(...) {}                                                  \
       ~EventFinalizer() { TRACE_EVENT_END(category); }                        \
     } finalizer;                                                              \
   } PERFETTO_UID(scoped_event) {                                              \
