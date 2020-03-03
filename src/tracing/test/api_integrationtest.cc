@@ -662,6 +662,13 @@ TEST_F(PerfettoApiTest, TrackEventStartStopAndStopBlocking) {
   }
 }
 
+// This is a build-only regression test that checks you can have a track event
+// inside a template.
+template <typename T>
+void TestTrackEventInsideTemplate(T) {
+  TRACE_EVENT_BEGIN("cat", "Name");
+}
+
 TEST_F(PerfettoApiTest, TrackEvent) {
   // Create a new trace session.
   auto* tracing_session = NewTraceWithCategories({"test"});
@@ -765,6 +772,9 @@ TEST_F(PerfettoApiTest, TrackEvent) {
   EXPECT_TRUE(process_descriptor_found);
   EXPECT_TRUE(begin_found);
   EXPECT_TRUE(end_found);
+
+  // Dummy instantiation of test template.
+  TestTrackEventInsideTemplate(true);
 }
 
 TEST_F(PerfettoApiTest, TrackEventCategories) {
@@ -2311,10 +2321,13 @@ TEST_F(PerfettoApiTest, LegacyTraceEventsWithFlow) {
 TEST_F(PerfettoApiTest, LegacyCategoryGroupEnabledState) {
   bool foo_status;
   bool bar_status;
+  bool dynamic_status;
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("foo", &foo_status);
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("bar", &bar_status);
+  TRACE_EVENT_CATEGORY_GROUP_ENABLED("dynamic", &dynamic_status);
   EXPECT_FALSE(foo_status);
   EXPECT_FALSE(bar_status);
+  EXPECT_FALSE(dynamic_status);
 
   const uint8_t* foo_enabled =
       TRACE_EVENT_API_GET_CATEGORY_GROUP_ENABLED("foo");
@@ -2323,12 +2336,14 @@ TEST_F(PerfettoApiTest, LegacyCategoryGroupEnabledState) {
   EXPECT_FALSE(*foo_enabled);
   EXPECT_FALSE(*bar_enabled);
 
-  auto* tracing_session = NewTraceWithCategories({"foo"});
+  auto* tracing_session = NewTraceWithCategories({"foo", "dynamic"});
   tracing_session->get()->StartBlocking();
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("foo", &foo_status);
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("bar", &bar_status);
+  TRACE_EVENT_CATEGORY_GROUP_ENABLED("dynamic", &dynamic_status);
   EXPECT_TRUE(foo_status);
   EXPECT_FALSE(bar_status);
+  EXPECT_TRUE(dynamic_status);
 
   EXPECT_TRUE(*foo_enabled);
   EXPECT_FALSE(*bar_enabled);
@@ -2336,10 +2351,39 @@ TEST_F(PerfettoApiTest, LegacyCategoryGroupEnabledState) {
   tracing_session->get()->StopBlocking();
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("foo", &foo_status);
   TRACE_EVENT_CATEGORY_GROUP_ENABLED("bar", &bar_status);
+  TRACE_EVENT_CATEGORY_GROUP_ENABLED("dynamic", &dynamic_status);
   EXPECT_FALSE(foo_status);
   EXPECT_FALSE(bar_status);
+  EXPECT_FALSE(dynamic_status);
   EXPECT_FALSE(*foo_enabled);
   EXPECT_FALSE(*bar_enabled);
+}
+
+TEST_F(PerfettoApiTest, CategoryEnabledState) {
+  perfetto::DynamicCategory dynamic{"dynamic"};
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("foo"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("bar"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("red,green,blue,foo"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("dynamic"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("dynamic_2"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED(dynamic));
+
+  auto* tracing_session = NewTraceWithCategories({"foo", "dynamic"});
+  tracing_session->get()->StartBlocking();
+  EXPECT_TRUE(TRACE_EVENT_CATEGORY_ENABLED("foo"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("bar"));
+  EXPECT_TRUE(TRACE_EVENT_CATEGORY_ENABLED("red,green,blue,foo"));
+  EXPECT_TRUE(TRACE_EVENT_CATEGORY_ENABLED("dynamic"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("dynamic_2"));
+  EXPECT_TRUE(TRACE_EVENT_CATEGORY_ENABLED(dynamic));
+
+  tracing_session->get()->StopBlocking();
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("foo"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("bar"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("red,green,blue,foo"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("dynamic"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED("dynamic_2"));
+  EXPECT_FALSE(TRACE_EVENT_CATEGORY_ENABLED(dynamic));
 }
 
 }  // namespace
