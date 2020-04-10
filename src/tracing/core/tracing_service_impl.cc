@@ -54,6 +54,7 @@
 #include "perfetto/protozero/scattered_heap_buffer.h"
 #include "perfetto/protozero/static_buffer.h"
 #include "perfetto/tracing/core/data_source_descriptor.h"
+#include "perfetto/tracing/core/tracing_service_capabilities.h"
 #include "perfetto/tracing/core/tracing_service_state.h"
 #include "src/tracing/core/packet_stream_validator.h"
 #include "src/tracing/core/shared_memory_arbiter_impl.h"
@@ -184,6 +185,23 @@ std::tuple<size_t /*shm_size*/, size_t /*page_size*/> EnsureValidShmSizes(
                            TracingServiceImpl::kDefaultShmPageSize);
   }
   return std::make_tuple(shm_size, page_size);
+}
+
+bool NameMatchesFilter(const std::string& name,
+                       const std::vector<std::string>& name_filter,
+                       const std::vector<std::string>& name_regex_filter) {
+  bool filter_is_set = !name_filter.empty() || !name_regex_filter.empty();
+  if (!filter_is_set)
+    return true;
+  bool filter_matches = std::find(name_filter.begin(), name_filter.end(),
+                                  name) != name_filter.end();
+  bool filter_regex_matches =
+      std::find_if(name_regex_filter.begin(), name_regex_filter.end(),
+                   [&](const std::string& regex) {
+                     return std::regex_match(
+                         name, std::regex(regex, std::regex::extended));
+                   }) != name_regex_filter.end();
+  return filter_matches || filter_regex_matches;
 }
 
 }  // namespace
@@ -717,33 +735,38 @@ void TracingServiceImpl::ChangeTraceConfig(ConsumerEndpointImpl* consumer,
     return;
   }
 
-  // We only support updating producer_name_filter (and pass-through configs)
-  // for now; null out any changeable fields and make sure the rest are
+  // We only support updating producer_name_{,regex}_filter (and pass-through
+  // configs) for now; null out any changeable fields and make sure the rest are
   // identical.
   TraceConfig new_config_copy(updated_cfg);
   for (auto& ds_cfg : *new_config_copy.mutable_data_sources()) {
     ds_cfg.clear_producer_name_filter();
+    ds_cfg.clear_producer_name_regex_filter();
   }
 
   TraceConfig current_config_copy(tracing_session->config);
-  for (auto& ds_cfg : *current_config_copy.mutable_data_sources())
+  for (auto& ds_cfg : *current_config_copy.mutable_data_sources()) {
     ds_cfg.clear_producer_name_filter();
+    ds_cfg.clear_producer_name_regex_filter();
+  }
 
   if (new_config_copy != current_config_copy) {
     PERFETTO_LOG(
         "ChangeTraceConfig() was called with a config containing unsupported "
-        "changes; only adding to the producer_name_filter is currently "
-        "supported and will have an effect.");
+        "changes; only adding to the producer_name_{,regex}_filter is "
+        "currently supported and will have an effect.");
   }
 
   for (TraceConfig::DataSource& cfg_data_source :
        *tracing_session->config.mutable_data_sources()) {
     // Find the updated producer_filter in the new config.
     std::vector<std::string> new_producer_name_filter;
+    std::vector<std::string> new_producer_name_regex_filter;
     bool found_data_source = false;
     for (auto it : updated_cfg.data_sources()) {
       if (cfg_data_source.config().name() == it.config().name()) {
         new_producer_name_filter = it.producer_name_filter();
+        new_producer_name_regex_filter = it.producer_name_regex_filter();
         found_data_source = true;
         break;
       }
@@ -753,8 +776,7 @@ void TracingServiceImpl::ChangeTraceConfig(ConsumerEndpointImpl* consumer,
     if (!found_data_source) {
       PERFETTO_ELOG(
           "ChangeTraceConfig() called without a current data source also "
-          "present in the new "
-          "config: %s",
+          "present in the new config: %s",
           cfg_data_source.config().name().c_str());
       continue;
     }
@@ -765,6 +787,8 @@ void TracingServiceImpl::ChangeTraceConfig(ConsumerEndpointImpl* consumer,
     // producers will keep producing but newly added producers after this
     // point will never start.
     *cfg_data_source.mutable_producer_name_filter() = new_producer_name_filter;
+    *cfg_data_source.mutable_producer_name_regex_filter() =
+        new_producer_name_regex_filter;
 
     // Scan all the registered data sources with a matching name.
     auto range = data_sources_.equal_range(cfg_data_source.config().name());
@@ -773,12 +797,10 @@ void TracingServiceImpl::ChangeTraceConfig(ConsumerEndpointImpl* consumer,
       PERFETTO_DCHECK(producer);
 
       // Check if the producer name of this data source is present
-      // in the name filter. We currently only support new filters, not removing
-      // old ones.
-      if (!new_producer_name_filter.empty() &&
-          std::find(new_producer_name_filter.begin(),
-                    new_producer_name_filter.end(),
-                    producer->name_) == new_producer_name_filter.end()) {
+      // in the name filters. We currently only support new filters, not
+      // removing old ones.
+      if (!NameMatchesFilter(producer->name_, new_producer_name_filter,
+                             new_producer_name_regex_filter)) {
         continue;
       }
 
@@ -914,6 +936,10 @@ void TracingServiceImpl::StartDataSourceInstance(
         *producer, *instance);
   }
   producer->StartDataSource(instance->instance_id, instance->config);
+
+  // If all data sources are started, notify the consumer.
+  if (instance->state == DataSourceInstance::STARTED)
+    MaybeNotifyAllDataSourcesStarted(tracing_session);
 }
 
 // DisableTracing just stops the data sources but doesn't free up any buffer.
@@ -1024,7 +1050,34 @@ void TracingServiceImpl::NotifyDataSourceStarted(
       tracing_session.consumer_maybe_null->OnDataSourceInstanceStateChange(
           *producer, *instance);
     }
+
+    // If all data sources are started, notify the consumer.
+    MaybeNotifyAllDataSourcesStarted(&tracing_session);
   }  // for (tracing_session)
+}
+
+void TracingServiceImpl::MaybeNotifyAllDataSourcesStarted(
+    TracingSession* tracing_session) {
+  if (!tracing_session->consumer_maybe_null)
+    return;
+
+  if (!tracing_session->AllDataSourceInstancesStarted())
+    return;
+
+  // In some rare cases, we can get in this state more than once. Consider the
+  // following scenario: 3 data sources are registered -> trace starts ->
+  // all 3 data sources ack -> OnAllDataSourcesStarted() is called.
+  // Imagine now that a 4th data source registers while the trace is ongoing.
+  // This would hit the AllDataSourceInstancesStarted() condition again.
+  // In this case, however, we don't want to re-notify the consumer again.
+  // That would be unexpected (even if, perhaps, technically correct) and
+  // trigger bugs in the consumer.
+  if (tracing_session->did_notify_all_data_source_started)
+    return;
+
+  PERFETTO_DLOG("All data sources started");
+  tracing_session->did_notify_all_data_source_started = true;
+  tracing_session->consumer_maybe_null->OnAllDataSourcesStarted();
 }
 
 void TracingServiceImpl::NotifyDataSourceStopped(
@@ -1089,8 +1142,9 @@ void TracingServiceImpl::ActivateTriggers(
       // (non-empty producer_name()) ensure the producer who sent this trigger
       // matches.
       if (!iter->producer_name_regex().empty() &&
-          !std::regex_match(producer->name_,
-                            std::regex(iter->producer_name_regex()))) {
+          !std::regex_match(
+              producer->name_,
+              std::regex(iter->producer_name_regex(), std::regex::extended))) {
         continue;
       }
 
@@ -1916,6 +1970,7 @@ void TracingServiceImpl::UnregisterDataSource(ProducerID producer_id,
   PERFETTO_DCHECK(producer);
   for (auto& kv : tracing_sessions_) {
     auto& ds_instances = kv.second.data_source_instances;
+    bool removed = false;
     for (auto it = ds_instances.begin(); it != ds_instances.end();) {
       if (it->first == producer_id && it->second.data_source_name == name) {
         DataSourceInstanceID ds_inst_id = it->second.instance_id;
@@ -1929,11 +1984,14 @@ void TracingServiceImpl::UnregisterDataSource(ProducerID producer_id,
             NotifyDataSourceStopped(producer_id, ds_inst_id);
         }
         it = ds_instances.erase(it);
+        removed = true;
       } else {
         ++it;
       }
     }  // for (data_source_instances)
-  }    // for (tracing_session)
+    if (removed)
+      MaybeNotifyAllDataSourcesStarted(&kv.second);
+  }  // for (tracing_session)
 
   for (auto it = data_sources_.begin(); it != data_sources_.end(); ++it) {
     if (it->second.producer_id == producer_id &&
@@ -1963,20 +2021,15 @@ TracingServiceImpl::DataSourceInstance* TracingServiceImpl::SetupDataSource(
     PERFETTO_DLOG("Lockdown mode: not enabling producer %hu", producer->id_);
     return nullptr;
   }
-  // TODO(primiano): Add tests for registration ordering
-  // (data sources vs consumers).
-  // TODO: This logic is duplicated in ChangeTraceConfig, consider refactoring
-  // it. Meanwhile update both.
-  if (!cfg_data_source.producer_name_filter().empty()) {
-    if (std::find(cfg_data_source.producer_name_filter().begin(),
-                  cfg_data_source.producer_name_filter().end(),
-                  producer->name_) ==
-        cfg_data_source.producer_name_filter().end()) {
-      PERFETTO_DLOG("Data source: %s is filtered out for producer: %s",
-                    cfg_data_source.config().name().c_str(),
-                    producer->name_.c_str());
-      return nullptr;
-    }
+  // TODO(primiano): Add tests for registration ordering (data sources vs
+  // consumers).
+  if (!NameMatchesFilter(producer->name_,
+                         cfg_data_source.producer_name_filter(),
+                         cfg_data_source.producer_name_regex_filter())) {
+    PERFETTO_DLOG("Data source: %s is filtered out for producer: %s",
+                  cfg_data_source.config().name().c_str(),
+                  producer->name_.c_str());
+    return nullptr;
   }
 
   auto relative_buffer_id = cfg_data_source.config().target_buffer();
@@ -2638,6 +2691,11 @@ void TracingServiceImpl::ConsumerEndpointImpl::ObserveEvents(
       OnDataSourceInstanceStateChange(*producer, kv.second);
     }
   }
+
+  if (observable_events_mask_ &
+      ObservableEvents::TYPE_ALL_DATA_SOURCES_STARTED) {
+    service_->MaybeNotifyAllDataSourcesStarted(session);
+  }
 }
 
 void TracingServiceImpl::ConsumerEndpointImpl::OnDataSourceInstanceStateChange(
@@ -2663,6 +2721,15 @@ void TracingServiceImpl::ConsumerEndpointImpl::OnDataSourceInstanceStateChange(
   } else {
     change->set_state(ObservableEvents::DATA_SOURCE_INSTANCE_STATE_STOPPED);
   }
+}
+
+void TracingServiceImpl::ConsumerEndpointImpl::OnAllDataSourcesStarted() {
+  if (!(observable_events_mask_ &
+        ObservableEvents::TYPE_ALL_DATA_SOURCES_STARTED)) {
+    return;
+  }
+  auto* observable_events = AddObservableEvents();
+  observable_events->set_all_data_sources_started(true);
 }
 
 base::WeakPtr<TracingServiceImpl::ConsumerEndpointImpl>
@@ -2719,6 +2786,19 @@ void TracingServiceImpl::ConsumerEndpointImpl::QueryServiceState(
   callback(/*success=*/true, svc_state);
 }
 
+void TracingServiceImpl::ConsumerEndpointImpl::QueryCapabilities(
+    QueryCapabilitiesCallback callback) {
+  PERFETTO_DCHECK_THREAD(thread_checker_);
+  TracingServiceCapabilities caps;
+  caps.set_has_query_capabilities(true);
+  caps.add_observable_events(ObservableEvents::TYPE_DATA_SOURCES_INSTANCES);
+  caps.add_observable_events(ObservableEvents::TYPE_ALL_DATA_SOURCES_STARTED);
+  static_assert(ObservableEvents::Type_MAX ==
+                    ObservableEvents::TYPE_ALL_DATA_SOURCES_STARTED,
+                "");
+  callback(caps);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // TracingServiceImpl::ProducerEndpointImpl implementation
 ////////////////////////////////////////////////////////////////////////////////
@@ -2768,7 +2848,6 @@ void TracingServiceImpl::ProducerEndpointImpl::RegisterTraceWriter(
     uint32_t writer_id,
     uint32_t target_buffer) {
   PERFETTO_DCHECK_THREAD(thread_checker_);
-  PERFETTO_DCHECK(!buffer_id_for_writer(static_cast<WriterID>(writer_id)));
   writers_[static_cast<WriterID>(writer_id)] =
       static_cast<BufferID>(target_buffer);
 }
@@ -2776,7 +2855,6 @@ void TracingServiceImpl::ProducerEndpointImpl::RegisterTraceWriter(
 void TracingServiceImpl::ProducerEndpointImpl::UnregisterTraceWriter(
     uint32_t writer_id) {
   PERFETTO_DCHECK_THREAD(thread_checker_);
-  PERFETTO_DCHECK(buffer_id_for_writer(static_cast<WriterID>(writer_id)));
   writers_.erase(static_cast<WriterID>(writer_id));
 }
 
