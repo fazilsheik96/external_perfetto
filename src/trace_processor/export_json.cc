@@ -32,8 +32,8 @@
 #include "src/trace_processor/importers/json/json_utils.h"
 #include "src/trace_processor/storage/metadata.h"
 #include "src/trace_processor/storage/trace_storage.h"
-#include "src/trace_processor/trace_processor_context.h"
 #include "src/trace_processor/trace_processor_storage_impl.h"
+#include "src/trace_processor/types/trace_processor_context.h"
 
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_JSON)
 #include <json/reader.h>
@@ -1175,6 +1175,7 @@ class JsonExporter {
       }
 
       event["args"]["frames"] = merged_callstack;
+      event["args"]["process_priority"] = samples.process_priority()[i];
 
       // TODO(oysteine): Used for backwards compatibility with the memlog
       // pipeline, should remove once we've switched to looking directly at the

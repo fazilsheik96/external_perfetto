@@ -24,9 +24,18 @@ message AndroidBatteryMetric {
     optional double current_avg_ua = 5;
   }
 
+  message BatteryAggregates {
+    // Field numbers for these 3 == the int values fromm Android
+    optional int64 total_screen_off_ns = 1;
+    optional int64 total_screen_on_ns = 2;
+    optional int64 total_screen_doze_ns = 3;
+  }
+
   // Battery counters info for each ts of the trace. This should only be
   // extracted for short traces.
   repeated BatteryCounters battery_counters = 1;
+
+  optional BatteryAggregates battery_aggregates = 2;
 }
 
 // End of protos/perfetto/metrics/android/batt_metric.proto
@@ -76,13 +85,15 @@ message AndroidCpuMetric {
     reserved 3;
   }
 
-  // Next id: 4
+  // Next id: 8
   message Process {
     optional string name = 1;
     optional Metrics metrics = 4;
 
     // Breakdowns of above metrics.
-    repeated Thread threads = 2;
+    repeated Thread threads = 6;
+    repeated CoreData core = 7;
+    repeated CoreTypeData core_type = 5;
 
     reserved 3;
   }
@@ -370,6 +381,10 @@ message AndroidLmkMetric {
   // Total count of LMK events observed in the trace.
   optional int32 total_count = 1;
   repeated ByOomScore by_oom_score = 2;
+
+  // OOM reaper kills. Enabled via the oom/mark_victim point. Should never
+  // happen.
+  optional int32 oom_victim_count = 3;
 }
 
 // End of protos/perfetto/metrics/android/lmk_metric.proto
@@ -631,6 +646,30 @@ message AndroidTaskNames {
 
 // End of protos/perfetto/metrics/android/task_names.proto
 
+// Begin of protos/perfetto/metrics/android/thread_time_in_state_metric.proto
+
+message AndroidThreadTimeInStateMetric {
+  message MetricsByCoreType {
+    optional string core_type = 1;
+    optional int64 runtime_ms = 2;
+  }
+
+  message Thread {
+    optional string name = 1;
+    repeated MetricsByCoreType metrics_by_core_type = 2;
+  }
+
+  message Process {
+    optional AndroidProcessMetadata metadata = 1;
+    repeated MetricsByCoreType metrics_by_core_type = 2;
+    repeated Thread threads = 3;
+  }
+
+  repeated Process processes = 1;
+}
+
+// End of protos/perfetto/metrics/android/thread_time_in_state_metric.proto
+
 // Begin of protos/perfetto/metrics/android/unmapped_java_symbols.proto
 
 message UnmappedJavaSymbols {
@@ -682,11 +721,12 @@ message TraceMetadata {
   optional string android_build_fingerprint = 4;
   optional int64 statsd_triggering_subscription_id = 5;
   optional int64 trace_size_bytes = 6;
+  repeated string trace_trigger = 7;
 }
 
 // Root message for all Perfetto-based metrics.
 //
-// Next id: 24
+// Next id: 25
 message TraceMetrics {
   reserved 4, 10, 13, 14;
 
@@ -746,6 +786,8 @@ message TraceMetrics {
   optional AndroidDisplayMetrics display_metrics = 22;
 
   optional AndroidTaskNames android_task_names = 23;
+
+  optional AndroidThreadTimeInStateMetric android_thread_time_in_state = 24;
 
   // Demo extensions.
   extensions 450 to 499;
