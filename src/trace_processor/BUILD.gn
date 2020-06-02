@@ -42,6 +42,17 @@ if (enable_perfetto_ui) {
   }
 }
 
+source_set("metatrace") {
+  sources = [
+    "tp_metatrace.cc",
+    "tp_metatrace.h",
+  ]
+  deps = [
+    "../../gn:default_deps",
+    "../../include/perfetto/ext/base",
+  ]
+}
+
 source_set("track_event_descriptor") {
   sources = [ "importers/proto/track_event.descriptor.h" ]
 }
@@ -203,8 +214,6 @@ source_set("storage_full") {
     "importers/proto/heap_graph_module.h",
     "importers/proto/heap_graph_tracker.cc",
     "importers/proto/heap_graph_tracker.h",
-    "importers/proto/heap_graph_walker.cc",
-    "importers/proto/heap_graph_walker.h",
     "importers/proto/system_probes_module.cc",
     "importers/proto/system_probes_module.h",
     "importers/proto/system_probes_parser.cc",
@@ -283,6 +292,7 @@ if (enable_perfetto_trace_processor_sqlite) {
 
     deps = [
       ":export_json",
+      ":metatrace",
       ":storage_full",
       "../../gn:default_deps",
       "../../gn:sqlite",
@@ -341,7 +351,6 @@ perfetto_unittest_source_set("unittests") {
     "importers/fuchsia/fuchsia_trace_utils_unittest.cc",
     "importers/proto/args_table_utils_unittest.cc",
     "importers/proto/heap_graph_tracker_unittest.cc",
-    "importers/proto/heap_graph_walker_unittest.cc",
     "importers/proto/heap_profile_tracker_unittest.cc",
     "importers/proto/proto_trace_parser_unittest.cc",
     "importers/syscalls/syscall_tracker_unittest.cc",
