@@ -73,7 +73,6 @@ cgroup_attach_task_post_s.textproto print_systrace.sql cgroup_attach_task_post_s
 ../../data/trailing_empty.systrace sched_smoke.sql sched_smoke_trailing_empty.out
 
 # LMK handling
-kernel_lmk.py lmk.sql lmk_kernel_lmk.out
 ../../data/lmk_userspace.pb lmk.sql lmk_userspace_lmk.out
 ../common/oom_kill.textproto oom_kill.sql oom_kill.out
 
@@ -91,12 +90,6 @@ synth_oom.py oom_query.sql synth_oom_oom_query.out
 
 # Syscalls
 syscall.py sys.sql sys_syscall.out
-
-# Thread time_in_state
-thread_time_in_state.textproto thread_time_in_state.sql thread_time_in_state.out
-thread_time_in_state_event.py thread_time_in_state_event.sql thread_time_in_state_event.out
-thread_time_in_state.textproto android_thread_time_in_state android_thread_time_in_state.out
-thread_time_in_state_unknown.textproto android_thread_time_in_state android_thread_time_in_state_unknown.out
 
 # thread_slice tables.
 flow_events_json_v2.json thread_time_in_thread_slice.sql thread_time_in_thread_slice.out
@@ -160,3 +153,6 @@ android_multiuser_switch.textproto android_multiuser android_multiuser_switch.ou
 # coming from stderr before the TRACE: marker. See b/208691037.
 ../../data/atrace_uncompressed_b_208691037 sched_smoke.sql atrace_uncompressed_sched_count.out
 otheruuids.textproto android_other_traces otheruuids_android_other_traces.out
+
+# Per-process Binder transaction metrics
+android_binder.py android_binder android_binder.out
