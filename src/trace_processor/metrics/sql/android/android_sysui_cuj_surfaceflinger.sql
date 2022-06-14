@@ -146,7 +146,7 @@ CREATE TABLE android_sysui_cuj_surfaceflinger_composite_slices AS
     slice.ts + slice.dur AS ts_end
   FROM slice
   JOIN android_sysui_cuj_sf_main_thread_track main_track ON slice.track_id = main_track.id
-  WHERE slice.dur > 0 AND slice.name = 'composite';
+  WHERE slice.dur > 0 AND slice.name GLOB 'composite*';
 
 DROP VIEW IF EXISTS android_sysui_cuj_surfaceflinger_commit_composite_frames_in_cuj;
 CREATE VIEW android_sysui_cuj_surfaceflinger_commit_composite_frames_in_cuj AS
@@ -245,16 +245,20 @@ CREATE TABLE android_sysui_cuj_sf_missed_frames AS
 SELECT
   CAST(frame.name AS integer) AS frame_number,
   CAST(frame.name AS integer) AS vsync,
-  max(mtf.ts_prev_frame_end, frame.ts) AS ts,
-  min(mtf.ts_next_frame_start, frame.ts_end) AS ts_end,
-  min(mtf.ts_next_frame_start, frame.ts_end) - max(mtf.ts_prev_frame_end, frame.ts) AS dur,
-  -- Needed for compatibility with downstream scripts
-  CAST(min(mtf.ts_next_frame_start, frame.ts_end) - max(mtf.ts_prev_frame_end, frame.ts) AS INTEGER) AS dur_frame,
+  MAX(COALESCE(mtf.ts_prev_frame_end, 0), frame.ts) AS ts,
+  MIN(COALESCE(mtf.ts_next_frame_start, frame.ts_end), frame.ts_end) AS ts_end,
+  MIN(COALESCE(mtf.ts_next_frame_start, frame.ts_end), frame.ts_end)
+    - MAX(COALESCE(mtf.ts_prev_frame_end, 0), frame.ts) AS dur,
+  -- Same as `dur` but INTEGER - needed for compatibility with downstream scripts
+  CAST((
+    MIN(COALESCE(mtf.ts_next_frame_start, frame.ts_end), frame.ts_end)
+      - MAX(COALESCE(mtf.ts_prev_frame_end, 0), frame.ts))
+    AS INTEGER) AS dur_frame,
   gcs.gcs_ts,
   gcs.gcs_ts_end,
   gcs.gcs_dur,
   CAST(1 AS INTEGER) AS app_missed
 FROM android_sysui_cuj_sf_actual_frame_timeline_slice frame
 JOIN android_sysui_cuj_surfaceflinger_main_thread_frames mtf ON frame.name = mtf.vsync
-JOIN android_sysui_cuj_gcs_to_mt_match gcs ON gcs.vsync = frame.name
+LEFT JOIN android_sysui_cuj_gcs_to_mt_match gcs ON gcs.vsync = frame.name
 WHERE frame.jank_type != 'None';
