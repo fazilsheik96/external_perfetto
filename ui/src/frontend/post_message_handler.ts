@@ -29,6 +29,7 @@ function isTrustedOrigin(origin: string): boolean {
   const TRUSTED_ORIGINS = [
     'https://chrometto.googleplex.com',
     'https://uma.googleplex.com',
+    'https://android-build.googleplex.com',
   ];
   if (origin === window.origin) return true;
   if (TRUSTED_ORIGINS.includes(origin)) return true;
@@ -55,7 +56,9 @@ export function postMessageHandler(messageEvent: MessageEvent) {
     return;
   }
 
-  if (messageEvent.source === null || messageEvent.source !== window.opener) {
+  const fromOpener = messageEvent.source === window.opener;
+  const fromIframeHost = messageEvent.source === window.parent;
+  if (messageEvent.source === null || !(fromOpener || fromIframeHost)) {
     // This can happen if an extension tries to postMessage.
     return;
   }
