@@ -12,17 +12,9 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {assertTrue} from '../base/logging';
 import {PivotTree} from '../controller/pivot_table_redux_controller';
 import {RecordConfig} from '../controller/record_config_types';
 import {TableColumn} from '../frontend/pivot_table_redux_query_generator';
-
-import {
-  AggregationAttrs,
-  PivotAttrs,
-  SubQueryAttrs,
-  TableAttrs
-} from './pivot_table_common';
 
 /**
  * A plain js object, holding objects of type |Class| keyed by string id.
@@ -325,30 +317,13 @@ export interface MetricsState {
   requestedMetric?: string;  // Unset after metric request is handled.
 }
 
-export interface PivotTableConfig {
-  availableColumns?: TableAttrs[];   // Undefined until list is loaded.
-  availableAggregations?: string[];  // Undefined until list is loaded.
-}
-
-export interface PivotTableState {
-  id: string;
-  name: string;
-  selectedPivots: PivotAttrs[];
-  selectedAggregations: AggregationAttrs[];
-  requestedAction?:  // Unset after pivot table column request is handled.
-      {action: string, attrs?: SubQueryAttrs};
-  isLoadingQuery: boolean;
-  traceTime?: TraceTime;
-  selectedTrackIds?: number[];
-}
-
 // Auxiliary metadata needed to parse the query result, as well as to render it
 // correctly. Generated together with the text of query and passed without the
 // change to the query response.
 export interface PivotTableReduxQueryMetadata {
   tableName: string;
   pivotColumns: string[];
-  aggregationColumns: string[];
+  aggregationColumns: TableColumn[];
 }
 
 // Everything that's necessary to run the query for pivot table
@@ -372,6 +347,8 @@ export interface PivotTableReduxAreaState {
   tracks: string[];
 }
 
+export type SortDirection = 'DESC'|'ASC';
+
 export interface PivotTableReduxState {
   // Currently selected area, if null, pivot table is not going to be visible.
   selectionArea: PivotTableReduxAreaState|null;
@@ -384,6 +361,8 @@ export interface PivotTableReduxState {
   selectedPivotsMap: Map<string, TableColumn>;
   // Selected aggregation columns. Stored same way as pivots.
   selectedAggregations: Map<string, TableColumn>;
+  // Present if the result should be sorted, and in which direction.
+  sortCriteria?: {column: TableColumn, order: SortDirection};
   // Whether the pivot table results should be constrained to the selected area.
   constrainToArea: boolean;
   // Set to true by frontend to request controller to perform the query to
@@ -449,8 +428,6 @@ export interface State {
   currentFlamegraphState: FlamegraphState|null;
   logsPagination: LogsPagination;
   traceConversionInProgress: boolean;
-  pivotTableConfig: PivotTableConfig;
-  pivotTable: ObjectById<PivotTableState>;
 
   /**
    * This state is updated on the frontend at 60Hz and eventually syncronised to
@@ -511,11 +488,6 @@ export declare type RecordMode =
 
 // 'Q','P','O' for Android, 'L' for Linux, 'C' for Chrome.
 export declare type TargetOs = 'S' | 'R' | 'Q' | 'P' | 'O' | 'C' | 'L' | 'CrOS';
-
-export function isTargetOsAtLeast(target: RecordingTarget, osVersion: string) {
-  assertTrue(osVersion.length === 1);
-  return target.os >= osVersion;
-}
 
 export function isAndroidP(target: RecordingTarget) {
   return target.os === 'P';

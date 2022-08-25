@@ -35,9 +35,9 @@
 #include "src/trace_processor/dynamic/experimental_flat_slice_generator.h"
 #include "src/trace_processor/dynamic/experimental_sched_upid_generator.h"
 #include "src/trace_processor/dynamic/experimental_slice_layout_generator.h"
-#include "src/trace_processor/dynamic/thread_state_generator.h"
 #include "src/trace_processor/export_json.h"
 #include "src/trace_processor/importers/additional_modules.h"
+#include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_parser.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_tokenizer.h"
@@ -73,7 +73,6 @@
 #include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/metrics/sql/amalgamated_sql_metrics.h"
 
-
 // In Android and Chromium tree builds, we don't have the percentile module.
 // Just don't include it.
 #if PERFETTO_BUILDFLAG(PERFETTO_TP_PERCENTILE)
@@ -105,7 +104,7 @@ void RegisterFunction(sqlite3* db,
 
 void InitializeSqlite(sqlite3* db) {
   char* error = nullptr;
-  sqlite3_exec(db, "PRAGMA temp_store=2", 0, 0, &error);
+  sqlite3_exec(db, "PRAGMA temp_store=2", nullptr, nullptr, &error);
   if (error) {
     PERFETTO_FATAL("Error setting pragma temp_store: %s", error);
   }
@@ -134,7 +133,7 @@ void BuildBoundsTable(sqlite3* db, std::pair<int64_t, int64_t> bounds) {
                                      ", %" PRId64 ")",
                                      bounds.first, bounds.second);
 
-  sqlite3_exec(db, insert_sql, 0, 0, &error);
+  sqlite3_exec(db, insert_sql, nullptr, nullptr, &error);
   sqlite3_free(insert_sql);
   if (error) {
     PERFETTO_ELOG("Error inserting bounds table: %s", error);
@@ -144,14 +143,15 @@ void BuildBoundsTable(sqlite3* db, std::pair<int64_t, int64_t> bounds) {
 
 void CreateBuiltinTables(sqlite3* db) {
   char* error = nullptr;
-  sqlite3_exec(db, "CREATE TABLE perfetto_tables(name STRING)", 0, 0, &error);
+  sqlite3_exec(db, "CREATE TABLE perfetto_tables(name STRING)", nullptr,
+               nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
   }
   sqlite3_exec(db,
-               "CREATE TABLE trace_bounds(start_ts BIG INT, end_ts BIG INT)", 0,
-               0, &error);
+               "CREATE TABLE trace_bounds(start_ts BIG INT, end_ts BIG INT)",
+               nullptr, nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
@@ -162,12 +162,13 @@ void CreateBuiltinTables(sqlite3* db) {
                "CREATE TABLE power_profile("
                "device STRING, cpu INT, cluster INT, freq INT, power DOUBLE,"
                "UNIQUE(device, cpu, cluster, freq));",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
   }
-  sqlite3_exec(db, "CREATE TABLE trace_metrics(name STRING)", 0, 0, &error);
+  sqlite3_exec(db, "CREATE TABLE trace_metrics(name STRING)", nullptr, nullptr,
+               &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
@@ -178,7 +179,7 @@ void CreateBuiltinTables(sqlite3* db) {
   sqlite3_exec(db,
                "CREATE TABLE debug_slices (id BIG INT, name STRING, ts BIG INT,"
                "dur BIG INT, depth BIG INT)",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
@@ -204,7 +205,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "  *, "
                "  id AS counter_id "
                "FROM counter_track",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -213,7 +214,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "  *, "
                "  track_id as counter_id "
                "FROM counter",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -223,7 +224,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "INNER JOIN counter_track t "
                "ON v.track_id = t.id "
                "ORDER BY ts;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -233,7 +234,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "  category AS cat, "
                "  id AS slice_id "
                "FROM internal_slice;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -242,7 +243,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "ts, track_id, name, arg_set_id "
                "FROM slice "
                "WHERE dur = 0;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -251,7 +252,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "*, "
                "ts + dur as ts_end "
                "FROM sched_slice;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   // Legacy view for "slice" table with a deprecated table name.
@@ -259,7 +260,7 @@ void CreateBuiltinViews(sqlite3* db) {
   sqlite3_exec(db,
                "CREATE VIEW slices AS "
                "SELECT * FROM slice;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -268,7 +269,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "id as utid, "
                "* "
                "FROM internal_thread;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   sqlite3_exec(db,
@@ -277,7 +278,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "id as upid, "
                "* "
                "FROM internal_process;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
   // This should be kept in sync with GlobalArgsTracker::AddArgSet.
@@ -297,7 +298,7 @@ void CreateBuiltinViews(sqlite3* db) {
                "  WHEN 'json' THEN string_value "
                "ELSE NULL END AS display_value "
                "FROM internal_args;",
-               0, 0, &error);
+               nullptr, nullptr, &error);
   MaybeRegisterError(error);
 }
 
@@ -619,6 +620,47 @@ base::Status ExtractArg::Run(TraceStorage* storage,
   PERFETTO_FATAL("For GCC");
 }
 
+struct AbsTimeStr : public SqlFunction {
+  using Context = ClockTracker;
+  static base::Status Run(ClockTracker* tracker,
+                          size_t argc,
+                          sqlite3_value** argv,
+                          SqlValue& out,
+                          Destructors& destructors);
+};
+
+base::Status AbsTimeStr::Run(ClockTracker* tracker,
+                             size_t argc,
+                             sqlite3_value** argv,
+                             SqlValue& out,
+                             Destructors& destructors) {
+  if (argc != 1) {
+    return base::ErrStatus("ABS_TIME_STR: 1 arg required");
+  }
+
+  // If the timestamp is null, just return null as the result.
+  if (sqlite3_value_type(argv[0]) == SQLITE_NULL) {
+    return base::OkStatus();
+  }
+  if (sqlite3_value_type(argv[0]) != SQLITE_INTEGER) {
+    return base::ErrStatus("ABS_TIME_STR: first argument should be timestamp");
+  }
+
+  int64_t ts = sqlite3_value_int64(argv[0]);
+  base::Optional<std::string> iso8601 = tracker->FromTraceTimeAsISO8601(ts);
+  if (!iso8601.has_value()) {
+    return base::OkStatus();
+  }
+
+  std::unique_ptr<char, base::FreeDeleter> s(
+      static_cast<char*>(malloc(iso8601->size() + 1)));
+  memcpy(s.get(), iso8601->c_str(), iso8601->size() + 1);
+
+  destructors.string_destructor = free;
+  out = SqlValue::String(s.release());
+  return base::OkStatus();
+}
+
 std::vector<std::string> SanitizeMetricMountPaths(
     const std::vector<std::string>& mount_paths) {
   std::vector<std::string> sanitized;
@@ -862,6 +904,8 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterFunction<ExportJson>(db, "EXPORT_JSON", 1, context_.storage.get(),
                                false);
   RegisterFunction<ExtractArg>(db, "EXTRACT_ARG", 2, context_.storage.get());
+  RegisterFunction<AbsTimeStr>(db, "ABS_TIME_STR", 1,
+                               context_.clock_tracker.get());
   RegisterFunction<CreateFunction>(
       db, "CREATE_FUNCTION", 3,
       std::unique_ptr<CreateFunction::Context>(
@@ -930,8 +974,6 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDynamicTable(std::unique_ptr<ExperimentalSchedUpidGenerator>(
       new ExperimentalSchedUpidGenerator(storage->sched_slice_table(),
                                          storage->thread_table())));
-  RegisterDynamicTable(std::unique_ptr<ThreadStateGenerator>(
-      new ThreadStateGenerator(&context_)));
   RegisterDynamicTable(std::unique_ptr<ExperimentalAnnotatedStackGenerator>(
       new ExperimentalAnnotatedStackGenerator(&context_)));
   RegisterDynamicTable(std::unique_ptr<ExperimentalFlatSliceGenerator>(
@@ -946,6 +988,7 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDbTable(storage->flow_table());
   RegisterDbTable(storage->thread_slice_table());
   RegisterDbTable(storage->sched_slice_table());
+  RegisterDbTable(storage->thread_state_table());
   RegisterDbTable(storage->gpu_slice_table());
 
   RegisterDbTable(storage->track_table());
