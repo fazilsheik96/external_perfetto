@@ -20,19 +20,23 @@ import {Actions} from '../common/actions';
 import {TRACE_SUFFIX} from '../common/constants';
 import {
   genTraceConfig,
-  RecordingConfigUtils
+  RecordingConfigUtils,
 } from '../common/recordingV2/recording_config_utils';
+import {
+  showRecordingModal,
+  wrapRecordingError,
+} from '../common/recordingV2/recording_error_handling';
 import {
   OnTargetChangedCallback,
   RecordingTargetV2,
   TargetInfo,
-  TracingSession
+  TracingSession,
 } from '../common/recordingV2/recording_interfaces_v2';
 import {
-  ANDROID_WEBUSB_TARGET_FACTORY
+  ANDROID_WEBUSB_TARGET_FACTORY,
 } from '../common/recordingV2/target_factories/android_webusb_target_factory';
 import {
-  targetFactoryRegistry
+  targetFactoryRegistry,
 } from '../common/recordingV2/target_factory_registry';
 import {hasActiveProbes} from '../common/state';
 
@@ -51,7 +55,7 @@ import {
   PERSIST_CONFIG_FLAG,
   PowerSettings,
   RecordingStatusLabel,
-  RecSettings
+  RecSettings,
 } from './record_page';
 import {CodeSnippet} from './record_widgets';
 
@@ -111,7 +115,7 @@ function RecordingPlatformSelection() {
               // select's options at that time, we have to reselect the
               // correct index here after any new children were added.
               (select.dom as HTMLSelectElement).selectedIndex = selectedIndex;
-            }
+            },
           },
           ...targets),
         ));
@@ -121,26 +125,20 @@ function RecordingPlatformSelection() {
 }
 
 async function addAndroidDevice(): Promise<void> {
-  try {
-    recordingTargetV2 =
-        await targetFactoryRegistry.get(ANDROID_WEBUSB_TARGET_FACTORY)
-            .connectNewTarget();
+  const target = await wrapRecordingError(
+      targetFactoryRegistry.get(ANDROID_WEBUSB_TARGET_FACTORY)
+          .connectNewTarget(),
+      (message) => showRecordingModal(message));
+  if (target) {
+    recordingTargetV2 = target;
     globals.rafScheduler.scheduleFullRedraw();
-  } catch (e) {
-    if (e.name === 'NotFoundError') {
-      const errorMessage = `No device found. ${e.name}: ${e.message}`;
-      console.error(errorMessage);
-      alert(errorMessage);
-    } else {
-      throw e;
-    }
   }
 }
 
 function onTargetChange(targetName: string): void {
   const allTargets = targetFactoryRegistry.listTargets();
   recordingTargetV2 =
-      allTargets.find(t => t.getInfo().name === targetName) || allTargets[0];
+      allTargets.find((t) => t.getInfo().name === targetName) || allTargets[0];
   globals.rafScheduler.scheduleFullRedraw();
 }
 
@@ -167,7 +165,7 @@ function Instructions(cssClass: string) {
 function BufferUsageProgressBar() {
   if (!tracingSession) return [];
 
-  tracingSession.then(session => session.getTraceBufferUsage())
+  tracingSession.then((session) => session.getTraceBufferUsage())
       .then((percentage) => {
         publishBufferUsage({percentage});
       });
@@ -237,7 +235,7 @@ function RecordingNotes() {
     notes.push(msgZeroProbes);
   }
 
-  targetFactoryRegistry.listRecordingProblems().map(recordingProblem => {
+  targetFactoryRegistry.listRecordingProblems().map((recordingProblem) => {
     notes.push(m('.note', recordingProblem));
   });
 
@@ -253,16 +251,11 @@ function RecordingNotes() {
         notes.push(msgLinux);
         break;
       case 'ANDROID': {
-        switch (targetInfo.osVersion) {
-          case 'Q':
-            break;
-          case 'P':
-            notes.push(m('.note', msgFeatNotSupported, msgSideload));
-            break;
-          case 'O':
-            notes.push(m('.note', msgPerfettoNotSupported, msgSideload));
-            break;
-          default:
+        if (targetInfo.androidApiLevel == 28) {
+          notes.push(m('.note', msgFeatNotSupported, msgSideload));
+        } else if (
+            targetInfo.androidApiLevel && targetInfo.androidApiLevel <= 27) {
+          notes.push(m('.note', msgPerfettoNotSupported, msgSideload));
         }
         break;
       }
@@ -298,7 +291,8 @@ function getRecordCommand(targetInfo: TargetInfo): string {
   const pbBase64 = data ? data.configProtoBase64 : '';
   const pbtx = data ? data.configProtoText : '';
   let cmd = '';
-  if (targetInfo.osVersion === 'P') {
+  if (targetInfo.targetType === 'ANDROID' &&
+      targetInfo.androidApiLevel === 28) {
     cmd += `echo '${pbBase64}' | \n`;
     cmd += 'base64 --decode | \n';
     cmd += 'adb shell "perfetto -c - -o /data/misc/perfetto-traces/trace"\n';
@@ -323,7 +317,7 @@ function recordingButtons() {
       m(`button`,
         {
           class: tracingSession ? '' : 'selected',
-          onclick: onStartRecordingPressed
+          onclick: onStartRecordingPressed,
         },
         'Start Recording');
 
@@ -346,7 +340,7 @@ function StopCancelButtons() {
       m(`button.selected`,
         {
           onclick: async () => {
-            assertExists(tracingSession).then(async session => {
+            assertExists(tracingSession).then(async (session) => {
               // If this tracing session is not the one currently in focus,
               // then we interpret 'Stop' as 'Cancel'. Otherwise, this
               // trace will be processed and rendered even though the user
@@ -357,9 +351,8 @@ function StopCancelButtons() {
               }
               session.stop();
             });
-            tracingSession = undefined;
-            globals.dispatch(Actions.setRecordingStatus({status: undefined}));
-          }
+            clearRecordingState();
+          },
         },
         'Stop');
 
@@ -367,12 +360,9 @@ function StopCancelButtons() {
       m(`button`,
         {
           onclick: async () => {
-            assertExists(tracingSession).then(session => session.cancel());
-            tracingSession = undefined;
-            globals.dispatch(
-                Actions.setLastRecordingError({error: 'Recording cancelled.'}));
-            publishBufferUsage({percentage: 0});
-          }
+            assertExists(tracingSession).then((session) => session.cancel());
+            clearRecordingState();
+          },
         },
         'Cancel');
 
@@ -394,20 +384,17 @@ async function onStartRecordingPressed(): Promise<void> {
     globals.logging.logEvent(
         'Record Trace',
         `Record trace (${targetInfo.targetType}${targetInfo.targetType})`);
-    Actions.setLastRecordingError({error: undefined});
 
     const traceConfig =
         genTraceConfig(globals.state.recordConfig, recordingTargetV2.getInfo());
 
     const onTraceData = (trace: Uint8Array) => {
-      publishBufferUsage({percentage: 0});
+      clearRecordingState();
       globals.dispatch(Actions.openTraceFromBuffer({
         title: 'Recorded trace',
         buffer: trace.buffer,
         fileName: `recorded_trace${TRACE_SUFFIX}`,
       }));
-      tracingSession = undefined;
-      globals.dispatch(Actions.setRecordingStatus({status: undefined}));
     };
 
     const onStatus = (message: string) => {
@@ -415,17 +402,15 @@ async function onStartRecordingPressed(): Promise<void> {
     };
 
     const onDisconnect = (errorMessage?: string) => {
-      publishBufferUsage({percentage: 0});
-      tracingSession = undefined;
+      clearRecordingState();
       if (errorMessage) {
-        globals.dispatch(Actions.setLastRecordingError({error: errorMessage}));
+        showRecordingModal(errorMessage);
       }
     };
 
     const onError = (message: string) => {
-      publishBufferUsage({percentage: 0});
-      globals.dispatch(
-          Actions.setLastRecordingError({error: message.substr(0, 150)}));
+      clearRecordingState();
+      showRecordingModal(message);
     };
 
     const tracingSessionListener =
@@ -440,6 +425,7 @@ async function onStartRecordingPressed(): Promise<void> {
       }
       tracingSession.start(traceConfig);
     });
+    wrapRecordingError(tracingSession, onError);
   }
 }
 
@@ -447,6 +433,12 @@ function recordingLog() {
   const logs = globals.recordingLog;
   if (logs === undefined) return [];
   return m('.code-snippet.no-top-bar', m('code', logs));
+}
+
+function clearRecordingState() {
+  publishBufferUsage({percentage: 0});
+  globals.dispatch(Actions.setRecordingStatus({status: undefined}));
+  tracingSession = undefined;
 }
 
 function recordMenu(routePage: string) {
@@ -505,7 +497,7 @@ function recordMenu(routePage: string) {
       '.record-menu',
       {
         class: tracingSession ? 'disabled' : '',
-        onclick: () => globals.rafScheduler.scheduleFullRedraw()
+        onclick: () => globals.rafScheduler.scheduleFullRedraw(),
       },
       m('header', 'Trace config'),
       m('ul',
@@ -524,7 +516,7 @@ function recordMenu(routePage: string) {
               {
                 onclick: () => {
                   recordConfigStore.reloadFromLocalStorage();
-                }
+                },
               },
               m(`li${routePage === 'config' ? '.active' : ''}`,
                 m('i.material-icons', 'save'),
@@ -543,48 +535,49 @@ const onDevicesChanged: OnTargetChangedCallback = () => {
 
 export const RecordPageV2 = createPage({
   view({attrs}: m.Vnode<PageAttrs>): void |
-  m.Children {
-    if (!recordingTargetV2) {
-      recordingTargetV2 = targetFactoryRegistry.listTargets()[0];
-    }
+      m.Children {
+        if (!recordingTargetV2) {
+          recordingTargetV2 = targetFactoryRegistry.listTargets()[0];
+        }
 
-    const androidWebusbTarget =
-        targetFactoryRegistry.get(ANDROID_WEBUSB_TARGET_FACTORY);
-    if (!androidWebusbTarget.onDevicesChanged) {
-      androidWebusbTarget.onDevicesChanged = onDevicesChanged;
-    }
+        const androidWebusbTarget =
+            targetFactoryRegistry.get(ANDROID_WEBUSB_TARGET_FACTORY);
+        if (!androidWebusbTarget.onDevicesChanged) {
+          androidWebusbTarget.onDevicesChanged = onDevicesChanged;
+        }
 
-    const components: m.Children[] = [RecordHeader()];
-    if (recordingTargetV2) {
-      const SECTIONS: {[property: string]: (cssClass: string) => m.Child} = {
-        buffers: RecSettings,
-        instructions: Instructions,
-        config: Configurations,
-        cpu: CpuSettings,
-        gpu: GpuSettings,
-        power: PowerSettings,
-        memory: MemorySettings,
-        android: AndroidSettings,
-        advanced: AdvancedSettings,
-      };
+        const components: m.Children[] = [RecordHeader()];
+        if (recordingTargetV2) {
+          const SECTIONS:
+              {[property: string]: (cssClass: string) => m.Child} = {
+                buffers: RecSettings,
+                instructions: Instructions,
+                config: Configurations,
+                cpu: CpuSettings,
+                gpu: GpuSettings,
+                power: PowerSettings,
+                memory: MemorySettings,
+                android: AndroidSettings,
+                advanced: AdvancedSettings,
+              };
 
-      const pages: m.Children = [];
-      // we need to remove the `/` character from the route
-      let routePage = attrs.subpage ? attrs.subpage.substr(1) : '';
-      if (!Object.keys(SECTIONS).includes(routePage)) {
-        routePage = 'buffers';
-      }
-      for (const key of Object.keys(SECTIONS)) {
-        const cssClass = routePage === key ? '.active' : '';
-        pages.push(SECTIONS[key](cssClass));
-      }
-      components.push(recordMenu(routePage));
-      components.push(...pages);
-    }
+          const pages: m.Children = [];
+          // we need to remove the `/` character from the route
+          let routePage = attrs.subpage ? attrs.subpage.substr(1) : '';
+          if (!Object.keys(SECTIONS).includes(routePage)) {
+            routePage = 'buffers';
+          }
+          for (const key of Object.keys(SECTIONS)) {
+            const cssClass = routePage === key ? '.active' : '';
+            pages.push(SECTIONS[key](cssClass));
+          }
+          components.push(recordMenu(routePage));
+          components.push(...pages);
+        }
 
-    return m(
-        '.record-page',
-        tracingSession ? m('.hider') : [],
-        m('.record-container', components));
-  }
+        return m(
+            '.record-page',
+            tracingSession ? m('.hider') : [],
+            m('.record-container', components));
+      },
 });

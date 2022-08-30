@@ -14,6 +14,7 @@
 
 import {Message, Method, rpc, RPCImplCallback} from 'protobufjs';
 
+import {assertExists} from '../base/logging';
 import {base64Encode} from '../base/string_utils';
 import {Actions} from '../common/actions';
 import {TRACE_SUFFIX} from '../common/constants';
@@ -27,7 +28,7 @@ import {
   AdbRecordingTarget,
   isAdbTarget,
   isChromeTarget,
-  RecordingTarget
+  RecordingTarget,
 } from '../common/state';
 import {publishBufferUsage, publishTrackData} from '../frontend/publish';
 
@@ -63,6 +64,7 @@ export function genConfigProto(
 function convertToRecordingV2Input(
     uiCfg: RecordConfig, target: RecordingTarget): TraceConfig {
   let targetType: 'ANDROID'|'CHROME'|'CHROME_OS'|'LINUX';
+  let androidApiLevel: number|undefined;
   switch (target.os) {
     case 'L':
       targetType = 'LINUX';
@@ -73,10 +75,38 @@ function convertToRecordingV2Input(
     case 'CrOS':
       targetType = 'CHROME_OS';
       break;
+    case 'S':
+      androidApiLevel = 31;
+      targetType = 'ANDROID';
+      break;
+    case 'R':
+      androidApiLevel = 30;
+      targetType = 'ANDROID';
+      break;
+    case 'Q':
+      androidApiLevel = 29;
+      targetType = 'ANDROID';
+      break;
+    case 'P':
+      androidApiLevel = 28;
+      targetType = 'ANDROID';
+      break;
     default:
+      androidApiLevel = 26;
       targetType = 'ANDROID';
   }
-  const targetInfo: TargetInfo = {targetType, osVersion: target.os, name: ''};
+
+  let targetInfo: TargetInfo;
+  if (targetType == 'ANDROID') {
+    targetInfo = {
+      targetType,
+      androidApiLevel: assertExists(androidApiLevel),
+      name: '',
+    };
+  } else {
+    targetInfo = {targetType, name: ''};
+  }
+
   return genTraceConfig(uiCfg, targetInfo);
 }
 
@@ -84,7 +114,7 @@ export function toPbtxt(configBuffer: Uint8Array): string {
   const msg = TraceConfig.decode(configBuffer);
   const json = msg.toJSON();
   function snakeCase(s: string): string {
-    return s.replace(/[A-Z]/g, c => '_' + c.toLowerCase());
+    return s.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
   }
   // With the ahead of time compiled protos we can't seem to tell which
   // fields are enums.
@@ -105,7 +135,7 @@ export function toPbtxt(configBuffer: Uint8Array): string {
       'maxFileSizeBytes',
       'samplingIntervalBytes',
       'shmemSizeBytes',
-      'pid'
+      'pid',
     ].includes(key);
   }
   function* message(msg: {}, indent: number): IterableIterator<string> {
@@ -199,8 +229,8 @@ export class RecordController extends Controller<'main'> implements Consumer {
         commandline,
         pbBase64: configProtoBase64,
         pbtxt: configProtoText,
-        traceConfig
-      }
+        traceConfig,
+      },
     });
 
     // If the recordingInProgress boolean state is different, it means that we
@@ -369,7 +399,7 @@ export class RecordController extends Controller<'main'> implements Consumer {
 
   private async hasSocketAccess(target: AdbRecordingTarget) {
     const devices = await navigator.usb.getDevices();
-    const device = devices.find(d => d.serialNumber === target.serial);
+    const device = devices.find((d) => d.serialNumber === target.serial);
     console.assert(device);
     if (!device) return Promise.resolve(false);
     return AdbSocketConsumerPort.hasSocketAccess(device, this.adb);
