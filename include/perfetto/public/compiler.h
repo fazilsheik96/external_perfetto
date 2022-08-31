@@ -1,5 +1,5 @@
 /*
- * Copyright (C) 2020 The Android Open Source Project
+ * Copyright (C) 2022 The Android Open Source Project
  *
  * Licensed under the Apache License, Version 2.0 (the "License");
  * you may not use this file except in compliance with the License.
@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-#include "src/trace_processor/containers/nullable_vector.h"
+#ifndef INCLUDE_PERFETTO_PUBLIC_COMPILER_H_
+#define INCLUDE_PERFETTO_PUBLIC_COMPILER_H_
 
-namespace perfetto {
-namespace trace_processor {
+#if defined(__GNUC__) || defined(__clang__)
+#define PERFETTO_LIKELY(_x) __builtin_expect(!!(_x), 1)
+#define PERFETTO_UNLIKELY(_x) __builtin_expect(!!(_x), 0)
+#else
+#define PERFETTO_LIKELY(_x) (_x)
+#define PERFETTO_UNLIKELY(_x) (_x)
+#endif
 
-NullableVectorBase::~NullableVectorBase() = default;
-
-}  // namespace trace_processor
-}  // namespace perfetto
+#endif  // INCLUDE_PERFETTO_PUBLIC_COMPILER_H_
