@@ -19,13 +19,15 @@ import {assertExists, assertFalse, assertTrue} from '../../base/logging';
 import {CmdType} from '../../controller/adb_interfaces';
 
 import {findInterfaceAndEndpoint} from './adb_over_webusb_utils';
+import {AdbKey} from './auth/adb_auth';
+import {wrapRecordingError} from './recording_error_handling';
 import {
   AdbConnection,
   ByteStream,
   OnDisconnectCallback,
   OnMessageCallback,
   OnStreamCloseCallback,
-  OnStreamDataCallback
+  OnStreamDataCallback,
 } from './recording_interfaces_v2';
 
 const textEncoder = new _TextEncoder();
@@ -69,9 +71,20 @@ export class AdbConnectionOverWebusb implements AdbConnection {
   private connectingStreams = new Map<number, Deferred<AdbOverWebusbStream>>();
   private streams = new Set<AdbOverWebusbStream>();
   private maxPayload = DEFAULT_MAX_PAYLOAD_BYTES;
-  private key?: CryptoKeyPair;
   private writeInProgress = false;
   private writeQueue: WriteQueueElement[] = [];
+
+  // We use this key pair for authenticating with the device, which we do in
+  // two ways:
+  // - Firstly, signing with the private key.
+  // - Secondly, sending over the public key(at which point the device asks the
+  //   user for permissions).
+  // Once we've sent the public key, for future recordings we only need to
+  // sign with the private key, so the user doesn't need to give permissions
+  // again.
+  // TODO(octaviant): implement storing of the key so we can reuse it after
+  // the device is unplugged.
+  private key?: AdbKey;
 
   // Devices after Dec 2017 don't use checksum. This will be auto-detected
   // during the connection.
@@ -107,7 +120,7 @@ export class AdbConnectionOverWebusb implements AdbConnection {
     }
 
     if (this.state === AdbState.DISCONNECTED) {
-      await this.device.open();
+      await this.wrapUsb(this.device.open());
       // Setup USB endpoint.
       const interfaceAndEndpoint = findInterfaceAndEndpoint(this.device);
       const {configurationValue, usbInterfaceNumber, endpoints} =
@@ -117,19 +130,8 @@ export class AdbConnectionOverWebusb implements AdbConnection {
       this.usbWriteEpEndpoint = this.findEndpointNumber(endpoints, 'out');
       assertTrue(this.usbReadEndpoint >= 0 && this.usbWriteEpEndpoint >= 0);
 
-      await this.device.selectConfiguration(configurationValue);
-      try {
-        // This can throw if the user is also running adb on the machine.
-        // The adb server takes control over the same USB endpoint.
-        await this.device.claimInterface(usbInterfaceNumber);
-      } catch (e) {
-        // Here, we are unable to claim the interface so we don't need to
-        // disconnect. However, we signal to the code that the connection ended.
-        this.onDisconnect('Unable to claim adb interface.');
-        // TODO(octaviant) from aosp/1918377 - look at handling adb errors
-        // uniformly in the adb logic
-        throw e;
-      }
+      await this.wrapUsb(this.device.selectConfiguration(configurationValue));
+      await this.wrapUsb(this.device.claimInterface(usbInterfaceNumber));
     }
 
     await this.startAdbAuth();
@@ -143,7 +145,7 @@ export class AdbConnectionOverWebusb implements AdbConnection {
 
   streamClose(stream: AdbOverWebusbStream): void {
     const otherStreamsQueue = this.writeQueue.filter(
-        queueElement => queueElement.localStreamId !== stream.localStreamId);
+        (queueElement) => queueElement.localStreamId !== stream.localStreamId);
     const droppedPacketCount =
         this.writeQueue.length - otherStreamsQueue.length;
     if (droppedPacketCount > 0) {
@@ -169,12 +171,31 @@ export class AdbConnectionOverWebusb implements AdbConnection {
   }
 
   // We disconnect in 2 cases:
-  // 1.When we close the last stream of the connection. This is to prevent the
+  // 1. When we close the last stream of the connection. This is to prevent the
   // browser holding onto the USB interface after having finished a trace
   // recording, which would make it impossible to use "adb shell" from the same
-  // machine until the browser is closed. 2.When we get a USB disconnect event.
+  // machine until the browser is closed.
+  // 2. When we get a USB disconnect event.
   // This happens for instance when the device is unplugged.
   async disconnect(disconnectMessage?: string): Promise<void> {
+    if (this.state === AdbState.DISCONNECTED) {
+      return;
+    }
+    // Clear the resources in a synchronous method, because this can be used
+    // for error handling callbacks as well.
+    this.reachDisconnectState(disconnectMessage);
+
+    // We have already disconnected so there is no need to pass a callback
+    // which clears resources or notifies the user into 'wrapRecordingError'.
+    await wrapRecordingError(
+        this.device.releaseInterface(assertExists(this.usbInterfaceNumber)),
+        () => {});
+    this.usbInterfaceNumber = undefined;
+  }
+
+  // This is a synchronous method which clears all resources.
+  // It can be used as a callback for error handling.
+  reachDisconnectState(disconnectMessage?: string): void {
     if (this.state === AdbState.DISCONNECTED) {
       return;
     }
@@ -187,30 +208,13 @@ export class AdbConnectionOverWebusb implements AdbConnection {
           `Failed to open stream with id ${id} because adb was disconnected.`);
     }
     this.connectingStreams.clear();
+    this.writeQueue = [];
 
-    this.streams.forEach(stream => stream.close());
+    this.streams.forEach((stream) => stream.close());
     this.onDisconnect(disconnectMessage);
-
-    try {
-      await this.device.releaseInterface(assertExists(this.usbInterfaceNumber));
-    } catch (_) {
-      // We may not be able to release the interface because the device has been
-      // already disconnected.
-    }
-    this.usbInterfaceNumber = undefined;
   }
 
   private async startAdbAuth(): Promise<void> {
-    const KEY_SIZE = 2048;
-    const keySpec = {
-      name: 'RSASSA-PKCS1-v1_5',
-      modulusLength: KEY_SIZE,
-      publicExponent: new Uint8Array([0x01, 0x00, 0x01]),
-      hash: {name: 'SHA-1'},
-    };
-    this.key = await crypto.subtle.generateKey(
-        keySpec, /*extractable=*/ true, ['sign', 'verify']);
-
     const VERSION =
         this.useChecksum ? VERSION_WITH_CHECKSUM : VERSION_NO_CHECKSUM;
     this.state = AdbState.AUTH_STEP1;
@@ -231,14 +235,20 @@ export class AdbConnectionOverWebusb implements AdbConnection {
     assertFalse(this.isUsbReceiveLoopRunning);
     this.isUsbReceiveLoopRunning = true;
     for (; this.state !== AdbState.DISCONNECTED;) {
-      const res =
-          await this.device.transferIn(this.usbReadEndpoint, ADB_MSG_SIZE);
+      const res = await this.wrapUsb(
+          this.device.transferIn(this.usbReadEndpoint, ADB_MSG_SIZE));
+      if (!res) {
+        return;
+      }
       assertTrue(res.status === 'ok');
 
       const msg = AdbMsg.decodeHeader(res.data!);
       if (msg.dataLen > 0) {
-        const resp =
-            await this.device.transferIn(this.usbReadEndpoint, msg.dataLen);
+        const resp = await this.wrapUsb(
+            this.device.transferIn(this.usbReadEndpoint, msg.dataLen));
+        if (!resp) {
+          return;
+        }
         msg.data = new Uint8Array(
             resp.data!.buffer, resp.data!.byteOffset, resp.data!.byteLength);
       }
@@ -279,22 +289,20 @@ export class AdbConnectionOverWebusb implements AdbConnection {
           // message ending up in AUTH_STEP3.
           this.state = AdbState.AUTH_STEP2;
 
-          // Unfortunately this authentication as it is does NOT work, as the
-          // user is asked by the device to allow auth on every interaction.
-          // TODO(octaviant): fix the authentication
-          const signedToken = signAdbTokenWithPrivateKey(
-              assertExists(this.key).privateKey, token);
-          this.sendMessage(
-              'AUTH', AuthCmd.SIGNATURE, 0, new Uint8Array(signedToken));
+          if (!this.key) {
+            this.key = await AdbKey.GenerateNewKeyPair();
+          }
+          const signature = this.key.sign(token);
+          this.sendMessage('AUTH', AuthCmd.SIGNATURE, 0, signature);
         } else {
           // During this step, we send our public key. The dialog asking for
           // authorisation will appear on device, and if the user chooses to
           // remember our public key, it will be saved, so that the next time we
           // will only pass through AUTH_STEP1.
+
           this.state = AdbState.AUTH_STEP3;
-          const encodedPubKey =
-              await encodePubKey(assertExists(this.key).publicKey);
-          this.sendMessage('AUTH', AuthCmd.RSAPUBLICKEY, 0, encodedPubKey);
+          const publicKey = assertExists(this.key).getPublicKey();
+          this.sendMessage('AUTH', AuthCmd.RSAPUBLICKEY, 0, publicKey + '\0');
           this.onStatus('Please allow USB debugging on device.');
         }
       } else if (msg.cmd === 'CNXN') {
@@ -314,7 +322,8 @@ export class AdbConnectionOverWebusb implements AdbConnection {
 
         // This will resolve the promises awaited by
         // "ensureConnectionEstablished".
-        this.pendingConnPromises.forEach(connPromise => connPromise.resolve());
+        this.pendingConnPromises.forEach(
+            (connPromise) => connPromise.resolve());
         this.pendingConnPromises = [];
       } else if (msg.cmd === 'OKAY') {
         if (this.connectingStreams.has(msg.arg1)) {
@@ -377,13 +386,17 @@ export class AdbConnectionOverWebusb implements AdbConnection {
         msgHeader.length <= this.maxPayload &&
         msgData.length <= this.maxPayload);
 
-    const sendPromises =
-        [this.device.transferOut(this.usbWriteEpEndpoint, msgHeader.buffer)];
+    const sendPromises = [this.wrapUsb(
+        this.device.transferOut(this.usbWriteEpEndpoint, msgHeader.buffer))];
     if (msg.data.length > 0) {
-      sendPromises.push(
-          this.device.transferOut(this.usbWriteEpEndpoint, msgData.buffer));
+      sendPromises.push(this.wrapUsb(
+          this.device.transferOut(this.usbWriteEpEndpoint, msgData.buffer)));
     }
     await Promise.all(sendPromises);
+  }
+
+  private wrapUsb<T>(promise: Promise<T>): Promise<T|undefined> {
+    return wrapRecordingError(promise, this.reachDisconnectState.bind(this));
   }
 }
 
@@ -507,76 +520,3 @@ class AdbMsg {
   }
 }
 
-function base64StringToArray(s: string): number[] {
-  const decoded = atob(s.replace(/-/g, '+').replace(/_/g, '/'));
-  return [...decoded].map(char => char.charCodeAt(0));
-}
-
-const ANDROID_PUBKEY_MODULUS_SIZE = 2048;
-const MODULUS_SIZE_BYTES = ANDROID_PUBKEY_MODULUS_SIZE / 8;
-
-// RSA Public keys are encoded in a rather unique way. It's a base64 encoded
-// struct of 524 bytes in total as follows (see
-// libcrypto_utils/android_pubkey.c):
-//
-// typedef struct RSAPublicKey {
-//   // Modulus length. This must be ANDROID_PUBKEY_MODULUS_SIZE.
-//   uint32_t modulus_size_words;
-//
-//   // Precomputed montgomery parameter: -1 / n[0] mod 2^32
-//   uint32_t n0inv;
-//
-//   // RSA modulus as a little-endian array.
-//   uint8_t modulus[ANDROID_PUBKEY_MODULUS_SIZE];
-//
-//   // Montgomery parameter R^2 as a little-endian array of little-endian
-//   words. uint8_t rr[ANDROID_PUBKEY_MODULUS_SIZE];
-//
-//   // RSA modulus: 3 or 65537
-//   uint32_t exponent;
-// } RSAPublicKey;
-//
-// However, the Montgomery params (n0inv and rr) are not really used, see
-// comment in android_pubkey_decode() ("Note that we don't extract the
-// montgomery parameters...")
-async function encodePubKey(key: CryptoKey) {
-  const expPubKey = await crypto.subtle.exportKey('jwk', key);
-  const nArr = base64StringToArray(expPubKey.n as string).reverse();
-  const eArr = base64StringToArray(expPubKey.e as string).reverse();
-
-  const arr = new Uint8Array(3 * 4 + 2 * MODULUS_SIZE_BYTES);
-  const dv = new DataView(arr.buffer);
-  dv.setUint32(0, MODULUS_SIZE_BYTES / 4, true);
-
-  // The Mongomery params (n0inv and rr) are not computed.
-  dv.setUint32(4, 0 /*n0inv*/, true);
-  // Modulus
-  for (let i = 0; i < MODULUS_SIZE_BYTES; i++) dv.setUint8(8 + i, nArr[i]);
-
-  // rr:
-  for (let i = 0; i < MODULUS_SIZE_BYTES; i++) {
-    dv.setUint8(8 + MODULUS_SIZE_BYTES + i, 0 /*rr*/);
-  }
-  // Exponent
-  for (let i = 0; i < 4; i++) {
-    dv.setUint8(8 + (2 * MODULUS_SIZE_BYTES) + i, eArr[i]);
-  }
-  return btoa(String.fromCharCode(...new Uint8Array(dv.buffer))) +
-      ' perfetto@webusb';
-}
-
-// TODO(nicomazz): This token signature will be useful only when we save the
-// generated keys. So far, we are not doing so. As a consequence, a dialog is
-// displayed every time a tracing session is started.
-// The reason why it has not already been implemented is that the standard
-// crypto.subtle.sign function assumes that the input needs hashing, which is
-// not the case for ADB, where the 20 bytes token is already hashed.
-// A solution to this is implementing a custom private key signature with a js
-// implementation of big integers. Maybe, wrapping the key like in the following
-// CL can work:
-// https://android-review.googlesource.com/c/platform/external/perfetto/+/1105354/18
-function signAdbTokenWithPrivateKey(
-    _privateKey: CryptoKey, token: Uint8Array): ArrayBuffer {
-  // This function is not implemented.
-  return token.buffer;
-}

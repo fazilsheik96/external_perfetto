@@ -42,18 +42,6 @@ export function maybeShowErrorDialog(errLog: string) {
     return;
   }
 
-  if (errLog.includes('Unable to claim interface')) {
-    showWebUSBError();
-    timeLastReport = now;
-  }
-
-  if (errLog.includes('A transfer error has occurred') ||
-      errLog.includes('The device was disconnected') ||
-      errLog.includes('The transfer was cancelled')) {
-    showConnectionLostError();
-    timeLastReport = now;
-  }
-
   if (errLog.includes('(ERR:fmt)')) {
     showUnknownFileError();
     return;
@@ -91,7 +79,7 @@ export function maybeShowErrorDialog(errLog: string) {
           oninput: (ev: InputEvent) => {
             checked = (ev.target as HTMLInputElement).checked;
             if (checked && engine && engine.source.type === 'FILE') {
-              saveTrace(engine.source.file).then(url => {
+              saveTrace(engine.source.file).then((url) => {
                 const errMessage = createErrorMessage(errLog, checked, url);
                 renderModal(
                     errTitle, errMessage, userDescription, shareTraceSection);
@@ -151,9 +139,9 @@ function renderModal(
         action: () => {
           window.open(
               createLink(errTitle, errMessage, userDescription), '_blank');
-        }
+        },
       },
-    ]
+    ],
   });
 }
 
@@ -221,7 +209,7 @@ function showOutOfMemoryDialog() {
         m('span', 'For details see '),
         m('a', {href: url, target: '_blank'}, url),
         ),
-    buttons: []
+    buttons: [],
   });
 }
 
@@ -243,11 +231,11 @@ function showUnknownFileError() {
             m('li', 'Ninja build log'),
             ),
         ),
-    buttons: []
+    buttons: [],
   });
 }
 
-function showWebUSBError() {
+export function showWebUSBError() {
   showModal({
     title: 'A WebUSB error occurred',
     content: m(
@@ -260,20 +248,30 @@ function showWebUSBError() {
         m('span', 'For details see '),
         m('a', {href: 'http://b/159048331', target: '_blank'}, 'b/159048331'),
         ),
-    buttons: []
+    buttons: [],
   });
 }
 
-// TODO(octaviant) from aosp/1918377 - look at handling adb errors
-// uniformly in the adb logic
-function showConnectionLostError(): void {
+export function showConnectionLostError(): void {
   showModal({
     title: 'Connection with the ADB device lost',
     content: m(
         'div',
         m('span', `Please connect the device again to restart the recording.`),
         m('br')),
-    buttons: []
+    buttons: [],
+  });
+}
+
+export function showNoDeviceSelected(): void {
+  showModal({
+    title: 'No device was selected for recording',
+    content:
+        m('div',
+          m('span', `If you want to connect to an ADB device,
+           please select it from the list.`),
+          m('br')),
+    buttons: [],
   });
 }
 
@@ -289,6 +287,6 @@ restarting the trace processor while still in use by UI.`),
         m('p', `Please refresh this tab and ensure that trace processor is used
 at most one tab at a time.`),
         ),
-    buttons: []
+    buttons: [],
   });
 }

@@ -468,7 +468,7 @@ class AbstractConstRowReference {
 
 // Defines the accessor for the column value in the RowReference.
 #define PERFETTO_TP_TABLE_ROW_REF_SETTER(type, name, ...)          \
-  void set_##name(TypedColumn<type>::non_optional_type v) const {  \
+  void set_##name(TypedColumn<type>::non_optional_type v) {        \
     return mutable_table()->mutable_##name()->Set(row_number_, v); \
   }
 
@@ -489,6 +489,10 @@ class AbstractConstRowReference {
 // Defines the column index constexpr declaration.
 #define PERFETTO_TP_COLUMN_INDEX(type, name, ...) \
   static constexpr uint32_t name = static_cast<uint32_t>(ColumnIndexEnum::name);
+
+// Defines an alias for column type for each column.
+#define PERFETTO_TP_COLUMN_TYPE_USING(type, name, ...) \
+  using name = TypedColumn<type>;
 
 // For more general documentation, see PERFETTO_TP_TABLE in macros.h.
 #define PERFETTO_TP_TABLE_INTERNAL(table_name, class_name, parent_class_name, \
@@ -564,6 +568,12 @@ class AbstractConstRowReference {
       PERFETTO_TP_ALL_COLUMNS(DEF, PERFETTO_TP_COLUMN_INDEX)                  \
     };                                                                        \
                                                                               \
+    struct ColumnType {                                                       \
+      using id = IdColumn<Id>;                                                \
+      using type = TypedColumn<StringPool::Id>;                               \
+      PERFETTO_TP_ALL_COLUMNS(DEF, PERFETTO_TP_COLUMN_TYPE_USING)             \
+    };                                                                        \
+                                                                              \
     struct Row : parent_class_name::Row {                                     \
       /*                                                                      \
        * Expands to Row(col_type1 col1_c, base::Optional<col_type2> col2_c,   \
@@ -631,7 +641,7 @@ class AbstractConstRowReference {
     class RowReference : public ConstRowReference {                           \
      public:                                                                  \
       RowReference(class_name* table, uint32_t row_number)                    \
-          : ConstRowReference(table, row_number) {}                           \
+          : ConstRowReference(table, row_number), mutable_table_(table) {}    \
                                                                               \
       /*                                                                      \
        * Expands to                                                           \
@@ -641,9 +651,9 @@ class AbstractConstRowReference {
       PERFETTO_TP_ALL_COLUMNS(DEF, PERFETTO_TP_TABLE_ROW_REF_SETTER)          \
                                                                               \
      private:                                                                 \
-      class_name* mutable_table() const {                                     \
-        return const_cast<class_name*>(table_);                               \
-      }                                                                       \
+      class_name* mutable_table() { return mutable_table_; }                  \
+                                                                              \
+      class_name* mutable_table_ = nullptr;                                   \
     };                                                                        \
     static_assert(std::is_trivially_destructible<RowReference>::value,        \
                   "Inheritance used without trivial destruction");            \
