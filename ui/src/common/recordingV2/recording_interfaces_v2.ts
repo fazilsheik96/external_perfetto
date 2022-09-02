@@ -23,8 +23,8 @@ export interface TargetFactory {
   // case we ever minify our code.
   readonly kind: string;
 
-  // Executed when devices connect or disconnect.
-  onDevicesChanged?: OnTargetChangedCallback;
+  // Executed when a target is added/removed or when its information is updated.
+  onTargetChange?: OnTargetChangeCallback;
 
   getName(): string;
 
@@ -39,13 +39,20 @@ export interface TargetFactory {
   connectNewTarget(): Promise<RecordingTargetV2>;
 }
 
-export interface AndroidTargetInfo {
-  name: string;
-  targetType: 'ANDROID'
+export interface DynamicTargetInfo {
   // This is the Android API level. For instance, it can be 32, 31, 30 etc.
   // It is the "API level" column here:
   // https://source.android.com/setup/start/build-numbers
   androidApiLevel: number;
+}
+
+export interface AndroidTargetInfo {
+  name: string;
+  targetType: 'ANDROID';
+  // dynamicTargetInfo is only available after we have been able to connect to
+  // a target. On Android connected via WebUSB, that happens only after the user
+  // has authorized ADB, which can take several seconds.
+  dynamicTargetInfo?: DynamicTargetInfo;
 }
 
 export interface OtherTargetInfo {
@@ -53,8 +60,6 @@ export interface OtherTargetInfo {
   targetType: 'CHROME'|'CHROME_OS'|'LINUX';
 }
 
-// Holds information about a target. It's used by the logic which generates a
-// config.
 export type TargetInfo = AndroidTargetInfo|OtherTargetInfo;
 
 // RecordingTargetV2 is subclassed by Android devices and the Chrome browser/OS.
@@ -65,7 +70,9 @@ export interface RecordingTargetV2 {
   // well known key/value pairs: OS, targetType('ANDROID', 'CHROME', etc.)
   getInfo(): TargetInfo;
 
-  disconnect(disconnectMessage?: string): Promise<void>;
+  // Disconnects the target. Depending on target type, this can be
+  // asynchronous (Example: WebUSB) or synchronous (Example: Websocket).
+  disconnect(disconnectMessage?: string): Promise<void>|void;
 
   createTracingSession(tracingSessionListener: TracingSessionListener):
       Promise<TracingSession>;
@@ -103,6 +110,7 @@ export interface AdbConnection {
 export interface ByteStream {
   onStreamData: OnStreamDataCallback;
   onStreamClose: OnStreamCloseCallback;
+  isOpen(): boolean;
   write(data: string|Uint8Array): void;
   close(): void;
 }
@@ -136,9 +144,10 @@ export interface OnDisconnectCallback {
   (errorMessage?: string): void;
 }
 
-// Called when there is a change of targets.
+// Called when there is a change of targets or within a target.
 // For instance, it's used when an Adb device becomes connected/disconnected.
-export interface OnTargetChangedCallback {
+// It's also executed by a target when the information it stores gets updated.
+export interface OnTargetChangeCallback {
   (): void;
 }
 

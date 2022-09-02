@@ -80,7 +80,9 @@ export const MAX_TIME = 180;
 // - add currentEngineId to track the id of the current engine
 // - remove nextNoteId, nextAreaId and use nextId as a unique counter for all
 //   indexing except the indexing of the engines
-export const STATE_VERSION = 17;
+// 18: areaSelection change see b/235869542
+// 19: Added visualisedArgs state.
+export const STATE_VERSION = 19;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
@@ -441,6 +443,7 @@ export interface State {
   currentFlamegraphState: FlamegraphState|null;
   logsPagination: LogsPagination;
   traceConversionInProgress: boolean;
+  visualisedArgs: string[];
 
   /**
    * This state is updated on the frontend at 60Hz and eventually syncronised to

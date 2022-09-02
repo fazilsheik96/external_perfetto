@@ -1,3 +1,4 @@
+android/index
 atrace/index
 camera/index
 chrome/index
@@ -20,3 +21,4 @@ startup/index
 tables/index
 track_event/index
 translation/index
+scheduler/index

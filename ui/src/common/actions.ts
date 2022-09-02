@@ -30,6 +30,7 @@ import {
   EXPECTED_FRAMES_SLICE_TRACK_KIND,
 } from '../tracks/expected_frames/common';
 import {HEAP_PROFILE_TRACK_KIND} from '../tracks/heap_profile/common';
+import {NULL_TRACK_KIND} from '../tracks/null_track';
 import {
   PERF_SAMPLES_PROFILE_TRACK_KIND,
 } from '../tracks/perf_samples_profile/common';
@@ -67,6 +68,7 @@ import {toNs} from './time';
 type StateDraft = Draft<State>;
 
 const highPriorityTrackOrder = [
+  NULL_TRACK_KIND,
   PROCESS_SCHEDULING_TRACK_KIND,
   PROCESS_SUMMARY_TRACK,
   EXPECTED_FRAMES_SLICE_TRACK_KIND,
@@ -98,6 +100,7 @@ export interface PostedTrace {
   url?: string;
   uuid?: string;
   localOnly?: boolean;
+  keepApiOpen?: boolean;
 }
 
 function clearTraceState(state: StateDraft) {
@@ -126,7 +129,20 @@ function rank(ts: TrackState): number[] {
   const lpRank = rankIndex(ts.kind, lowPriorityTrackOrder);
   // TODO(hjd): Create sortBy object on TrackState to avoid this cast.
   const tid = (ts.config as {tid?: number}).tid || 0;
-  return [hpRank, ts.trackKindPriority.valueOf(), lpRank, tid];
+  const isDefaultTrackForScope = (ts.config as {
+                                   isDefaultTrackForScope?: boolean
+                                 }).isDefaultTrackForScope ||
+      false;
+  // Within the same |tid|, the default track should be the last one, as the
+  // rest typically contain the properties associated with the thread and so
+  // should be displayed above.
+  return [
+    hpRank,
+    ts.trackKindPriority.valueOf(),
+    lpRank,
+    tid,
+    +isDefaultTrackForScope,
+  ];
 }
 
 function rankIndex<T>(element: T, array: T[]): number {
@@ -139,6 +155,26 @@ function generateNextId(draft: StateDraft): string {
   const nextId = String(Number(draft.nextId) + 1);
   draft.nextId = nextId;
   return nextId;
+}
+
+// A helper to clean the state for a given removeable track.
+// This is not exported as action to make it clear that not all
+// tracks are removeable.
+function removeTrack(state: StateDraft, trackId: string) {
+  const track = state.tracks[trackId];
+  delete state.tracks[trackId];
+
+  const removeTrackId = (arr: string[]) => {
+    const index = arr.indexOf(trackId);
+    if (index !== -1) arr.splice(index, 1);
+  };
+
+  if (track.trackGroup === SCROLLING_TRACK_GROUP) {
+    removeTrackId(state.scrollingTracks);
+  } else if (track.trackGroup !== undefined) {
+    removeTrackId(state.trackGroups[track.trackGroup].tracks);
+  }
+  state.pinnedTracks = state.pinnedTracks.filter((id) => id !== trackId);
 }
 
 export const StateActions = {
@@ -295,11 +331,22 @@ export const StateActions = {
   removeDebugTrack(state: StateDraft, _: {}): void {
     const {debugTrackId} = state;
     if (debugTrackId === undefined) return;
-    delete state.tracks[debugTrackId];
-    state.scrollingTracks =
-        state.scrollingTracks.filter((id) => id !== debugTrackId);
-    state.pinnedTracks = state.pinnedTracks.filter((id) => id !== debugTrackId);
+    removeTrack(state, debugTrackId);
     state.debugTrackId = undefined;
+  },
+
+  removeVisualisedArgTracks(state: StateDraft, args: {trackIds: string[]}) {
+    for (const trackId of args.trackIds) {
+      const track = state.tracks[trackId];
+
+      const namespace = (track.config as {namespace?: string}).namespace;
+      if (namespace === undefined) {
+        throw new Error(
+            'All visualised arg tracks should have non-empty namespace');
+      }
+
+      removeTrack(state, trackId);
+    }
   },
 
   maybeExpandOnlyTrackGroup(state: StateDraft, _: {}): void {
@@ -618,12 +665,15 @@ export const StateActions = {
     }
   },
 
-  selectSlice(state: StateDraft, args: {id: number, trackId: string}): void {
+  selectSlice(
+      state: StateDraft,
+      args: {id: number, trackId: string, scroll?: boolean}): void {
     state.currentSelection = {
       kind: 'SLICE',
       id: args.id,
       trackId: args.trackId,
     };
+    state.pendingScrollId = args.scroll ? args.id : undefined;
   },
 
   selectCounter(
@@ -1017,6 +1067,17 @@ export const StateActions = {
       column: args.column,
       order: args.order,
     };
+  },
+
+  addVisualisedArg(state: StateDraft, args: {argName: string}) {
+    if (!state.visualisedArgs.includes(args.argName)) {
+      state.visualisedArgs.push(args.argName);
+    }
+  },
+
+  removeVisualisedArg(state: StateDraft, args: {argName: string}) {
+    state.visualisedArgs =
+        state.visualisedArgs.filter((val) => val !== args.argName);
   },
 };
 
