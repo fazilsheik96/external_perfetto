@@ -121,6 +121,13 @@ class PERFETTO_EXPORT_COMPONENT DataSourceBase {
     uint32_t internal_instance_index = 0;
   };
   virtual void OnStop(const StopArgs&);
+
+  class ClearIncrementalStateArgs {
+   public:
+    // The index of this data source instance (0..kMaxDataSourceInstances - 1).
+    uint32_t internal_instance_index = 0;
+  };
+  virtual void WillClearIncrementalState(const ClearIncrementalStateArgs&);
 };
 
 struct DefaultDataSourceTraits {
@@ -184,7 +191,21 @@ class DataSource : public DataSourceBase {
         Flush();
     }
 
+    // Adds an empty trace packet to the trace to ensure that the service can
+    // safely read the last event from the trace buffer.
+    // See PERFETTO_INTERNAL_ADD_EMPTY_EVENT macros for context.
+    void AddEmptyTracePacket() {
+      // Only add a new empty packet if the previous packet wasn't empty.
+      // Otherwise, there's nothing to flush, so adding more empty packets
+      // serves no purpose.
+      if (tls_inst_->last_packet_was_empty)
+        return;
+      tls_inst_->last_packet_was_empty = true;
+      tls_inst_->trace_writer->NewTracePacket();
+    }
+
     TracePacketHandle NewTracePacket() {
+      tls_inst_->last_packet_was_empty = false;
       return tls_inst_->trace_writer->NewTracePacket();
     }
 
