@@ -15,6 +15,7 @@
 import {
   showAllowUSBDebugging,
   showConnectionLostError,
+  showExtensionNotInstalled,
   showIssueParsingTheTracedResponse,
   showNoDeviceSelected,
   showWebsocketConnectionIssue,
@@ -24,6 +25,7 @@ import {
 import {
   WEBSOCKET_UNABLE_TO_CONNECT,
 } from './adb_connection_over_websocket';
+import {EXTENSION_NOT_INSTALLED} from './chrome_utils';
 import {OnMessageCallback} from './recording_interfaces_v2';
 import {
   PARSING_UNABLE_TO_DECODE_METHOD,
@@ -73,14 +75,14 @@ export function showRecordingModal(message: string): void {
         'Unable to claim interface.',
         'The specified endpoint is not part of a claimed and selected ' +
             'alternate interface.',
-      ].includes(message)) {
+      ].some((partOfMessage) => message.includes(partOfMessage))) {
     showWebUSBErrorV2();
   } else if (
       [
         'A transfer error has occurred.',
         'The device was disconnected.',
         'The transfer was cancelled.',
-      ].includes(message) ||
+      ].some((partOfMessage) => message.includes(partOfMessage)) ||
       isDeviceDisconnectedError(message)) {
     showConnectionLostError();
   } else if (message === ALLOW_USB_DEBUGGING) {
@@ -89,6 +91,8 @@ export function showRecordingModal(message: string): void {
     showNoDeviceSelected();
   } else if (WEBSOCKET_UNABLE_TO_CONNECT === message) {
     showWebsocketConnectionIssue(message);
+  } else if (message === EXTENSION_NOT_INSTALLED) {
+    showExtensionNotInstalled();
   } else if (isParsingError(message)) {
     showIssueParsingTheTracedResponse(message);
   } else {
