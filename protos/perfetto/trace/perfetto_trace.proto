@@ -466,6 +466,7 @@ message ChromeConfig {
 
 // Begin of protos/perfetto/config/ftrace/ftrace_config.proto
 
+// Next id: 19.
 message FtraceConfig {
   repeated string ftrace_events = 1;
   repeated string atrace_categories = 2;
@@ -490,12 +491,30 @@ message FtraceConfig {
   // It does not disclose KASLR, symbol addresses are mangled.
   optional bool symbolize_ksyms = 13;
 
+  // When symbolize_ksyms=true, tetermines whether the traced_probes daemon
+  // should keep the symbol map in memory (and reuse it for future tracing
+  // sessions) or clear it (saving memory) and re-create it on each tracing
+  // session (wasting cpu and wall time).
+  // The tradeoff is roughly:
+  //  KSYMS_RETAIN: pay a fixed ~1.2 MB cost after the first trace.
+  //  KSYMS_CLEANUP_ON_STOP: pay a ~300-500ms cost when starting each trace.
+  // Default behavior: KSYMS_CLEANUP_ON_STOP.
+  enum KsymsMemPolicy {
+    KSYMS_UNSPECIFIED = 0;
+    KSYMS_CLEANUP_ON_STOP = 1;
+    KSYMS_RETAIN = 2;
+  }
+  optional KsymsMemPolicy ksyms_mem_policy = 17;
+
   // By default the kernel symbolizer is lazily initialized on a deferred task
   // to reduce ftrace's time-to-start-recording. Unfortunately that makes
   // ksyms integration tests hard. This flag forces the kernel symbolizer to be
   // initialized synchronously on the data source start and hence avoiding
   // timing races in tests.
-  optional bool initialize_ksyms_synchronously_for_testing = 14;
+  // DEPRECATED in v28 / Android U. This is now the default behavior, setting it
+  // to true is a no-op.
+  optional bool initialize_ksyms_synchronously_for_testing = 14
+      [deprecated = true];
 
   // When this boolean is true AND the ftrace_events contains "kmem/rss_stat",
   // this option causes traced_probes to enable the "kmem/rss_stat_throttled"
@@ -521,6 +540,12 @@ message FtraceConfig {
   // expand to events that aren't of interest to the tracing user.
   // Introduced in: Android T.
   optional bool disable_generic_events = 16;
+
+  // The list of syscalls that should be recorded by sys_{enter,exit} ftrace
+  // events. When empty, all syscalls are recorded. If neither sys_{enter,exit}
+  // are enabled, this setting has no effect. Example: ["sys_read", "sys_open"].
+  // Introduced in: Android U.
+  repeated string syscall_events = 18;
 }
 
 // End of protos/perfetto/config/ftrace/ftrace_config.proto
@@ -1205,9 +1230,8 @@ message PerfEventConfig {
 
   message CallstackSampling {
     // Defines a set of processes for which samples are retained/skipped. If
-    // unset, all userspace samples are kept, but beware that it will be very
-    // heavy on the stack unwinder, which might start dropping samples due to
-    // overload.
+    // unset, all samples are kept, but beware that it will be very heavy on the
+    // stack unwinder, which might start dropping samples due to overload.
     optional Scope scope = 1;
 
     // If true, callstacks will include the kernel-space frames. Such frames can
@@ -1262,10 +1286,27 @@ message PerfEventConfig {
     // this is handled.
     repeated string exclude_cmdline = 4;
 
+    // Niche features for systemwide callstacks:
+
     // Number of additional command lines to sample. Only those which are
     // neither explicitly included nor excluded will be considered. Processes
     // are accepted on a first come, first served basis.
     optional uint32 additional_cmdline_count = 5;
+
+    // If set to N, all encountered processes will be put into one of the N
+    // possible bins, and only one randomly-chosen bin will be selected for
+    // unwinding. The binning is simply "pid % N", under the assumption that
+    // low-order bits of pids are roughly uniformly distributed. Other explicit
+    // inclusions/exclusions in this |Scope| message are still respected.
+    //
+    // The profiler will report the chosen shard in PerfSampleDefaults, and the
+    // values will be queryable in trace processor under the "stats" table as
+    // "perf_process_shard_count" and "perf_chosen_process_shard".
+    //
+    // NB: all data sources in a config that set |process_shard_count| must set
+    // it to the same value. The profiler will choose one bin for all those data
+    // sources.
+    optional uint32 process_shard_count = 6;
   }
 
   // Userspace unwinding mode. A possible future addition is kernel-unwound
@@ -2079,9 +2120,25 @@ message SysStatsConfig {
   // Polls /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_cur_freq every X ms.
   // This is required to be > 10ms to avoid excessive CPU usage.
   optional uint32 cpufreq_period_ms = 8;
+
+  // Polls /proc/buddyinfo every X ms, if non-zero.
+  // This is required to be > 10ms to avoid excessive CPU usage.
+  optional uint32 buddyinfo_period_ms = 9;
 }
 
 // End of protos/perfetto/config/sys_stats/sys_stats_config.proto
+
+// Begin of protos/perfetto/config/system_info/system_info.proto
+
+// This data-source does a one-off recording of system information when
+// the trace starts.
+// Currently this includes:
+// - Values of
+// /sys/devices/system/cpu/cpu*/cpufreq/scaling_available_frequencies This
+// datasource has no configuration options at present.
+message SystemInfoConfig {}
+
+// End of protos/perfetto/config/system_info/system_info.proto
 
 // Begin of protos/perfetto/config/test_config.proto
 
@@ -2217,7 +2274,7 @@ message TrackEventConfig {
 // Begin of protos/perfetto/config/data_source_config.proto
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 119
+// Next id: 120
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -2312,6 +2369,8 @@ message DataSourceConfig {
       [lazy = true];
   // Data source name: android.statsd
   optional StatsdTracingConfig statsd_tracing_config = 117 [lazy = true];
+  // Data source name: linux.system_info
+  optional SystemInfoConfig system_info_config = 119;
 
   // Chrome is special as it doesn't use the perfetto IPC layer. We want to
   // avoid proto serialization and de-serialization there because that would
@@ -6770,6 +6829,119 @@ message UfshcdClkGatingFtraceEvent {
 
 // End of protos/perfetto/trace/ftrace/ufs.proto
 
+// Begin of protos/perfetto/trace/ftrace/v4l2.proto
+
+message V4l2QbufFtraceEvent {
+  optional uint32 bytesused = 1;
+  optional uint32 field = 2;
+  optional uint32 flags = 3;
+  optional uint32 index = 4;
+  optional int32 minor = 5;
+  optional uint32 sequence = 6;
+  optional uint32 timecode_flags = 7;
+  optional uint32 timecode_frames = 8;
+  optional uint32 timecode_hours = 9;
+  optional uint32 timecode_minutes = 10;
+  optional uint32 timecode_seconds = 11;
+  optional uint32 timecode_type = 12;
+  optional uint32 timecode_userbits0 = 13;
+  optional uint32 timecode_userbits1 = 14;
+  optional uint32 timecode_userbits2 = 15;
+  optional uint32 timecode_userbits3 = 16;
+  optional int64 timestamp = 17;
+  optional uint32 type = 18;
+}
+message V4l2DqbufFtraceEvent {
+  optional uint32 bytesused = 1;
+  optional uint32 field = 2;
+  optional uint32 flags = 3;
+  optional uint32 index = 4;
+  optional int32 minor = 5;
+  optional uint32 sequence = 6;
+  optional uint32 timecode_flags = 7;
+  optional uint32 timecode_frames = 8;
+  optional uint32 timecode_hours = 9;
+  optional uint32 timecode_minutes = 10;
+  optional uint32 timecode_seconds = 11;
+  optional uint32 timecode_type = 12;
+  optional uint32 timecode_userbits0 = 13;
+  optional uint32 timecode_userbits1 = 14;
+  optional uint32 timecode_userbits2 = 15;
+  optional uint32 timecode_userbits3 = 16;
+  optional int64 timestamp = 17;
+  optional uint32 type = 18;
+}
+message Vb2V4l2BufQueueFtraceEvent {
+  optional uint32 field = 1;
+  optional uint32 flags = 2;
+  optional int32 minor = 3;
+  optional uint32 sequence = 4;
+  optional uint32 timecode_flags = 5;
+  optional uint32 timecode_frames = 6;
+  optional uint32 timecode_hours = 7;
+  optional uint32 timecode_minutes = 8;
+  optional uint32 timecode_seconds = 9;
+  optional uint32 timecode_type = 10;
+  optional uint32 timecode_userbits0 = 11;
+  optional uint32 timecode_userbits1 = 12;
+  optional uint32 timecode_userbits2 = 13;
+  optional uint32 timecode_userbits3 = 14;
+  optional int64 timestamp = 15;
+}
+message Vb2V4l2BufDoneFtraceEvent {
+  optional uint32 field = 1;
+  optional uint32 flags = 2;
+  optional int32 minor = 3;
+  optional uint32 sequence = 4;
+  optional uint32 timecode_flags = 5;
+  optional uint32 timecode_frames = 6;
+  optional uint32 timecode_hours = 7;
+  optional uint32 timecode_minutes = 8;
+  optional uint32 timecode_seconds = 9;
+  optional uint32 timecode_type = 10;
+  optional uint32 timecode_userbits0 = 11;
+  optional uint32 timecode_userbits1 = 12;
+  optional uint32 timecode_userbits2 = 13;
+  optional uint32 timecode_userbits3 = 14;
+  optional int64 timestamp = 15;
+}
+message Vb2V4l2QbufFtraceEvent {
+  optional uint32 field = 1;
+  optional uint32 flags = 2;
+  optional int32 minor = 3;
+  optional uint32 sequence = 4;
+  optional uint32 timecode_flags = 5;
+  optional uint32 timecode_frames = 6;
+  optional uint32 timecode_hours = 7;
+  optional uint32 timecode_minutes = 8;
+  optional uint32 timecode_seconds = 9;
+  optional uint32 timecode_type = 10;
+  optional uint32 timecode_userbits0 = 11;
+  optional uint32 timecode_userbits1 = 12;
+  optional uint32 timecode_userbits2 = 13;
+  optional uint32 timecode_userbits3 = 14;
+  optional int64 timestamp = 15;
+}
+message Vb2V4l2DqbufFtraceEvent {
+  optional uint32 field = 1;
+  optional uint32 flags = 2;
+  optional int32 minor = 3;
+  optional uint32 sequence = 4;
+  optional uint32 timecode_flags = 5;
+  optional uint32 timecode_frames = 6;
+  optional uint32 timecode_hours = 7;
+  optional uint32 timecode_minutes = 8;
+  optional uint32 timecode_seconds = 9;
+  optional uint32 timecode_type = 10;
+  optional uint32 timecode_userbits0 = 11;
+  optional uint32 timecode_userbits1 = 12;
+  optional uint32 timecode_userbits2 = 13;
+  optional uint32 timecode_userbits3 = 14;
+  optional int64 timestamp = 15;
+}
+
+// End of protos/perfetto/trace/ftrace/v4l2.proto
+
 // Begin of protos/perfetto/trace/ftrace/vmscan.proto
 
 message MmVmscanDirectReclaimBeginFtraceEvent {
@@ -7263,6 +7435,12 @@ message FtraceEvent {
     F2fsIostatFtraceEvent f2fs_iostat = 419;
     F2fsIostatLatencyFtraceEvent f2fs_iostat_latency = 420;
     SchedCpuUtilCfsFtraceEvent sched_cpu_util_cfs = 421;
+    V4l2QbufFtraceEvent v4l2_qbuf = 422;
+    V4l2DqbufFtraceEvent v4l2_dqbuf = 423;
+    Vb2V4l2BufQueueFtraceEvent vb2_v4l2_buf_queue = 424;
+    Vb2V4l2BufDoneFtraceEvent vb2_v4l2_buf_done = 425;
+    Vb2V4l2QbufFtraceEvent vb2_v4l2_qbuf = 426;
+    Vb2V4l2DqbufFtraceEvent vb2_v4l2_dqbuf = 427;
   }
 }
 
@@ -9447,6 +9625,9 @@ message BatteryCounters {
 
   // Instantaneous battery current in microamperes(µA).
   optional int64 current_avg_ua = 4;
+
+  // Battery name, emitted only on multiple batteries.
+  optional string name = 5;
 }
 
 // End of protos/perfetto/trace/power/battery_counters.proto
@@ -9978,6 +10159,11 @@ message PerfSampleDefaults {
   // The sampling timebase. Might not be identical to the data source config if
   // the implementation decided to default/override some parameters.
   optional PerfEvents.Timebase timebase = 1;
+
+  // If the config requested process sharding, report back the count and which
+  // of those bins was selected. Never changes for the duration of a trace.
+  optional uint32 process_shard_count = 2;
+  optional uint32 chosen_process_shard = 3;
 }
 
 // End of protos/perfetto/trace/profiling/profile_packet.proto
@@ -10258,6 +10444,14 @@ message SysStats {
   // /sys/devices/system/cpu/cpu*/cpufreq/cpuinfo_cur_freq in kHz.
   // One entry per cpu. Report 0 for offline cpu
   repeated uint32 cpufreq_khz = 11;
+
+  message BuddyInfo {
+    optional string node = 1;
+    optional string zone = 2;
+    repeated uint32 order_pages = 3;
+  }
+  // One entry per each node's zones.
+  repeated BuddyInfo buddy_info = 12;
 }
 
 // End of protos/perfetto/trace/sys_stats/sys_stats.proto
@@ -10287,6 +10481,9 @@ message SystemInfo {
   // The Android SDK vesion (e.g. 21 for L, 31 for S etc).
   // Introduced in Android T.
   optional uint64 android_sdk_version = 5;
+
+  // Kernel page size - sysconf(_SC_PAGESIZE).
+  optional uint32 page_size = 6;
 }
 
 // End of protos/perfetto/trace/system_info.proto
@@ -10862,7 +11059,7 @@ message UiState {
 
 // Begin of protos/perfetto/trace/trace_packet.proto
 
-// TracePacket is the root object of a Perfeto trace.
+// TracePacket is the root object of a Perfetto trace.
 // A Perfetto trace is a linear sequence of TracePacket(s).
 //
 // The tracing service guarantees that all TracePacket(s) written by a given

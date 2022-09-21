@@ -16,6 +16,7 @@ import {RecordConfig} from '../controller/record_config_types';
 import {
   Aggregation,
   PivotTree,
+  RegularColumn,
   TableColumn,
 } from '../frontend/pivot_table_redux_types';
 
@@ -83,7 +84,9 @@ export const MAX_TIME = 180;
 // 18: areaSelection change see b/235869542
 // 19: Added visualisedArgs state.
 // 20: Refactored thread sorting order.
-export const STATE_VERSION = 20;
+// 21: Updated perf sample selection to include a ts range instead of single ts
+// 22: Add log selection kind.
+export const STATE_VERSION = 22;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
@@ -310,7 +313,8 @@ export interface PerfSamplesSelection {
   kind: 'PERF_SAMPLES';
   id: number;
   upid: number;
-  ts: number;
+  leftTs: number;
+  rightTs: number;
   type: ProfileType;
 }
 
@@ -343,10 +347,16 @@ export interface ThreadStateSelection {
   id: number;
 }
 
+export interface LogSelection {
+  kind: 'LOG';
+  id: number;
+  trackId: string;
+}
+
 type Selection =
     (NoteSelection|SliceSelection|CounterSelection|HeapProfileSelection|
      CpuProfileSampleSelection|ChromeSliceSelection|ThreadStateSelection|
-     AreaSelection|PerfSamplesSelection)&{trackId?: string};
+     AreaSelection|PerfSamplesSelection|LogSelection)&{trackId?: string};
 export type SelectionKind = Selection['kind'];  // 'THREAD_STATE' | 'SLICE' ...
 
 export interface LogsPagination {
@@ -413,17 +423,20 @@ export type SortDirection = 'DESC'|'ASC';
 
 export interface PivotTableReduxState {
   // Currently selected area, if null, pivot table is not going to be visible.
-  selectionArea: PivotTableReduxAreaState|null;
+  selectionArea?: PivotTableReduxAreaState;
 
   // Query response
   queryResult: PivotTableReduxResult|null;
 
-  // Whether the panel is in edit mode
-  editMode: boolean;
+  // Selected pivots for tables other than slice/thread_slice.
+  // Because of the query generation, pivoting happens first on non-slice
+  // pivots; therefore, those can't be put after slice pivots. In order to
+  // maintain the separation more clearly, slice and non-slice pivots are
+  // located in separate arrays.
+  selectedPivots: RegularColumn[];
 
-  // Selected pivots. Map instead of Set because ES6 Set can't have
-  // non-primitive keys; here keys are concatenated values.
-  selectedPivotsMap: Map<string, TableColumn>;
+  // Selected pivots for slice/thread_slice table.
+  selectedSlicePivots: TableColumn[];
 
   // Selected aggregation columns. Stored same way as pivots.
   selectedAggregations: Map<string, Aggregation>;
