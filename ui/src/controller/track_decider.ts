@@ -39,8 +39,11 @@ import {
 import {ACTUAL_FRAMES_SLICE_TRACK_KIND} from '../tracks/actual_frames';
 import {ANDROID_LOGS_TRACK_KIND} from '../tracks/android_log';
 import {ASYNC_SLICE_TRACK_KIND} from '../tracks/async_slices';
+import {
+  decideTracks as scrollJankDecideTracks,
+} from '../tracks/chrome_scroll_jank';
 import {SLICE_TRACK_KIND} from '../tracks/chrome_slices';
-import {COUNTER_TRACK_KIND} from '../tracks/counter';
+import {COUNTER_TRACK_KIND, CounterScaleOptions} from '../tracks/counter';
 import {CPU_FREQ_TRACK_KIND} from '../tracks/cpu_freq';
 import {CPU_PROFILE_TRACK_KIND} from '../tracks/cpu_profile';
 import {CPU_SLICE_TRACK_KIND} from '../tracks/cpu_slices';
@@ -81,6 +84,29 @@ const F2FS_IOSTAT_LAT_TAG = 'f2fs_iostat_latency.';
 const F2FS_IOSTAT_LAT_GROUP_NAME = 'f2fs_iostat_latency';
 const UFS_CMD_TAG = 'io.ufs.command.tag';
 const UFS_CMD_TAG_GROUP_NAME = 'io.ufs.command.tags';
+const BUDDY_INFO_TAG = 'mem.buddyinfo';
+const KERNEL_WAKELOCK_PREFIX = 'Wakelock';
+
+// Sets the default 'scale' for counter tracks. If the regex matches
+// then the paired mode is used. Entries are in priority order so the
+// first match wins.
+const COUNTER_REGEX: [RegExp, CounterScaleOptions][] = [
+  // Power counters make more sense in rate mode since you're typically
+  // interested in the slope of the graph rather than the absolute
+  // value.
+  [new RegExp('^power\..*$'), 'RATE'],
+  // Same for network counters.
+  [new RegExp('^.* (Received|Transmitted) KB$'), 'RATE'],
+];
+
+function getCounterScale(name: string): CounterScaleOptions|undefined {
+  for (const [re, scale] of COUNTER_REGEX) {
+    if (name.match(re)) {
+      return scale;
+    }
+  }
+  return undefined;
+}
 
 export async function decideTracks(
     engineId: string, engine: Engine): Promise<DeferredAction[]> {
@@ -365,6 +391,7 @@ class TrackDecider {
         config: {
           name,
           trackId,
+          scale: getCounterScale(name),
         },
       });
     }
@@ -400,6 +427,7 @@ class TrackDecider {
         config: {
           name,
           trackId,
+          scale: getCounterScale(name),
         },
       });
     }
@@ -526,6 +554,95 @@ class TrackDecider {
       collapsed: true,
     });
     this.addTrackGroupActions.push(addGroup);
+  }
+
+  async groupGlobalBuddyInfoTracks(): Promise<void> {
+    const buddyInfoTracks: AddTrackArgs[] = [];
+    const devMap = new Map<string, string>();
+
+    for (const track of this.tracksToAdd) {
+      if (track.name.startsWith(BUDDY_INFO_TAG)) {
+        buddyInfoTracks.push(track);
+      }
+    }
+
+    if (buddyInfoTracks.length === 0) {
+      return;
+    }
+
+    for (const track of buddyInfoTracks) {
+      const tokens = track.name.split('[');
+      const node = tokens[1].slice(0, -1);
+      const zone = tokens[2].slice(0, -1);
+      const size = tokens[3].slice(0, -1);
+
+      const groupName = 'Buddyinfo:  Node: ' + node + ' Zone: ' + zone;
+      if (!devMap.has(groupName)) {
+        devMap.set(groupName, uuidv4());
+      }
+      track.name = 'Size: ' + size;
+      track.trackGroup = devMap.get(groupName);
+    }
+
+    for (const [key, value] of devMap) {
+      const groupName = key;
+      const summaryTrackId = uuidv4();
+
+      this.tracksToAdd.push({
+        id: summaryTrackId,
+        engineId: this.engineId,
+        kind: NULL_TRACK_KIND,
+        trackSortKey: PrimaryTrackSortKey.NULL_TRACK,
+        name: groupName,
+        trackGroup: undefined,
+        config: {},
+      });
+
+      const addGroup = Actions.addTrackGroup({
+        engineId: this.engineId,
+        summaryTrackId,
+        name: groupName,
+        id: value,
+        collapsed: true,
+      });
+      this.addTrackGroupActions.push(addGroup);
+    }
+  }
+
+  async groupKernelWakelockTracks(): Promise<void> {
+    let groupUuid = undefined;
+
+    for (const track of this.tracksToAdd) {
+      // NB: Userspace wakelocks start with "WakeLock" not "Wakelock".
+      if (track.name.startsWith(KERNEL_WAKELOCK_PREFIX)) {
+        if (groupUuid === undefined) {
+          groupUuid = uuidv4();
+        }
+        track.trackGroup = groupUuid;
+      }
+    }
+
+    if (groupUuid !== undefined) {
+      const summaryTrackId = uuidv4();
+      this.tracksToAdd.push({
+        id: summaryTrackId,
+        engineId: this.engineId,
+        kind: NULL_TRACK_KIND,
+        trackSortKey: PrimaryTrackSortKey.NULL_TRACK,
+        name: 'Kernel wakelocks',
+        trackGroup: undefined,
+        config: {},
+      });
+
+      const addGroup = Actions.addTrackGroup({
+        engineId: this.engineId,
+        summaryTrackId,
+        name: 'Kernel wakelocks',
+        id: groupUuid,
+        collapsed: true,
+      });
+      this.addTrackGroupActions.push(addGroup);
+    }
   }
 
   async addLogsTrack(): Promise<void> {
@@ -801,7 +918,14 @@ class TrackDecider {
           priority: InThreadTrackSortKey.ORDINARY,
         },
         trackGroup: uuid,
-        config: {name, trackId, startTs, endTs, tid},
+        config: {
+          name,
+          trackId,
+          startTs,
+          endTs,
+          tid,
+          scale: getCounterScale(name),
+        },
       });
     }
   }
@@ -1122,6 +1246,7 @@ class TrackDecider {
           trackId,
           startTs,
           endTs,
+          scale: getCounterScale(name),
         },
       });
     }
@@ -1241,7 +1366,7 @@ class TrackDecider {
       id: summaryTrackId,
       engineId: this.engineId,
       kind: PROCESS_SUMMARY_TRACK,
-      trackSortKey: PrimaryTrackSortKey.MAIN_THREAD,
+      trackSortKey: PrimaryTrackSortKey.PROCESS_SUMMARY_TRACK,
       name: `Kernel thread summary`,
       config: {pidForColor: 2, upid: it.upid, utid: it.utid},
     });
@@ -1400,6 +1525,7 @@ class TrackDecider {
           select string_value as label
           from args
           where arg_set_id = ${it.argSetId}
+          and flat_key = 'chrome.process_label'
         `);
         const argIt = result.iter({label: STR_NULL});
         for (; argIt.valid(); argIt.next()) {
@@ -1497,6 +1623,8 @@ class TrackDecider {
         F2FS_IOSTAT_LAT_TAG, F2FS_IOSTAT_LAT_GROUP_NAME);
     await this.groupGlobalUfsCmdTagTracks(
         UFS_CMD_TAG, UFS_CMD_TAG_GROUP_NAME);
+    await this.groupGlobalBuddyInfoTracks();
+    await this.groupKernelWakelockTracks();
 
     // Pre-group all kernel "threads" (actually processes) if this is a linux
     // system trace. Below, addProcessTrackGroups will skip them due to an
@@ -1525,6 +1653,17 @@ class TrackDecider {
     await this.addThreadSliceTracks();
     await this.addThreadCpuSampleTracks();
     await this.addLogsTrack();
+
+    // TODO(hjd): Move into plugin API.
+    {
+      const result = scrollJankDecideTracks(this.engine, (utid, upid) => {
+        return this.getUuid(utid, upid);
+      });
+      if (result !== null) {
+        const {tracksToAdd} = await result;
+        this.tracksToAdd.push(...tracksToAdd);
+      }
+    }
 
     this.addTrackGroupActions.push(
         Actions.addTracks({tracks: this.tracksToAdd}));
