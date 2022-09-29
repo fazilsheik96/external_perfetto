@@ -15,9 +15,11 @@
  */
 
 #include "src/trace_processor/importers/proto/profile_module.h"
+#include <string>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/ext/base/string_utils.h"
+#include "src/trace_processor/importers/common/args_translation_table.h"
 #include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/importers/common/event_tracker.h"
 #include "src/trace_processor/importers/common/process_tracker.h"
@@ -32,6 +34,7 @@
 #include "src/trace_processor/timestamped_trace_piece.h"
 #include "src/trace_processor/trace_sorter.h"
 #include "src/trace_processor/types/trace_processor_context.h"
+#include "src/trace_processor/util/stack_traces_util.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
 #include "protos/perfetto/common/perf_events.pbzero.h"
@@ -445,7 +448,7 @@ void ProfileModule::ParseModuleSymbols(ConstBytes blob) {
   StringId build_id;
   // TODO(b/148109467): Remove workaround once all active Chrome versions
   // write raw bytes instead of a string as build_id.
-  if (module_symbols.build_id().size == 33) {
+  if (util::IsHexModuleId(module_symbols.build_id())) {
     build_id = context_->storage->InternString(module_symbols.build_id());
   } else {
     build_id = context_->storage->InternString(base::StringView(base::ToHex(
@@ -464,12 +467,17 @@ void ProfileModule::ParseModuleSymbols(ConstBytes blob) {
     uint32_t symbol_set_id = context_->storage->symbol_table().row_count();
 
     bool has_lines = false;
+    // Taking the last (i.e. the least interned) location if there're several.
+    ArgsTranslationTable::SourceLocation last_location;
     for (auto line_it = address_symbols.lines(); line_it; ++line_it) {
       protos::pbzero::Line::Decoder line(*line_it);
       context_->storage->mutable_symbol_table()->Insert(
           {symbol_set_id, context_->storage->InternString(line.function_name()),
            context_->storage->InternString(line.source_file_name()),
            line.line_number()});
+      last_location = ArgsTranslationTable::SourceLocation{
+          line.source_file_name().ToStdString(),
+          line.function_name().ToStdString(), line.line_number()};
       has_lines = true;
     }
     if (!has_lines) {
@@ -477,6 +485,8 @@ void ProfileModule::ParseModuleSymbols(ConstBytes blob) {
     }
     bool frame_found = false;
     for (MappingId mapping_id : mapping_ids) {
+      context_->args_translation_table->AddNativeSymbolTranslationRule(
+          mapping_id, address_symbols.address(), last_location);
       std::vector<FrameId> frame_ids =
           context_->global_stack_profile_tracker->FindFrameIds(
               mapping_id, address_symbols.address());

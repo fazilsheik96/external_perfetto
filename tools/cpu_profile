@@ -28,6 +28,7 @@ import signal
 import subprocess
 import sys
 import tempfile
+import textwrap
 import time
 import uuid
 
@@ -116,6 +117,10 @@ def parse_and_validate_args():
       metavar="CONFIG",
       default=None)
   parser.add_argument(
+      "--print-config",
+      action="store_true",
+      help="Print config instead of running. For debugging.")
+  parser.add_argument(
       "-o",
       "--output",
       help="Output directory for recorded trace.",
@@ -172,7 +177,8 @@ def get_perfetto_config(args):
       sys.exit("Unable to read config file: {}".format(error))
 
   CONFIG_INDENT = '      '
-  CONFIG = '''buffers {{
+  CONFIG = textwrap.dedent('''\
+  buffers {{
     size_kb: 2048
   }}
 
@@ -197,7 +203,7 @@ def get_perfetto_config(args):
       perf_event_config {{
         all_cpus: true
         sampling_frequency: {frequency}
-{target_config}
+  {target_config}
       }}
     }}
   }}
@@ -206,9 +212,8 @@ def get_perfetto_config(args):
   write_into_file: true
   flush_timeout_ms: 30000
   flush_period_ms: 604800000
-  '''
+  ''')
 
-  target_config = ""
   matching_processes = []
   if args.name is not None:
     names_to_match = [name.strip() for name in args.name.split(',')]
@@ -217,13 +222,14 @@ def get_perfetto_config(args):
   if not matching_processes:
     sys.exit("No running processes matched for profiling.")
 
-  for process in matching_processes:
-    target_config += CONFIG_INDENT + 'target_cmdline: "{}"\n'.format(process)
+  target_config = "\n".join(
+      [f'{CONFIG_INDENT}target_cmdline: "{p}"' for p in matching_processes])
 
-  print("Configured profiling for these processes:\n")
-  for matching_process in matching_processes:
-    print(matching_process)
-  print()
+  if not args.print_config:
+    print("Configured profiling for these processes:\n")
+    for matching_process in matching_processes:
+      print(matching_process)
+    print()
 
   config = CONFIG.format(
       frequency=args.frequency,
@@ -320,17 +326,17 @@ def record_trace(config, profile_target):
   adb_check_output(['adb', 'shell', 'rm', profile_device_path])
 
 
-def get_trace_to_text():
-  """Sets up and returns the path to `trace_to_text`."""
+def get_traceconv():
+  """Sets up and returns the path to `traceconv`."""
   try:
-    trace_to_text = get_perfetto_prebuilt('trace_to_text', soft_fail=True)
+    traceconv = get_perfetto_prebuilt('traceconv', soft_fail=True)
   except Exception as error:
     exit_with_bug_report(error)
-  if trace_to_text is None:
+  if traceconv is None:
     exit_with_bug_report(
-        "Unable to download `trace_to_text` for symbolizing profiles.")
+        "Unable to download `traceconv` for symbolizing profiles.")
 
-  return trace_to_text
+  return traceconv
 
 
 def concatenate_files(files_to_concatenate, output_file):
@@ -346,11 +352,11 @@ def concatenate_files(files_to_concatenate, output_file):
         shutil.copyfileobj(input, output)
 
 
-def symbolize_trace(trace_to_text, profile_target):
+def symbolize_trace(traceconv, profile_target):
   """Attempts symbolization of the recorded trace/profile, if symbols are available.
 
   Args:
-    trace_to_text: The path to the `trace_to_text` binary used for symbolization.
+    traceconv: The path to the `traceconv` binary used for symbolization.
     profile_target: The directory where the recorded trace was output.
 
   Returns:
@@ -364,7 +370,7 @@ def symbolize_trace(trace_to_text, profile_target):
   if binary_path is not None:
     try:
       with open(os.path.join(profile_target, 'symbols'), 'w') as symbols_file:
-        return_code = subprocess.call([trace_to_text, 'symbolize', trace_file],
+        return_code = subprocess.call([traceconv, 'symbolize', trace_file],
                                       env=dict(
                                           os.environ,
                                           PERFETTO_BINARY_PATH=binary_path),
@@ -386,25 +392,25 @@ def symbolize_trace(trace_to_text, profile_target):
   return trace_file
 
 
-def generate_pprof_profiles(trace_to_text, trace_file):
+def generate_pprof_profiles(traceconv, trace_file):
   """Generates pprof profiles from the recorded trace.
 
   Args:
-    trace_to_text: The path to the `trace_to_text` binary used for generating profiles.
+    traceconv: The path to the `traceconv` binary used for generating profiles.
     trace_file: The oath to the recorded and potentially symbolized trace file.
 
   Returns:
     The directory where pprof profiles are output.
   """
   try:
-    trace_to_text_output = subprocess.check_output(
-        [trace_to_text, 'profile', '--perf', trace_file])
+    traceconv_output = subprocess.check_output(
+        [traceconv, 'profile', '--perf', trace_file])
   except Exception as error:
     exit_with_bug_report(
         "Unable to extract profiles from trace: {}".format(error))
 
   profiles_output_directory = None
-  for word in trace_to_text_output.decode('utf-8').split():
+  for word in traceconv_output.decode('utf-8').split():
     if 'perf_profile-' in word:
       profiles_output_directory = word
   if profiles_output_directory is None:
@@ -430,64 +436,168 @@ def copy_profiles_to_destination(profile_target, profile_path):
 def main(argv):
   args = parse_and_validate_args()
   profile_target = get_and_prepare_profile_target(args)
-  record_trace(get_perfetto_config(args), profile_target)
-  trace_to_text = get_trace_to_text()
-  trace_file = symbolize_trace(trace_to_text, profile_target)
-  copy_profiles_to_destination(
-      profile_target, generate_pprof_profiles(trace_to_text, trace_file))
+  trace_config = get_perfetto_config(args)
+  if args.print_config:
+    print(trace_config)
+    return 0
+  record_trace(trace_config, profile_target)
+  traceconv = get_traceconv()
+  trace_file = symbolize_trace(traceconv, profile_target)
+  copy_profiles_to_destination(profile_target,
+                               generate_pprof_profiles(traceconv, trace_file))
   return 0
 
 
 # BEGIN_SECTION_GENERATED_BY(roll-prebuilts)
-# Revision: v25.0
+# Revision: v27.1
 PERFETTO_PREBUILT_MANIFEST = [{
     'tool':
-        'trace_to_text',
+        'traceconv',
     'arch':
         'mac-amd64',
     'file_name':
-        'trace_to_text',
+        'traceconv',
     'file_size':
-        6525752,
+        6689896,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/mac-amd64/trace_to_text',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/mac-amd64/traceconv',
     'sha256':
-        '64ccf6bac87825145691c6533412e514891f82300d68ff7ce69e8d2ca69aaf62',
+        '0789ac099d3f8dd7ef4838a6e0befbc7776ff791666d623f3513a5b1de4f31c5',
     'platform':
         'darwin',
     'machine': ['x86_64']
 }, {
     'tool':
-        'trace_to_text',
+        'traceconv',
     'arch':
-        'windows-amd64',
+        'mac-arm64',
     'file_name':
-        'trace_to_text.exe',
+        'traceconv',
     'file_size':
-        5925888,
+        5496552,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/windows-amd64/trace_to_text.exe',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/mac-arm64/traceconv',
     'sha256':
-        '29e50ec4d8e28c7c322ba13273afcce80c63fe7d9f182b83af0e2077b4d2b952',
+        '6878c913a655a30f6acf0f1394c4fc063a105fbbf851d7fe7934730dc74c8ddb',
     'platform':
-        'win32',
-    'machine': ['amd64']
+        'darwin',
+    'machine': ['arm64']
 }, {
     'tool':
-        'trace_to_text',
+        'traceconv',
     'arch':
         'linux-amd64',
     'file_name':
-        'trace_to_text',
+        'traceconv',
     'file_size':
-        6939560,
+        7159072,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/linux-amd64/trace_to_text',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-amd64/traceconv',
     'sha256':
-        '109f4ff3bbd47633b0c08a338f1230e69d529ddf1584656ed45d8a59acaaabeb',
+        '72d0b99c2396c1d6fa684a5242a6d307b63163810c7664ebe343ee6da3e2cfab',
     'platform':
         'linux',
     'machine': ['x86_64']
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'linux-arm',
+    'file_name':
+        'traceconv',
+    'file_size':
+        5305732,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-arm/traceconv',
+    'sha256':
+        '891af2f6b9524a1c2433f47c73ad08636c2a9d2619996811fc94ad78c2999d7b',
+    'platform':
+        'linux',
+    'machine': ['armv6l', 'armv7l', 'armv8l']
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'linux-arm64',
+    'file_name':
+        'traceconv',
+    'file_size':
+        6342040,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-arm64/traceconv',
+    'sha256':
+        '3adfb7bdd2ce2b0e3d9de7f4a274edec1b698d3e20ae50adcf5196b910507923',
+    'platform':
+        'linux',
+    'machine': ['aarch64']
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'android-arm',
+    'file_name':
+        'traceconv',
+    'file_size':
+        4337052,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-arm/traceconv',
+    'sha256':
+        'e84db6cf5a45d9f4adca404255fb5c6f4038d9984e1701b962279fffdc4084f3'
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'android-arm64',
+    'file_name':
+        'traceconv',
+    'file_size':
+        5706496,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-arm64/traceconv',
+    'sha256':
+        '28cb523c7b84430c2fa21a3c62dfe1d489e15b7355ef58b51a5680819cf32d37'
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'android-x86',
+    'file_name':
+        'traceconv',
+    'file_size':
+        6548852,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-x86/traceconv',
+    'sha256':
+        '2369f2a3194f15dada309fb517407a87ed542aad1133921803c136c40ca5dea9'
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'android-x64',
+    'file_name':
+        'traceconv',
+    'file_size':
+        6820632,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-x64/traceconv',
+    'sha256':
+        'e95534c667c292a247f62dd413050f19e4b08f7a2725e0ab9abd8270d2f8df28'
+}, {
+    'tool':
+        'traceconv',
+    'arch':
+        'windows-amd64',
+    'file_name':
+        'traceconv.exe',
+    'file_size':
+        6850048,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/windows-amd64/traceconv.exe',
+    'sha256':
+        '19cdec3824d369be3bb053b40b3cfe9f62c2e57e71a5e2ee17ca15b6e7463683',
+    'platform':
+        'win32',
+    'machine': ['amd64']
 }]
 
 
@@ -541,9 +651,11 @@ def get_perfetto_prebuilt(tool_name, soft_fail=False, arch=None):
   manifest_entry = None
   for entry in PERFETTO_PREBUILT_MANIFEST:
     # If the caller overrides the arch, just match that (for Android prebuilts).
-    if arch and entry.get('arch') == arch:
-      manifest_entry = entry
-      break
+    if arch:
+      if entry.get('arch') == arch:
+        manifest_entry = entry
+        break
+      continue
     # Otherwise guess the local machine arch.
     if entry.get('tool') == tool_name and entry.get(
         'platform') == plat and machine in entry.get('machine', []):

@@ -18,6 +18,7 @@ syntax = "proto2";
 
 package perfetto.protos;
 
+import "protos/perfetto/metrics/android/android_frame_timeline_metric.proto";
 import "protos/perfetto/metrics/android/batt_metric.proto";
 import "protos/perfetto/metrics/android/cpu_metric.proto";
 import "protos/perfetto/metrics/android/camera_metric.proto";
@@ -32,7 +33,7 @@ import "protos/perfetto/metrics/android/hwcomposer.proto";
 import "protos/perfetto/metrics/android/hwui_metric.proto";
 import "protos/perfetto/metrics/android/ion_metric.proto";
 import "protos/perfetto/metrics/android/irq_runtime_metric.proto";
-import "protos/perfetto/metrics/android/jank_metric.proto";
+import "protos/perfetto/metrics/android/jank_cuj_metric.proto";
 import "protos/perfetto/metrics/android/java_heap_histogram.proto";
 import "protos/perfetto/metrics/android/java_heap_stats.proto";
 import "protos/perfetto/metrics/android/lmk_metric.proto";
@@ -100,7 +101,7 @@ message TraceAnalysisStats {
 
 // Root message for all Perfetto-based metrics.
 //
-// Next id: 47
+// Next id: 49
 message TraceMetrics {
   reserved 4, 10, 13, 14, 16, 19;
 
@@ -173,11 +174,14 @@ message TraceMetrics {
   // Frame timing and jank root causes for system UI interactions.
   optional AndroidSysUiCujMetrics android_sysui_cuj = 27;
 
+  // Interaction and frame timings for CUJs (important UI transitions).
+  optional AndroidJankCujMetric android_jank_cuj = 48;
+
   // Metric associated with hwcomposer.
   optional AndroidHwcomposerMetrics android_hwcomposer = 28;
 
-  // Detects common bad patterns that might lead to jank.
-  optional AndroidJankMetrics android_jank = 29;
+  // Deprecated was AndroidJankMetrics;
+  reserved 29;
 
   // G2D metrics.
   optional G2dMetrics g2d = 30;
@@ -225,6 +229,9 @@ message TraceMetrics {
 
   // Per-process Binder transaction metrics.
   optional AndroidBinderMetric android_binder = 46;
+
+  // Metrics for app deadline missed.
+  optional AndroidFrameTimelineMetric android_frame_timeline_metric = 47;
 
   // Demo extensions.
   extensions 450 to 499;

@@ -27,7 +27,7 @@ exec python3 - "$@" <<'#'EOF
 TOOL_NAME = 'trace_processor_shell'
 
 # BEGIN_SECTION_GENERATED_BY(roll-prebuilts)
-# Revision: v25.0
+# Revision: v27.1
 PERFETTO_PREBUILT_MANIFEST = [{
     'tool':
         'trace_processor_shell',
@@ -36,11 +36,11 @@ PERFETTO_PREBUILT_MANIFEST = [{
     'file_name':
         'trace_processor_shell',
     'file_size':
-        7302832,
+        7483288,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/mac-amd64/trace_processor_shell',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/mac-amd64/trace_processor_shell',
     'sha256':
-        'edc841a7f6769959f3b03f1e93dcd263d30864dc3e1fc4e3fcdbe4e44e19b02a',
+        '629e9cda1694c2d48d83492b8d5247e9aef0f2e3c9adc1e7cae9711e822b522f',
     'platform':
         'darwin',
     'machine': ['x86_64']
@@ -52,30 +52,14 @@ PERFETTO_PREBUILT_MANIFEST = [{
     'file_name':
         'trace_processor_shell',
     'file_size':
-        6393768,
+        6228936,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/mac-arm64/trace_processor_shell',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/mac-arm64/trace_processor_shell',
     'sha256':
-        '9f768e35d85501d18f09b0313c037a34f3306663d504f31e4874b1b3b20a00d6',
+        '4b96021512b1e3a6b802c3ca8a88e1f3092642904f031bd3285915ece015092d',
     'platform':
         'darwin',
     'machine': ['arm64']
-}, {
-    'tool':
-        'trace_processor_shell',
-    'arch':
-        'windows-amd64',
-    'file_name':
-        'trace_processor_shell.exe',
-    'file_size':
-        6942720,
-    'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/windows-amd64/trace_processor_shell.exe',
-    'sha256':
-        'c7118d820f720ca99acc9ef736f553cb0ba01d034e8f61b83f44d857f76058ce',
-    'platform':
-        'win32',
-    'machine': ['amd64']
 }, {
     'tool':
         'trace_processor_shell',
@@ -84,11 +68,11 @@ PERFETTO_PREBUILT_MANIFEST = [{
     'file_name':
         'trace_processor_shell',
     'file_size':
-        7824920,
+        8044560,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/linux-amd64/trace_processor_shell',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-amd64/trace_processor_shell',
     'sha256':
-        '77ec0f9dbec36079d83f2843372446c354d04e7971c1f159c465d4e8e78a3d4d',
+        '90dc594c64699ec128b275596e4fd57a7f43718100fc394f3e25466e2a0910ed',
     'platform':
         'linux',
     'machine': ['x86_64']
@@ -100,11 +84,11 @@ PERFETTO_PREBUILT_MANIFEST = [{
     'file_name':
         'trace_processor_shell',
     'file_size':
-        5076040,
+        5754252,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/linux-arm/trace_processor_shell',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-arm/trace_processor_shell',
     'sha256':
-        '7290ef3bda83736d0076e49bab5524294906bc8d1785ccef876ba8bd490e62b9',
+        '0369e52b0bdbf9d68ea4581c2a61d3b0461657501c7425a948415ad192918bb7',
     'platform':
         'linux',
     'machine': ['armv6l', 'armv7l', 'armv8l']
@@ -116,14 +100,82 @@ PERFETTO_PREBUILT_MANIFEST = [{
     'file_name':
         'trace_processor_shell',
     'file_size':
-        7055416,
+        7160568,
     'url':
-        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v25.0/linux-arm64/trace_processor_shell',
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/linux-arm64/trace_processor_shell',
     'sha256':
-        'b3d91b69a4152419bc3de2df3aeaef400d829e4a87e5c5cb985af0b56f319279',
+        '5a3863df7db2c4b7312eff2799542971291840daaf031caed2264494c5a25fbf',
     'platform':
         'linux',
     'machine': ['aarch64']
+}, {
+    'tool':
+        'trace_processor_shell',
+    'arch':
+        'android-arm',
+    'file_name':
+        'trace_processor_shell',
+    'file_size':
+        4804920,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-arm/trace_processor_shell',
+    'sha256':
+        '13b0b006c3ab2e3b4d382ec49d6688ee9f17dba3a6da0e6d98c02661a4fda30f'
+}, {
+    'tool':
+        'trace_processor_shell',
+    'arch':
+        'android-arm64',
+    'file_name':
+        'trace_processor_shell',
+    'file_size':
+        6424736,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-arm64/trace_processor_shell',
+    'sha256':
+        '7f4e722e7b5c053520a441fc1dd576c07dddf0e19cdb7c4c1231e3636fb7ad8d'
+}, {
+    'tool':
+        'trace_processor_shell',
+    'arch':
+        'android-x86',
+    'file_name':
+        'trace_processor_shell',
+    'file_size':
+        7295244,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-x86/trace_processor_shell',
+    'sha256':
+        '0da051d356ee7ba0ce5e0b16fc145c77f52ab184ab1c038329fc11ba10eb0519'
+}, {
+    'tool':
+        'trace_processor_shell',
+    'arch':
+        'android-x64',
+    'file_name':
+        'trace_processor_shell',
+    'file_size':
+        7682240,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/android-x64/trace_processor_shell',
+    'sha256':
+        'f49eed1830417cec1bff3fdf944d4a936115505733bb2633d40f47c096c83374'
+}, {
+    'tool':
+        'trace_processor_shell',
+    'arch':
+        'windows-amd64',
+    'file_name':
+        'trace_processor_shell.exe',
+    'file_size':
+        7857152,
+    'url':
+        'https://commondatastorage.googleapis.com/perfetto-luci-artifacts/v27.1/windows-amd64/trace_processor_shell.exe',
+    'sha256':
+        'eda1e38cb7490a99ba31285a977a3a564c53f25eae2b301152b2578de62fcc5d',
+    'platform':
+        'win32',
+    'machine': ['amd64']
 }]
 
 
@@ -177,9 +229,11 @@ def get_perfetto_prebuilt(tool_name, soft_fail=False, arch=None):
   manifest_entry = None
   for entry in PERFETTO_PREBUILT_MANIFEST:
     # If the caller overrides the arch, just match that (for Android prebuilts).
-    if arch and entry.get('arch') == arch:
-      manifest_entry = entry
-      break
+    if arch:
+      if entry.get('arch') == arch:
+        manifest_entry = entry
+        break
+      continue
     # Otherwise guess the local machine arch.
     if entry.get('tool') == tool_name and entry.get(
         'platform') == plat and machine in entry.get('machine', []):
@@ -201,8 +255,10 @@ def get_perfetto_prebuilt(tool_name, soft_fail=False, arch=None):
 # END_SECTION_GENERATED_BY(roll-prebuilts)
 
 if __name__ == '__main__':
-  import sys, os
+  import sys, subprocess, os
   bin_path = get_perfetto_prebuilt(TOOL_NAME)
+  if sys.platform.lower() == 'win32':
+    exit(subprocess.check_call([bin_path, *sys.argv[1:]]))
   os.execv(bin_path, [bin_path] + sys.argv[1:])
 
 #EOF

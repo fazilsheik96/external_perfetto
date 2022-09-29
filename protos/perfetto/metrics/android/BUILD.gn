@@ -20,6 +20,7 @@ perfetto_proto_library("@TYPE@") {
     "source_set",
   ]
   sources = [
+    "android_frame_timeline_metric.proto",
     "android_trusty_workqueues.proto",
     "batt_metric.proto",
     "binder_metric.proto",
@@ -36,7 +37,7 @@ perfetto_proto_library("@TYPE@") {
     "hwui_metric.proto",
     "ion_metric.proto",
     "irq_runtime_metric.proto",
-    "jank_metric.proto",
+    "jank_cuj_metric.proto",
     "java_heap_histogram.proto",
     "java_heap_stats.proto",
     "lmk_metric.proto",

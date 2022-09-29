@@ -12,17 +12,12 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-import {assertTrue} from '../base/logging';
-import {PivotTree} from '../controller/pivot_table_redux_controller';
 import {RecordConfig} from '../controller/record_config_types';
-import {TableColumn} from '../frontend/pivot_table_redux_query_generator';
-
 import {
-  AggregationAttrs,
-  PivotAttrs,
-  SubQueryAttrs,
-  TableAttrs
-} from './pivot_table_common';
+  Aggregation,
+  PivotTree,
+  TableColumn,
+} from '../frontend/pivot_table_redux_types';
 
 /**
  * A plain js object, holding objects of type |Class| keyed by string id.
@@ -85,7 +80,10 @@ export const MAX_TIME = 180;
 // - add currentEngineId to track the id of the current engine
 // - remove nextNoteId, nextAreaId and use nextId as a unique counter for all
 //   indexing except the indexing of the engines
-export const STATE_VERSION = 17;
+// 18: areaSelection change see b/235869542
+// 19: Added visualisedArgs state.
+// 20: Refactored thread sorting order.
+export const STATE_VERSION = 20;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
@@ -93,13 +91,69 @@ export type EngineMode = 'WASM'|'HTTP_RPC';
 
 export type NewEngineMode = 'USE_HTTP_RPC_IF_AVAILABLE'|'FORCE_BUILTIN_WASM';
 
-export enum TrackKindPriority {
-  'MAIN_THREAD' = 0,
-  'RENDER_THREAD' = 1,
-  'GPU_COMPLETION' = 2,
-  'CHROME_IO_THREAD' = 3,
-  'CHROME_COMPOSITOR' = 4,
-  'ORDINARY' = 5
+// Tracks within track groups (usually corresponding to processes) are sorted.
+// As we want to group all tracks related to a given thread together, we use
+// two keys:
+// - Primary key corresponds to a priority of a track block (all tracks related
+//   to a given thread or a single track if it's not thread-associated).
+// - Secondary key corresponds to a priority of a given thread-associated track
+//   within its thread track block.
+// Each track will have a sort key, which either a primary sort key
+// (for non-thread tracks) or a tid and secondary sort key (mapping of tid to
+// primary sort key is done independently).
+export enum PrimaryTrackSortKey {
+  DEBUG_SLICE_TRACK,
+  NULL_TRACK,
+  PROCESS_SCHEDULING_TRACK,
+  PROCESS_SUMMARY_TRACK,
+  EXPECTED_FRAMES_SLICE_TRACK,
+  ACTUAL_FRAMES_SLICE_TRACK,
+  PERF_SAMPLES_PROFILE_TRACK,
+  HEAP_PROFILE_TRACK,
+  MAIN_THREAD,
+  RENDER_THREAD,
+  GPU_COMPLETION_THREAD,
+  CHROME_IO_THREAD,
+  CHROME_COMPOSITOR_THREAD,
+  ORDINARY_THREAD,
+  COUNTER_TRACK,
+  ASYNC_SLICE_TRACK,
+  ORDINARY_TRACK,
+}
+
+// Key that is used to sort tracks within a block of tracks associated with a
+// given thread.
+export enum InThreadTrackSortKey {
+  THREAD_COUNTER_TRACK,
+  THREAD_SCHEDULING_STATE_TRACK,
+  CPU_STACK_SAMPLES_TRACK,
+  VISUALISED_ARGS_TRACK,
+  ORDINARY,
+  DEFAULT_TRACK,
+}
+
+// Sort key used for sorting tracks associated with a thread.
+export type ThreadTrackSortKey = {
+  utid: number,
+  priority: InThreadTrackSortKey,
+}
+
+// Sort key for all tracks: both thread-associated and non-thread associated.
+export type TrackSortKey = PrimaryTrackSortKey|ThreadTrackSortKey;
+
+// Mapping which defines order for threads within a given process.
+export type UtidToTrackSortKey = {
+  [utid: number]: {
+    tid?: number, sortKey: PrimaryTrackSortKey,
+  }
+}
+
+export enum ProfileType {
+  HEAP_PROFILE = 'heap_profile',
+  NATIVE_HEAP_PROFILE = 'heap_profile:libc.malloc',
+  JAVA_HEAP_PROFILE = 'heap_profile:com.android.art',
+  JAVA_HEAP_GRAPH = 'graph',
+  PERF_SAMPLE = 'perf',
 }
 
 export type FlamegraphStateViewingOption =
@@ -159,7 +213,7 @@ export interface TrackState {
   kind: string;
   name: string;
   labels?: string[];
-  trackKindPriority: TrackKindPriority;
+  trackSortKey: TrackSortKey;
   trackGroup?: string;
   config: {
     trackId?: number;
@@ -249,7 +303,7 @@ export interface HeapProfileSelection {
   id: number;
   upid: number;
   ts: number;
-  type: string;
+  type: ProfileType;
 }
 
 export interface PerfSamplesSelection {
@@ -257,7 +311,7 @@ export interface PerfSamplesSelection {
   id: number;
   upid: number;
   ts: number;
-  type: string;
+  type: ProfileType;
 }
 
 export interface FlamegraphState {
@@ -265,7 +319,7 @@ export interface FlamegraphState {
   upids: number[];
   startNs: number;
   endNs: number;
-  type: string;
+  type: ProfileType;
   viewingOption: FlamegraphStateViewingOption;
   focusRegex: string;
   expandedCallsite?: CallsiteInfo;
@@ -325,30 +379,13 @@ export interface MetricsState {
   requestedMetric?: string;  // Unset after metric request is handled.
 }
 
-export interface PivotTableConfig {
-  availableColumns?: TableAttrs[];   // Undefined until list is loaded.
-  availableAggregations?: string[];  // Undefined until list is loaded.
-}
-
-export interface PivotTableState {
-  id: string;
-  name: string;
-  selectedPivots: PivotAttrs[];
-  selectedAggregations: AggregationAttrs[];
-  requestedAction?:  // Unset after pivot table column request is handled.
-      {action: string, attrs?: SubQueryAttrs};
-  isLoadingQuery: boolean;
-  traceTime?: TraceTime;
-  selectedTrackIds?: number[];
-}
-
 // Auxiliary metadata needed to parse the query result, as well as to render it
 // correctly. Generated together with the text of query and passed without the
 // change to the query response.
 export interface PivotTableReduxQueryMetadata {
   tableName: string;
-  pivotColumns: string[];
-  aggregationColumns: string[];
+  pivotColumns: TableColumn[];
+  aggregationColumns: Aggregation[];
 }
 
 // Everything that's necessary to run the query for pivot table
@@ -372,23 +409,37 @@ export interface PivotTableReduxAreaState {
   tracks: string[];
 }
 
+export type SortDirection = 'DESC'|'ASC';
+
 export interface PivotTableReduxState {
   // Currently selected area, if null, pivot table is not going to be visible.
   selectionArea: PivotTableReduxAreaState|null;
+
   // Query response
   queryResult: PivotTableReduxResult|null;
+
   // Whether the panel is in edit mode
   editMode: boolean;
+
   // Selected pivots. Map instead of Set because ES6 Set can't have
   // non-primitive keys; here keys are concatenated values.
   selectedPivotsMap: Map<string, TableColumn>;
+
   // Selected aggregation columns. Stored same way as pivots.
-  selectedAggregations: Map<string, TableColumn>;
+  selectedAggregations: Map<string, Aggregation>;
+
+  // Present if the result should be sorted, and in which direction.
+  sortCriteria?: {column: TableColumn, order: SortDirection};
+
   // Whether the pivot table results should be constrained to the selected area.
   constrainToArea: boolean;
+
   // Set to true by frontend to request controller to perform the query to
   // acquire the necessary data from the engine.
   queryRequested: boolean;
+
+  // Argument names in the current trace, used for autocompletion purposes.
+  argumentNames: string[];
 }
 
 export interface LoadedConfigNone {
@@ -433,6 +484,7 @@ export interface State {
   trackGroups: ObjectById<TrackGroupState>;
   tracks: ObjectById<TrackState>;
   uiTrackIdByTraceTrackId: {[key: number]: string;};
+  utidToThreadSortKey: UtidToTrackSortKey;
   areas: ObjectById<AreaById>;
   aggregatePreferences: ObjectById<AggregationState>;
   visibleTracks: string[];
@@ -449,8 +501,7 @@ export interface State {
   currentFlamegraphState: FlamegraphState|null;
   logsPagination: LogsPagination;
   traceConversionInProgress: boolean;
-  pivotTableConfig: PivotTableConfig;
-  pivotTable: ObjectById<PivotTableState>;
+  visualisedArgs: string[];
 
   /**
    * This state is updated on the frontend at 60Hz and eventually syncronised to
@@ -512,11 +563,6 @@ export declare type RecordMode =
 // 'Q','P','O' for Android, 'L' for Linux, 'C' for Chrome.
 export declare type TargetOs = 'S' | 'R' | 'Q' | 'P' | 'O' | 'C' | 'L' | 'CrOS';
 
-export function isTargetOsAtLeast(target: RecordingTarget, osVersion: string) {
-  assertTrue(osVersion.length === 1);
-  return target.os >= osVersion;
-}
-
 export function isAndroidP(target: RecordingTarget) {
   return target.os === 'P';
 }
@@ -565,7 +611,7 @@ export function getDefaultRecordingTargets(): RecordingTarget[] {
     {os: 'O', name: 'Android O-'},
     {os: 'C', name: 'Chrome'},
     {os: 'CrOS', name: 'Chrome OS (system trace)'},
-    {os: 'L', name: 'Linux desktop'}
+    {os: 'L', name: 'Linux desktop'},
   ];
 }
 
