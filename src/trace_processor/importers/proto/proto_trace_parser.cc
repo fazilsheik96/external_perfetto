@@ -106,7 +106,7 @@ void ProtoTraceParser::ParseTracePacket(int64_t ts, TracePacketData data) {
 }
 
 void ProtoTraceParser::ParseTrackEvent(int64_t ts, TrackEventData data) {
-  const TraceBlobView& blob = data.packet;
+  const TraceBlobView& blob = data.trace_packet_data.packet;
   protos::pbzero::TracePacket::Decoder packet(blob.data(), blob.length());
   context_->track_module->ParseTrackEventData(packet, ts, data);
   context_->args_tracker->Flush();
@@ -153,6 +153,8 @@ void ProtoTraceParser::ParseTraceStats(ConstBytes blob) {
   auto* storage = context_->storage.get();
   storage->SetStats(stats::traced_producers_connected,
                     static_cast<int64_t>(evt.producers_connected()));
+  storage->SetStats(stats::traced_producers_seen,
+                    static_cast<int64_t>(evt.producers_seen()));
   storage->SetStats(stats::traced_data_sources_registered,
                     static_cast<int64_t>(evt.data_sources_registered()));
   storage->SetStats(stats::traced_data_sources_seen,
