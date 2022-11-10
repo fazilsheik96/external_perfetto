@@ -410,7 +410,9 @@ export class TraceController extends Controller<States> {
       const query = `select str_value from metadata where name = 'trace_type'`;
       const result = await assertExists(this.engine).query(query);
       const traceType = result.firstRow({str_value: STR});
-      if (traceType.str_value == 'json') {
+      // When in embedded mode, the host app will control which trace format
+      // it passes to Perfetto, so we don't need to show this warning.
+      if (traceType.str_value == 'json' && !frontendGlobals.embeddedMode) {
         showJsonWarning();
       }
     };
@@ -870,7 +872,9 @@ async function computeVisibleTime(
   // if we have non-default visible state, update the visible time to it
   const previousVisibleState = globals.state.frontendLocalState.visibleState;
   if (!(previousVisibleState.startSec === defaultTraceTime.startSec &&
-        previousVisibleState.endSec === defaultTraceTime.endSec)) {
+        previousVisibleState.endSec === defaultTraceTime.endSec) &&
+        (previousVisibleState.startSec >= traceStartSec &&
+        previousVisibleState.endSec <= traceEndSec)) {
     return [previousVisibleState.startSec, previousVisibleState.endSec];
   }
 
