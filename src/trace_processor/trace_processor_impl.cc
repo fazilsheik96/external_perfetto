@@ -38,6 +38,7 @@
 #include "src/trace_processor/dynamic/view_generator.h"
 #include "src/trace_processor/export_json.h"
 #include "src/trace_processor/importers/additional_modules.h"
+#include "src/trace_processor/importers/android_bugreport/android_bugreport_parser.h"
 #include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
 #include "src/trace_processor/importers/fuchsia/fuchsia_trace_parser.h"
@@ -778,15 +779,26 @@ void IncrementCountForStmt(sqlite3_stmt* stmt,
   if (sqlite_utils::IsStmtDone(stmt))
     return;
 
-  // If the statement only has a single column and that column is named
-  // "suppress_query_output", treat it as a statement without output for
-  // accounting purposes. This is done so that embedders (e.g. shell) can
-  // strictly check that only the last query produces output while also
-  // providing an escape hatch for SELECT RUN_METRIC() invocations (which
-  // sadly produce output).
-  if (sqlite3_column_count(stmt) == 1 &&
-      strcmp(sqlite3_column_name(stmt, 0), "suppress_query_output") == 0) {
-    return;
+  if (sqlite3_column_count(stmt) == 1) {
+    sqlite3_value* value = sqlite3_column_value(stmt, 0);
+
+    // If the "VOID" pointer associated to the return value is not null,
+    // that means this is a function which is forced to return a value
+    // (because all functions in SQLite have to) but doesn't actually
+    // wait to (i.e. it wants to be treated like CREATE TABLE or similar).
+    // Because of this, ignore the return value of this function.
+    // See |WrapSqlFunction| for where this is set.
+    if (sqlite3_value_pointer(value, "VOID") != nullptr) {
+      return;
+    }
+
+    // If the statement only has a single column and that column is named
+    // "suppress_query_output", treat it as a statement without output for
+    // accounting purposes. This allows an escape hatch for cases where the
+    // user explicitly wants to ignore functions as having output.
+    if (strcmp(sqlite3_column_name(stmt, 0), "suppress_query_output") == 0) {
+      return;
+    }
   }
 
   // Otherwise, the statement has output and so increment the count.
@@ -897,8 +909,11 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
 
   context_.systrace_trace_parser.reset(new SystraceTraceParser(&context_));
 
-  if (util::IsGzipSupported())
+  if (util::IsGzipSupported()) {
     context_.gzip_trace_parser.reset(new GzipTraceParser(&context_));
+    context_.android_bugreport_parser.reset(
+        new AndroidBugreportParser(&context_));
+  }
 
   if (json::IsJsonSupported()) {
     context_.json_trace_tokenizer.reset(new JsonTraceTokenizer(&context_));
@@ -1045,10 +1060,11 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDbTable(storage->stack_profile_mapping_table());
   RegisterDbTable(storage->stack_profile_frame_table());
   RegisterDbTable(storage->package_list_table());
-  RegisterDbTable(storage->android_game_intervention_list_table());
   RegisterDbTable(storage->profiler_smaps_table());
 
   RegisterDbTable(storage->android_log_table());
+  RegisterDbTable(storage->android_dumpstate_table());
+  RegisterDbTable(storage->android_game_intervention_list_table());
 
   RegisterDbTable(storage->vulkan_memory_allocations_table());
 
@@ -1066,6 +1082,8 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDbTable(storage->process_memory_snapshot_table());
   RegisterDbTable(storage->memory_snapshot_node_table());
   RegisterDbTable(storage->memory_snapshot_edge_table());
+
+  RegisterDbTable(storage->experimental_proto_content_table());
 }
 
 TraceProcessorImpl::~TraceProcessorImpl() = default;
@@ -1100,7 +1118,7 @@ void TraceProcessorImpl::NotifyEndOfFile() {
     PERFETTO_ELOG(
         "NotifyEndOfFile should only be called once. Try calling Flush instead "
         "if trying to commit the contents of the trace to tables.");
-    PERFETTO_DCHECK(!notify_eof_called_);
+    return;
   }
   notify_eof_called_ = true;
 
@@ -1124,6 +1142,15 @@ void TraceProcessorImpl::NotifyEndOfFile() {
   }
 
   context_.storage->ShrinkToFitTables();
+
+  // Rebuild the bounds table once everything has been completed: we do this
+  // so that if any data was added to tables in
+  // TraceProcessorStorageImpl::NotifyEndOfFile, this will be counted in
+  // trace bounds: this is important for parsers like ninja which wait until
+  // the end to flush all their data.
+  BuildBoundsTable(*db_, context_.storage->GetTraceTimestampBoundsNs());
+
+  TraceProcessorStorageImpl::DestroyContext();
 }
 
 size_t TraceProcessorImpl::RestoreInitialTables() {

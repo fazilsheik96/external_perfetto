@@ -75,7 +75,10 @@ import {globals} from './globals';
 import {LoadingManager} from './loading_manager';
 import {LogsController} from './logs_controller';
 import {MetricsController} from './metrics_controller';
-import {PivotTableReduxController} from './pivot_table_redux_controller';
+import {
+  PIVOT_TABLE_REDUX_FLAG,
+  PivotTableReduxController,
+} from './pivot_table_redux_controller';
 import {QueryController, QueryControllerArgs} from './query_controller';
 import {SearchController} from './search_controller';
 import {
@@ -228,10 +231,15 @@ export class TraceController extends Controller<States> {
             'cpu_process_aggregation',
             CpuByProcessAggregationController,
             {engine, kind: 'cpu_by_process_aggregation'}));
-        childControllers.push(Child(
-            'slice_aggregation',
-            SliceAggregationController,
-            {engine, kind: 'slice_aggregation'}));
+        if (!PIVOT_TABLE_REDUX_FLAG.get()) {
+          // Pivot table is supposed to handle the use cases the slice
+          // aggregation panel is used right now. When a flag to use pivot
+          // tables is enabled, do not add slice aggregation controller.
+          childControllers.push(Child(
+              'slice_aggregation',
+              SliceAggregationController,
+              {engine, kind: 'slice_aggregation'}));
+        }
         childControllers.push(Child(
             'counter_aggregation',
             CounterAggregationController,
@@ -428,18 +436,19 @@ export class TraceController extends Controller<States> {
   }
 
   private async selectPerfSample() {
-    const query = `select ts, upid
+    const query = `select upid
         from perf_sample
         join thread using (utid)
         where callsite_id is not null
         order by ts desc limit 1`;
     const profile = await assertExists(this.engine).query(query);
     if (profile.numRows() !== 1) return;
-    const row = profile.firstRow({ts: NUM, upid: NUM});
-    const ts = row.ts;
+    const row = profile.firstRow({upid: NUM});
     const upid = row.upid;
+    const leftTs = toNs(globals.state.traceTime.startSec);
+    const rightTs = toNs(globals.state.traceTime.endSec);
     globals.dispatch(Actions.selectPerfSamples(
-        {id: 0, upid, ts, type: ProfileType.PERF_SAMPLE}));
+        {id: 0, upid, leftTs, rightTs, type: ProfileType.PERF_SAMPLE}));
   }
 
   private async selectFirstHeapProfile() {
