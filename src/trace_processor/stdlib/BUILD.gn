@@ -13,29 +13,20 @@
 # limitations under the License.
 
 import("../../../gn/perfetto.gni")
-import("android/sql_files.gni")
+import("../../../gn/perfetto_sql.gni")
 
-config("gen_config") {
-  include_dirs = [ "${root_gen_dir}/${perfetto_root_path}" ]
+assert(enable_perfetto_trace_processor_sqlite)
+
+source_set("stdlib") {
+  sources = [ "utils.h" ]
+  deps = [ ":gen_amalgamated_stdlib" ]
 }
 
-sql_files = android_sql_files
-
-action("gen_amalgamated_stdlib") {
-  script = "../../../tools/gen_amalgamated_sql.py"
-  generated_header = "${target_gen_dir}/amalgamated_stdlib.h"
-  args = rebase_path(sql_files, root_build_dir) + [
-           "--type=LIB",
-           "--cpp_out",
-           rebase_path(generated_header, root_build_dir),
-         ]
-  inputs = sql_files
-  outputs = [ generated_header ]
-  public_configs = [ ":gen_config" ]
-}
-if (enable_perfetto_trace_processor_sqlite) {
-  source_set("stdlib") {
-    sources = [ "utils.h" ]
-    deps = [ ":gen_amalgamated_stdlib" ]
-  }
+perfetto_amalgamated_sql_header("gen_amalgamated_stdlib") {
+  deps = [
+    "android",
+    "experimental",
+  ]
+  generated_header = "amalgamated_stdlib.h"
+  namespace = "stdlib"
 }
