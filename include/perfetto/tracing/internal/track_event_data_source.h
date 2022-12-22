@@ -35,6 +35,28 @@
 
 namespace perfetto {
 
+namespace {
+
+class StopArgsImpl : public DataSourceBase::StopArgs {
+ public:
+  // HandleAsynchronously() can optionally be called to defer the tracing
+  // session stop and write track events just before stopping. This function
+  // returns a closure that must be invoked after the last track events have
+  // been emitted. The caller also needs to explicitly call
+  // TrackEvent::Flush() because no other implicit flushes will happen after
+  // the stop signal.
+  // See the comment in include/perfetto/tracing/data_source.h for more info.
+  std::function<void()> HandleStopAsynchronously() const override {
+    auto closure = std::move(async_stop_closure);
+    async_stop_closure = std::function<void()>();
+    return closure;
+  }
+
+  mutable std::function<void()> async_stop_closure;
+};
+
+}  // namespace
+
 // A function for converting an abstract timestamp into a
 // perfetto::TraceTimestamp struct. By specialising this template and defining
 // static ConvertTimestampToTraceTimeNs function in it the user can register
@@ -178,16 +200,18 @@ class TrackEventDataSource
   using Base = DataSource<DataSourceType, TrackEventDataSourceTraits>;
 
  public:
+  static constexpr bool kRequiresCallbacksUnderLock = false;
+
   // Add or remove a session observer for this track event data source. The
   // observer will be notified about started and stopped tracing sessions.
   // Returns |true| if the observer was successfully added (i.e., the maximum
   // number of observers wasn't exceeded).
   static bool AddSessionObserver(TrackEventSessionObserver* observer) {
-    return TrackEventInternal::AddSessionObserver(observer);
+    return TrackEventInternal::AddSessionObserver(*Registry, observer);
   }
 
   static void RemoveSessionObserver(TrackEventSessionObserver* observer) {
-    TrackEventInternal::RemoveSessionObserver(observer);
+    TrackEventInternal::RemoveSessionObserver(*Registry, observer);
   }
 
   // DataSource implementation.
@@ -199,16 +223,31 @@ class TrackEventDataSource
   }
 
   void OnStart(const DataSourceBase::StartArgs& args) override {
-    TrackEventInternal::OnStart(args);
+    TrackEventInternal::OnStart(*Registry, args);
   }
 
   void OnStop(const DataSourceBase::StopArgs& args) override {
-    TrackEventInternal::DisableTracing(*Registry, args);
+    auto outer_stop_closure = args.HandleStopAsynchronously();
+    StopArgsImpl inner_stop_args{};
+    uint32_t internal_instance_index = args.internal_instance_index;
+    inner_stop_args.internal_instance_index = internal_instance_index;
+    inner_stop_args.async_stop_closure = [internal_instance_index,
+                                          outer_stop_closure] {
+      TrackEventInternal::DisableTracing(*Registry, internal_instance_index);
+      outer_stop_closure();
+    };
+
+    TrackEventInternal::OnStop(*Registry, inner_stop_args);
+
+    // If inner_stop_args.HandleStopAsynchronously() hasn't been called,
+    // run the async closure here.
+    if (inner_stop_args.async_stop_closure)
+      std::move(inner_stop_args.async_stop_closure)();
   }
 
   void WillClearIncrementalState(
       const DataSourceBase::ClearIncrementalStateArgs& args) override {
-    TrackEventInternal::WillClearIncrementalState(args);
+    TrackEventInternal::WillClearIncrementalState(*Registry, args);
   }
 
   static void Flush() {

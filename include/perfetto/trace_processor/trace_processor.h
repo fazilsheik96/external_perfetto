@@ -24,6 +24,7 @@
 #include "perfetto/base/export.h"
 #include "perfetto/trace_processor/basic_types.h"
 #include "perfetto/trace_processor/iterator.h"
+#include "perfetto/trace_processor/metatrace_config.h"
 #include "perfetto/trace_processor/status.h"
 #include "perfetto/trace_processor/trace_processor_storage.h"
 
@@ -111,7 +112,9 @@ class PERFETTO_EXPORT_COMPONENT TraceProcessor : public TraceProcessorStorage {
   // Metatracing involves tracing trace processor itself to root-cause
   // performace issues in trace processor. See |DisableAndReadMetatrace| for
   // more information on the format of the metatrace.
-  virtual void EnableMetatrace() = 0;
+  using MetatraceConfig = metatrace::MetatraceConfig;
+  using MetatraceCategories = metatrace::MetatraceCategories;
+  virtual void EnableMetatrace(MetatraceConfig config = {}) = 0;
 
   // Disables "meta-tracing" of trace processor and writes the trace as a
   // sequence of |TracePackets| into |trace_proto| returning the status of this

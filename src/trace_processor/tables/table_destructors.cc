@@ -43,6 +43,7 @@ CounterTable::~CounterTable() = default;
 // metadata_tables.h
 RawTable::~RawTable() = default;
 ArgTable::~ArgTable() = default;
+ExpMissingChromeProcTable::~ExpMissingChromeProcTable() = default;
 MetadataTable::~MetadataTable() = default;
 CpuTable::~CpuTable() = default;
 CpuFreqTable::~CpuFreqTable() = default;
@@ -71,7 +72,6 @@ GpuCounterGroupTable::~GpuCounterGroupTable() = default;
 // slice_tables.h
 SliceTable::~SliceTable() = default;
 FlowTable::~FlowTable() = default;
-ThreadSliceTable::~ThreadSliceTable() = default;
 SchedSliceTable::~SchedSliceTable() = default;
 GpuSliceTable::~GpuSliceTable() = default;
 GraphicsFrameSliceTable::~GraphicsFrameSliceTable() = default;
@@ -94,6 +94,9 @@ IrqCounterTrackTable::~IrqCounterTrackTable() = default;
 SoftirqCounterTrackTable::~SoftirqCounterTrackTable() = default;
 GpuCounterTrackTable::~GpuCounterTrackTable() = default;
 PerfCounterTrackTable::~PerfCounterTrackTable() = default;
+EnergyCounterTrackTable::~EnergyCounterTrackTable() = default;
+UidCounterTrackTable::~UidCounterTrackTable() = default;
+EnergyPerUidCounterTrackTable::~EnergyPerUidCounterTrackTable() = default;
 
 // trace_proto_tables.h
 ExperimentalProtoContentTable::~ExperimentalProtoContentTable() = default;

@@ -312,10 +312,12 @@ void AppendOwnedSlicesToPacket(std::unique_ptr<uint8_t[]> data,
 
 }  // namespace
 
+#if !PERFETTO_IS_AT_LEAST_CPP17()
 // These constants instead are defined in the header because are used by tests.
 constexpr size_t TracingServiceImpl::kMaxShmSize;
 constexpr uint32_t TracingServiceImpl::kDataSourceStopTimeoutMs;
 constexpr uint8_t TracingServiceImpl::kSyncMarker[];
+#endif
 
 std::string GetBugreportPath() {
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_ANDROID) && \
@@ -1424,7 +1426,7 @@ void TracingServiceImpl::ActivateTriggers(
   for (const auto& trigger_name : triggers) {
     PERFETTO_DLOG("Received ActivateTriggers request for \"%s\"",
                   trigger_name.c_str());
-    base::Hash hash;
+    base::Hasher hash;
     hash.Update(trigger_name.c_str(), trigger_name.size());
     std::string triggered_session_name;
     base::Uuid triggered_session_uuid;

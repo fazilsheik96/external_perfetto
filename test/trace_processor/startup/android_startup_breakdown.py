@@ -63,7 +63,7 @@ trace.add_atrace_end(ts=to_s(189), tid=3, pid=3)
 trace.add_atrace_begin(
     ts=to_s(188), tid=3, pid=3, buf='ResourcesManager#getResources')
 trace.add_atrace_end(ts=to_s(189), tid=3, pid=3)
-trace.add_atrace_begin(ts=to_s(190), tid=3, pid=3, buf='inflate')
+trace.add_atrace_begin(ts=to_s(191), tid=3, pid=3, buf='inflate')
 trace.add_atrace_end(ts=to_s(192), tid=3, pid=3)
 trace.add_atrace_end(ts=to_s(192), tid=3, pid=3)
 trace.add_atrace_begin(
@@ -71,7 +71,7 @@ trace.add_atrace_begin(
     tid=3,
     pid=3,
     buf='performResume:com.google.android.calendar.MainActivity')
-trace.add_atrace_end(ts=to_s(194), tid=3, pid=3)
+trace.add_atrace_end(ts=to_s(187), tid=3, pid=3)
 trace.add_atrace_end(ts=to_s(195), tid=3, pid=3)
 
 trace.add_atrace_begin(ts=to_s(195), tid=3, pid=3, buf='activityStart')
@@ -91,8 +91,8 @@ trace.add_atrace_begin(
     ts=to_s(204),
     tid=3,
     pid=3,
-    buf='location=/system/framework/oat/arm/com.android.location.provider' \
-        '.odex status=up-to-date filter=speed reason=prebuilt')
+    buf='location=/system/framework/oat/arm/com.google.android.calendar' \
+        '.odex status=up-to-date filter=speed reason=install-dm')
 trace.add_atrace_end(ts=to_s(205), tid=3, pid=3)
 
 trace.add_atrace_async_end(

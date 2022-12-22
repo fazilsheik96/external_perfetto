@@ -51,6 +51,8 @@ source_set("metatrace") {
   deps = [
     "../../gn:default_deps",
     "../../include/perfetto/ext/base",
+    "../../include/perfetto/trace_processor",
+    "../../protos/perfetto/trace_processor:zero",
   ]
 }
 
@@ -94,6 +96,7 @@ source_set("storage_minimal") {
   sources = [
     "forwarding_trace_parser.cc",
     "forwarding_trace_parser.h",
+    "importers/common/trace_parser.cc",
     "importers/default_modules.cc",
     "importers/default_modules.h",
     "importers/ftrace/ftrace_module.cc",
@@ -155,7 +158,7 @@ source_set("storage_minimal") {
     "importers/proto/translation_table_module.h",
     "importers/syscalls/syscall_tracker.h",
     "importers/systrace/systrace_line.h",
-    "timestamped_trace_piece.h",
+    "parser_types.h",
     "trace_blob.cc",
     "trace_processor_context.cc",
     "trace_processor_storage.cc",
@@ -163,6 +166,7 @@ source_set("storage_minimal") {
     "trace_processor_storage_impl.h",
     "trace_sorter.cc",
     "trace_sorter.h",
+    "trace_sorter_internal.h",
     "trace_sorter_queue.h",
     "virtual_destructors.cc",
   ]
@@ -237,6 +241,10 @@ source_set("storage_full") {
     "importers/ftrace/sched_event_tracker.h",
     "importers/ftrace/thread_state_tracker.cc",
     "importers/ftrace/thread_state_tracker.h",
+    "importers/ftrace/v4l2_tracker.cc",
+    "importers/ftrace/v4l2_tracker.h",
+    "importers/ftrace/virtio_video_tracker.cc",
+    "importers/ftrace/virtio_video_tracker.h",
     "importers/fuchsia/fuchsia_record.cc",
     "importers/fuchsia/fuchsia_trace_parser.cc",
     "importers/fuchsia/fuchsia_trace_parser.h",
@@ -346,8 +354,6 @@ if (enable_perfetto_trace_processor_sqlite) {
     ]
 
     deps = [
-      ":demangle",
-      ":export_json",
       ":metatrace",
       ":storage_full",
       "../../gn:default_deps",
@@ -361,6 +367,8 @@ if (enable_perfetto_trace_processor_sqlite) {
       "importers/common",
       "metrics",
       "sqlite",
+      "sqlite/functions",
+      "stdlib",
       "storage",
       "tables",
       "types",
@@ -421,6 +429,7 @@ perfetto_unittest_source_set("unittests") {
     "importers/ftrace/binder_tracker_unittest.cc",
     "importers/ftrace/sched_event_tracker_unittest.cc",
     "importers/ftrace/thread_state_tracker_unittest.cc",
+    "importers/fuchsia/fuchsia_parser_unittest.cc",
     "importers/fuchsia/fuchsia_trace_utils_unittest.cc",
     "importers/memory_tracker/graph_processor_unittest.cc",
     "importers/memory_tracker/graph_unittest.cc",
@@ -467,6 +476,7 @@ perfetto_unittest_source_set("unittests") {
     "importers/proto:storage_minimal",
     "importers/proto:unittests",
     "rpc:unittests",
+    "sqlite/functions:unittests",
     "storage",
     "tables:unittests",
     "types",

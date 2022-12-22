@@ -27,16 +27,22 @@ import {
  */
 export interface ObjectById<Class extends{id: string}> { [id: string]: Class; }
 
-export type Timestamped<T> = {
-  [P in keyof T]: T[P];
-}&{lastUpdate: number};
+export interface Timestamped {
+  lastUpdate: number;
+}
 
 export type OmniboxMode = 'SEARCH'|'COMMAND';
 
-export type OmniboxState = Timestamped<{omnibox: string; mode: OmniboxMode}>;
+export interface OmniboxState extends Timestamped {
+  omnibox: string;
+  mode: OmniboxMode;
+}
 
-export type VisibleState =
-    Timestamped<{startSec: number; endSec: number; resolution: number;}>;
+export interface VisibleState extends Timestamped {
+  startSec: number;
+  endSec: number;
+  resolution: number;
+}
 
 export interface AreaSelection {
   kind: 'AREA';
@@ -86,7 +92,8 @@ export const MAX_TIME = 180;
 // 20: Refactored thread sorting order.
 // 21: Updated perf sample selection to include a ts range instead of single ts
 // 22: Add log selection kind.
-export const STATE_VERSION = 22;
+// 23: Add log filtering criteria for Android log entries.
+export const STATE_VERSION = 23;
 
 export const SCROLLING_TRACK_GROUP = 'ScrollingTracks';
 
@@ -154,7 +161,7 @@ export type UtidToTrackSortKey = {
 export enum ProfileType {
   HEAP_PROFILE = 'heap_profile',
   NATIVE_HEAP_PROFILE = 'heap_profile:libc.malloc',
-  JAVA_HEAP_PROFILE = 'heap_profile:com.android.art',
+  JAVA_HEAP_SAMPLES = 'heap_profile:com.android.art',
   JAVA_HEAP_GRAPH = 'graph',
   PERF_SAMPLE = 'perf',
 }
@@ -393,7 +400,6 @@ export interface MetricsState {
 // correctly. Generated together with the text of query and passed without the
 // change to the query response.
 export interface PivotTableReduxQueryMetadata {
-  tableName: string;
   pivotColumns: TableColumn[];
   aggregationColumns: Aggregation[];
 }
@@ -428,18 +434,18 @@ export interface PivotTableReduxState {
   // Query response
   queryResult: PivotTableReduxResult|null;
 
-  // Selected pivots for tables other than slice/thread_slice.
+  // Selected pivots for tables other than slice.
   // Because of the query generation, pivoting happens first on non-slice
   // pivots; therefore, those can't be put after slice pivots. In order to
   // maintain the separation more clearly, slice and non-slice pivots are
   // located in separate arrays.
   selectedPivots: RegularColumn[];
 
-  // Selected pivots for slice/thread_slice table.
+  // Selected pivots for slice table.
   selectedSlicePivots: TableColumn[];
 
   // Selected aggregation columns. Stored same way as pivots.
-  selectedAggregations: Map<string, Aggregation>;
+  selectedAggregations: Aggregation[];
 
   // Present if the result should be sorted, and in which direction.
   sortCriteria?: {column: TableColumn, order: SortDirection};
@@ -475,6 +481,10 @@ export interface NonSerializableState {
   pivotTableRedux: PivotTableReduxState;
 }
 
+export interface LogFilteringCriteria {
+  minimumLevel: number;
+}
+
 export interface State {
   version: number;
   currentEngineId?: string;
@@ -491,6 +501,12 @@ export interface State {
    * Open traces.
    */
   newEngineMode: NewEngineMode;
+
+  /**
+   * At some point there were plans to support multiple traces support in the
+   * same instance UI. For now, the `engines` mapping contains at most one
+   * EngineConfig.
+   */
   engines: ObjectById<EngineConfig>;
   traceTime: TraceTime;
   traceUuid?: string;
@@ -563,6 +579,9 @@ export interface State {
   // using permalink. Can be used to store those parts of the state that can't
   // be serialized at the moment, such as ES6 Set and Map.
   nonSerializableState: NonSerializableState;
+
+  // Android logs filtering state.
+  logFilteringCriteria: LogFilteringCriteria;
 }
 
 export const defaultTraceTime = {
@@ -602,8 +621,8 @@ export function isAdbTarget(target: RecordingTarget):
 }
 
 export function hasActiveProbes(config: RecordConfig) {
-  const fieldsWithEmptyResult =
-      new Set<string>(['hpBlockClient', 'allAtraceApps']);
+  const fieldsWithEmptyResult = new Set<string>(
+      ['hpBlockClient', 'allAtraceApps', 'chromePrivacyFiltering']);
   let key: keyof RecordConfig;
   for (key in config) {
     if (typeof (config[key]) === 'boolean' && config[key] === true &&
@@ -629,7 +648,7 @@ export function getDefaultRecordingTargets(): RecordingTarget[] {
 }
 
 export function getBuiltinChromeCategoryList(): string[] {
-  // List of static Chrome categories, last updated at 2021-09-09 from HEAD of
+  // List of static Chrome categories, last updated at 2022-10-18 from HEAD of
   // Chromium's //base/trace_event/builtin_categories.h.
   return [
     'accessibility',
@@ -655,12 +674,14 @@ export function getBuiltinChromeCategoryList(): string[] {
     'CacheStorage',
     'Calculators',
     'CameraStream',
+    'cppgc',
     'camera',
     'cast_app',
     'cast_perf_test',
     'cast.mdns',
     'cast.mdns.socket',
     'cast.stream',
+    'catan_investigation',
     'cc',
     'cc.debug',
     'cdp.perf',
@@ -669,6 +690,7 @@ export function getBuiltinChromeCategoryList(): string[] {
     'compositor',
     'content',
     'content_capture',
+    'delegated_ink_trails',
     'device',
     'devtools',
     'devtools.contrast',
@@ -687,12 +709,14 @@ export function getBuiltinChromeCategoryList(): string[] {
     'explore_sites',
     'FileSystem',
     'file_system_provider',
+    'fledge',
     'fonts',
     'GAMEPAD',
     'gpu',
     'gpu.angle',
     'gpu.capture',
     'headless',
+    'history',
     'hwoverlays',
     'identity',
     'ime',
@@ -734,22 +758,24 @@ export function getBuiltinChromeCategoryList(): string[] {
     'ppapi',
     'ppapi_proxy',
     'print',
+    'raf_investigation',
     'rail',
     'renderer',
     'renderer_host',
     'renderer.scheduler',
     'RLZ',
+    'ServiceWorker',
+    'SiteEngagement',
     'safe_browsing',
+    'scheduler',
     'screenlock_monitor',
     'segmentation_platform',
     'sequence_manager',
     'service_manager',
-    'ServiceWorker',
     'sharing',
     'shell',
     'shortcut_viewer',
     'shutdown',
-    'SiteEngagement',
     'skia',
     'sql',
     'stadia_media',
@@ -776,6 +802,7 @@ export function getBuiltinChromeCategoryList(): string[] {
     'WebCore',
     'webrtc',
     'xr',
+    'disabled-by-default-android_view_hierarchy',
     'disabled-by-default-animation-worklet',
     'disabled-by-default-audio',
     'disabled-by-default-audio-worklet',
@@ -785,9 +812,9 @@ export function getBuiltinChromeCategoryList(): string[] {
     'disabled-by-default-blink.debug.layout',
     'disabled-by-default-blink.debug.layout.trees',
     'disabled-by-default-blink.feature_usage',
-    'disabled-by-default-blink_gc',
     'disabled-by-default-blink.image_decoding',
     'disabled-by-default-blink.invalidation',
+    'disabled-by-default-identifiability',
     'disabled-by-default-cc',
     'disabled-by-default-cc.debug',
     'disabled-by-default-cc.debug.cdp-perf',
@@ -798,6 +825,7 @@ export function getBuiltinChromeCategoryList(): string[] {
     'disabled-by-default-cc.debug.scheduler.now',
     'disabled-by-default-content.verbose',
     'disabled-by-default-cpu_profiler',
+    'disabled-by-default-cppgc',
     'disabled-by-default-cpu_profiler.debug',
     'disabled-by-default-devtools.screenshot',
     'disabled-by-default-devtools.timeline',
@@ -806,6 +834,7 @@ export function getBuiltinChromeCategoryList(): string[] {
     'disabled-by-default-devtools.timeline.invalidationTracking',
     'disabled-by-default-devtools.timeline.layers',
     'disabled-by-default-devtools.timeline.picture',
+    'disabled-by-default-devtools.timeline.stack',
     'disabled-by-default-file',
     'disabled-by-default-fonts',
     'disabled-by-default-gpu_cmd_queue',
@@ -831,7 +860,6 @@ export function getBuiltinChromeCategoryList(): string[] {
     'disabled-by-default-power',
     'disabled-by-default-renderer.scheduler',
     'disabled-by-default-renderer.scheduler.debug',
-    'disabled-by-default-sandbox',
     'disabled-by-default-sequence_manager',
     'disabled-by-default-sequence_manager.debug',
     'disabled-by-default-sequence_manager.verbose_snapshots',
@@ -849,6 +877,7 @@ export function getBuiltinChromeCategoryList(): string[] {
     'disabled-by-default-v8.gc',
     'disabled-by-default-v8.gc_stats',
     'disabled-by-default-v8.ic_stats',
+    'disabled-by-default-v8.inspector',
     'disabled-by-default-v8.runtime',
     'disabled-by-default-v8.runtime_stats',
     'disabled-by-default-v8.runtime_stats_sampling',

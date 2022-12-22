@@ -40,7 +40,7 @@ export const PIVOT_TABLE_REDUX_FLAG = featureFlags.register({
   id: 'pivotTableRedux',
   name: 'Pivot tables V2',
   description: 'Second version of pivot table',
-  defaultValue: false,
+  defaultValue: true,
 });
 
 // Auxiliary class to build the tree from query response.
@@ -240,13 +240,6 @@ export class PivotTableReduxController extends Controller<{}> {
     }
 
     const pivotTableState = globals.state.nonSerializableState.pivotTableRedux;
-
-    if (pivotTableState.queryRequested) {
-      globals.dispatch(
-          Actions.setPivotTableQueryRequested({queryRequested: false}));
-      this.processQuery(generateQueryFromState(pivotTableState));
-    }
-
     const selection = globals.state.currentSelection;
 
     if (pivotTableState.queryRequested ||

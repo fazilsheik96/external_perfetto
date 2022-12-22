@@ -29,9 +29,10 @@
 #include "perfetto/trace_processor/basic_types.h"
 #include "perfetto/trace_processor/status.h"
 #include "perfetto/trace_processor/trace_processor.h"
-#include "src/trace_processor/sqlite/create_function.h"
-#include "src/trace_processor/sqlite/create_view_function.h"
 #include "src/trace_processor/sqlite/db_sqlite_table.h"
+#include "src/trace_processor/sqlite/functions/create_function.h"
+#include "src/trace_processor/sqlite/functions/create_view_function.h"
+#include "src/trace_processor/sqlite/functions/import.h"
 #include "src/trace_processor/sqlite/query_cache.h"
 #include "src/trace_processor/sqlite/scoped_db.h"
 #include "src/trace_processor/trace_processor_storage_impl.h"
@@ -91,7 +92,7 @@ class TraceProcessorImpl : public TraceProcessor,
   std::string GetCurrentTraceName() override;
   void SetCurrentTraceName(const std::string&) override;
 
-  void EnableMetatrace() override;
+  void EnableMetatrace(MetatraceConfig config) override;
 
   base::Status DisableAndReadMetatrace(
       std::vector<uint8_t>* trace_proto) override;

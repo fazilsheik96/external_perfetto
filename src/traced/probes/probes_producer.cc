@@ -125,9 +125,12 @@ ProbesProducer::CreateDSInstance<FtraceDataSource>(
   if (ftrace_creation_failed_)
     return nullptr;
 
+  FtraceConfig ftrace_config;
+  ftrace_config.ParseFromString(config.ftrace_config_raw());
   // Lazily create on the first instance.
   if (!ftrace_) {
-    ftrace_ = FtraceController::Create(task_runner_, this);
+    ftrace_ = FtraceController::Create(task_runner_, this,
+                                       ftrace_config.preserve_ftrace_buffer());
 
     if (!ftrace_) {
       PERFETTO_ELOG("Failed to create FtraceController");
@@ -135,14 +138,14 @@ ProbesProducer::CreateDSInstance<FtraceDataSource>(
       return nullptr;
     }
 
-    ftrace_->DisableAllEvents();
-    ftrace_->ClearTrace();
+    if (!ftrace_config.preserve_ftrace_buffer()) {
+      ftrace_->DisableAllEvents();
+      ftrace_->ClearTrace();
+    }
   }
 
   PERFETTO_LOG("Ftrace setup (target_buf=%" PRIu32 ")", config.target_buffer());
   const BufferID buffer_id = static_cast<BufferID>(config.target_buffer());
-  FtraceConfig ftrace_config;
-  ftrace_config.ParseFromString(config.ftrace_config_raw());
   std::unique_ptr<FtraceDataSource> data_source(new FtraceDataSource(
       ftrace_->GetWeakPtr(), session_id, std::move(ftrace_config),
       endpoint_->CreateTraceWriter(buffer_id)));
@@ -457,12 +460,10 @@ void ProbesProducer::StopDataSource(DataSourceInstanceID id) {
   }
   ProbesDataSource* data_source = it->second.get();
 
-  // MetatraceDataSource special case: re-flush and ack the stop (to record the
-  // flushes of other data sources).
+  // MetatraceDataSource special case: re-flush to record the final flushes of
+  // other data sources.
   if (data_source->descriptor == &MetatraceDataSource::descriptor)
     data_source->Flush(FlushRequestID{0}, [] {});
-
-  endpoint_->NotifyDataSourceStopped(id);
 
   TracingSessionID session_id = data_source->tracing_session_id;
 
@@ -481,6 +482,14 @@ void ProbesProducer::StopDataSource(DataSourceInstanceID id) {
   }
   data_sources_.erase(it);
   watchdogs_.erase(id);
+
+  // We could (and used to) acknowledge the stop before tearing the local state
+  // down, allowing the tracing service and the consumer to carry on quicker.
+  // However in the case of tracebox, the traced_probes subprocess gets killed
+  // as soon as the trace is considered finished (i.e. all data source stops
+  // were acked), and therefore the kill would race against the tracefs
+  // cleanup.
+  endpoint_->NotifyDataSourceStopped(id);
 }
 
 void ProbesProducer::OnTracingSetup() {

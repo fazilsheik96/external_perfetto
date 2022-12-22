@@ -21,7 +21,7 @@ import {Actions, DeferredAction, StateActions} from '../common/actions';
 import {createEmptyState} from '../common/empty_state';
 import {RECORDING_V2_FLAG} from '../common/feature_flags';
 import {initializeImmerJs} from '../common/immer_init';
-import {PluginContextImpl, pluginRegistry} from '../common/plugins';
+import {pluginManager, pluginRegistry} from '../common/plugins';
 import {State} from '../common/state';
 import {initWasm} from '../common/wasm_engine_proxy';
 import {ControllerWorkerInitMessage} from '../common/worker_messages';
@@ -299,8 +299,7 @@ function main() {
 
   // Initialize all plugins:
   for (const plugin of pluginRegistry.values()) {
-    const context = new PluginContextImpl(plugin.pluginId);
-    plugin.activate(context);
+    pluginManager.activatePlugin(plugin.pluginId);
   }
 }
 
@@ -338,7 +337,9 @@ function onCssLoaded() {
   // accidentially clober the state of an open trace processor instance
   // otherwise.
   CheckHttpRpcConnection().then(() => {
-    installFileDropHandler();
+    if (!globals.embeddedMode) {
+      installFileDropHandler();
+    }
 
     // Don't allow postMessage or opening trace from route when the user says
     // that they want to reuse the already loaded trace in trace processor.

@@ -361,6 +361,29 @@ class TraceStorage {
     return &gpu_counter_track_table_;
   }
 
+  const tables::EnergyCounterTrackTable& energy_counter_track_table() const {
+    return energy_counter_track_table_;
+  }
+  tables::EnergyCounterTrackTable* mutable_energy_counter_track_table() {
+    return &energy_counter_track_table_;
+  }
+
+  const tables::UidCounterTrackTable& uid_counter_track_table() const {
+    return uid_counter_track_table_;
+  }
+  tables::UidCounterTrackTable* mutable_uid_counter_track_table() {
+    return &uid_counter_track_table_;
+  }
+
+  const tables::EnergyPerUidCounterTrackTable&
+  energy_per_uid_counter_track_table() const {
+    return energy_per_uid_counter_track_table_;
+  }
+  tables::EnergyPerUidCounterTrackTable*
+  mutable_energy_per_uid_counter_track_table() {
+    return &energy_per_uid_counter_track_table_;
+  }
+
   const tables::IrqCounterTrackTable& irq_counter_track_table() const {
     return irq_counter_track_table_;
   }
@@ -429,13 +452,6 @@ class TraceStorage {
 
   const tables::FlowTable& flow_table() const { return flow_table_; }
   tables::FlowTable* mutable_flow_table() { return &flow_table_; }
-
-  const tables::ThreadSliceTable& thread_slice_table() const {
-    return thread_slice_table_;
-  }
-  tables::ThreadSliceTable* mutable_thread_slice_table() {
-    return &thread_slice_table_;
-  }
 
   const VirtualTrackSlices& virtual_track_slices() const {
     return virtual_track_slices_;
@@ -678,6 +694,15 @@ class TraceStorage {
     return &experimental_proto_content_table_;
   }
 
+  const tables::ExpMissingChromeProcTable&
+  experimental_missing_chrome_processes_table() const {
+    return experimental_missing_chrome_processes_table_;
+  }
+  tables::ExpMissingChromeProcTable*
+  mutable_experimental_missing_chrome_processes_table() {
+    return &experimental_missing_chrome_processes_table_;
+  }
+
   const views::ThreadSliceView& thread_slice_view() const {
     return thread_slice_view_;
   }
@@ -808,6 +833,12 @@ class TraceStorage {
       &string_pool_, &counter_track_table_};
   tables::GpuCounterTrackTable gpu_counter_track_table_{&string_pool_,
                                                         &counter_track_table_};
+  tables::EnergyCounterTrackTable energy_counter_track_table_{
+      &string_pool_, &counter_track_table_};
+  tables::UidCounterTrackTable uid_counter_track_table_{&string_pool_,
+                                                        &counter_track_table_};
+  tables::EnergyPerUidCounterTrackTable energy_per_uid_counter_track_table_{
+      &string_pool_, &uid_counter_track_table_};
   tables::GpuCounterGroupTable gpu_counter_group_table_{&string_pool_, nullptr};
   tables::PerfCounterTrackTable perf_counter_track_table_{
       &string_pool_, &counter_track_table_};
@@ -827,9 +858,6 @@ class TraceStorage {
 
   // Slices from CPU scheduling data.
   tables::SchedSliceTable sched_slice_table_{&string_pool_, nullptr};
-
-  // Additional attributes for threads slices (sub-type of NestableSlices).
-  tables::ThreadSliceTable thread_slice_table_{&string_pool_, &slice_table_};
 
   // Additional attributes for virtual track slices (sub-type of
   // NestableSlices).
@@ -907,6 +935,9 @@ class TraceStorage {
 
   tables::ExperimentalProtoContentTable experimental_proto_content_table_{
       &string_pool_, nullptr};
+
+  tables::ExpMissingChromeProcTable
+      experimental_missing_chrome_processes_table_{&string_pool_, nullptr};
 
   views::ThreadSliceView thread_slice_view_{&slice_table_, &thread_track_table_,
                                             &thread_table_};

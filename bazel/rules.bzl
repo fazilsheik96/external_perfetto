@@ -22,7 +22,7 @@ load("@perfetto//bazel:proto_gen.bzl", "proto_descriptor_gen", "proto_gen")
 def default_cc_args():
     return {
         "deps": PERFETTO_CONFIG.deps.build_config,
-        "copts": [
+        "copts": PERFETTO_CONFIG.default_copts + [
             "-Wno-pragma-system-header-outside-header",
         ],
         "includes": ["include"],
@@ -278,6 +278,34 @@ def perfetto_cc_proto_descriptor(name, deps, outs, **kwargs):
         name = name,
         hdrs = [":" + name + "_gen"],
         **kwargs
+    )
+
+def perfetto_cc_amalgamated_sql(name, deps, outs, root_dir, namespace,
+                                **kwargs):
+    cmd = [
+        "$(location gen_amalgamated_sql_py)",
+        "--namespace",
+        namespace,
+        "--root-dir",
+        root_dir,
+        "--cpp-out=$@",
+        "$(SRCS)",
+    ]
+
+    perfetto_genrule(
+        name = name + "_gen",
+        cmd = " ".join(cmd),
+        exec_tools = [
+            ":gen_amalgamated_sql_py",
+        ],
+        srcs = deps,
+        outs = outs,
+    )
+
+    perfetto_cc_library(
+        name = name,
+        hdrs = [":" + name + "_gen"],
+        **kwargs,
     )
 
 # +----------------------------------------------------------------------------+
