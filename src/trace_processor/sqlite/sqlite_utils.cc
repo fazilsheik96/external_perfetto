@@ -75,6 +75,7 @@ base::Status GetColumnsForTable(sqlite3* db,
     } else if (base::CaseInsensitiveEqual(raw_type, "DOUBLE")) {
       type = SqlValue::Type::kDouble;
     } else if (base::CaseInsensitiveEqual(raw_type, "BIG INT") ||
+               base::CaseInsensitiveEqual(raw_type, "BIGINT") ||
                base::CaseInsensitiveEqual(raw_type, "UNSIGNED INT") ||
                base::CaseInsensitiveEqual(raw_type, "INT") ||
                base::CaseInsensitiveEqual(raw_type, "BOOLEAN") ||
@@ -90,8 +91,123 @@ base::Status GetColumnsForTable(sqlite3* db,
     }
     columns.emplace_back(columns.size(), name, type);
   }
+
+  // Catch mis-spelt table names.
+  //
+  // A SELECT on pragma_table_info() returns no rows if the
+  // table that was queried is not present.
+  if (columns.empty()) {
+    return base::ErrStatus("Unknown table or view name '%s'",
+                           raw_table_name.c_str());
+  }
+
   return base::OkStatus();
 }
+
+const char* SqliteTypeToFriendlyString(SqlValue::Type type) {
+  switch (type) {
+    case SqlValue::Type::kNull:
+      return "NULL";
+    case SqlValue::Type::kLong:
+      return "BOOL/INT/UINT/LONG";
+    case SqlValue::Type::kDouble:
+      return "FLOAT/DOUBLE";
+    case SqlValue::Type::kString:
+      return "STRING";
+    case SqlValue::Type::kBytes:
+      return "BYTES/PROTO";
+  }
+  PERFETTO_FATAL("For GCC");
+}
+
+base::Status TypeCheckSqliteValue(sqlite3_value* value,
+                                  SqlValue::Type expected_type) {
+  return TypeCheckSqliteValue(value, expected_type,
+                              SqliteTypeToFriendlyString(expected_type));
+}
+
+base::Status TypeCheckSqliteValue(sqlite3_value* value,
+                                  SqlValue::Type expected_type,
+                                  const char* expected_type_str) {
+  SqlValue::Type actual_type =
+      sqlite_utils::SqliteTypeToSqlValueType(sqlite3_value_type(value));
+  if (actual_type != SqlValue::Type::kNull && actual_type != expected_type) {
+    return base::ErrStatus(
+        "does not have expected type: expected %s, actual %s",
+        expected_type_str, SqliteTypeToFriendlyString(actual_type));
+  }
+  return base::OkStatus();
+}
+
+template <typename T>
+base::Status ExtractFromSqlValueInt(const SqlValue& value,
+                                    base::Optional<T>& out) {
+  if (value.is_null()) {
+    out = base::nullopt;
+    return base::OkStatus();
+  }
+  if (value.type != SqlValue::kLong) {
+    return base::ErrStatus(
+        "value has type %s which does not match the expected type %s",
+        SqliteTypeToFriendlyString(value.type),
+        SqliteTypeToFriendlyString(SqlValue::kLong));
+  }
+
+  int64_t res = value.AsLong();
+  if (res > std::numeric_limits<T>::max() ||
+      res < std::numeric_limits<T>::min()) {
+    return base::ErrStatus("value %ld does not fit inside the range [%ld, %ld]",
+                           static_cast<long>(res),
+                           static_cast<long>(std::numeric_limits<T>::min()),
+                           static_cast<long>(std::numeric_limits<T>::max()));
+  }
+  out = static_cast<T>(res);
+  return base::OkStatus();
+}
+
+base::Status ExtractFromSqlValue(const SqlValue& value,
+                                 base::Optional<int64_t>& out) {
+  return ExtractFromSqlValueInt(value, out);
+}
+base::Status ExtractFromSqlValue(const SqlValue& value,
+                                 base::Optional<int32_t>& out) {
+  return ExtractFromSqlValueInt(value, out);
+}
+base::Status ExtractFromSqlValue(const SqlValue& value,
+                                 base::Optional<uint32_t>& out) {
+  return ExtractFromSqlValueInt(value, out);
+}
+base::Status ExtractFromSqlValue(const SqlValue& value,
+                                 base::Optional<double>& out) {
+  if (value.is_null()) {
+    out = base::nullopt;
+    return base::OkStatus();
+  }
+  if (value.type != SqlValue::kDouble) {
+    return base::ErrStatus(
+        "value has type %s which does not match the expected type %s",
+        SqliteTypeToFriendlyString(value.type),
+        SqliteTypeToFriendlyString(SqlValue::kDouble));
+  }
+  out = value.AsDouble();
+  return base::OkStatus();
+}
+base::Status ExtractFromSqlValue(const SqlValue& value,
+                                 base::Optional<const char*>& out) {
+  if (value.is_null()) {
+    out = base::nullopt;
+    return base::OkStatus();
+  }
+  if (value.type != SqlValue::kString) {
+    return base::ErrStatus(
+        "value has type %s which does not match the expected type %s",
+        SqliteTypeToFriendlyString(value.type),
+        SqliteTypeToFriendlyString(SqlValue::kString));
+  }
+  out = value.AsString();
+  return base::OkStatus();
+}
+
 }  // namespace sqlite_utils
 }  // namespace trace_processor
 }  // namespace perfetto

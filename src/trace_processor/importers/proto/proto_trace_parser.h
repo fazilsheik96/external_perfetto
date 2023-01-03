@@ -23,8 +23,8 @@
 #include <memory>
 
 #include "perfetto/protozero/field.h"
+#include "src/trace_processor/importers/common/parser_types.h"
 #include "src/trace_processor/importers/common/trace_parser.h"
-#include "src/trace_processor/parser_types.h"
 #include "src/trace_processor/storage/trace_storage.h"
 
 namespace perfetto {
@@ -64,7 +64,6 @@ class ProtoTraceParser : public TraceParser {
   void ParseTraceStats(ConstBytes);
   void ParseChromeEvents(int64_t ts, ConstBytes);
   void ParseMetatraceEvent(int64_t ts, ConstBytes);
-  void ParseTraceConfig(ConstBytes);
 
  private:
   StringId GetMetatraceInternedString(uint64_t iid);

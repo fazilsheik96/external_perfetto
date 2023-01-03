@@ -59,8 +59,7 @@ export function createEmptyNonSerializableState(): NonSerializableState {
   return {
     pivotTableRedux: {
       queryResult: null,
-      selectedSlicePivots: [{kind: 'regular', table: 'slice', column: 'name'}],
-      selectedPivots: [],
+      selectedPivots: [{kind: 'regular', table: 'slice', column: 'name'}],
       selectedAggregations: [
         {
           aggregationFunction: 'SUM',
@@ -86,10 +85,8 @@ export function createEmptyNonSerializableState(): NonSerializableState {
 export function createEmptyState(): State {
   return {
     version: STATE_VERSION,
-    currentEngineId: undefined,
     nextId: '-1',
     newEngineMode: 'USE_HTTP_RPC_IF_AVAILABLE',
-    engines: {},
     traceTime: {...defaultTraceTime},
     tracks: {},
     uiTrackIdByTraceTrackId: {},
@@ -113,17 +110,16 @@ export function createEmptyState(): State {
     lastLoadedConfig: {type: 'NONE'},
 
     frontendLocalState: {
-      omniboxState: {
-        lastUpdate: 0,
-        omnibox: '',
-        mode: 'SEARCH',
-      },
-
       visibleState: {
         ...defaultTraceTime,
         lastUpdate: 0,
         resolution: 0,
       },
+    },
+
+    omniboxState: {
+      omnibox: '',
+      mode: 'SEARCH',
     },
 
     logsPagination: {
@@ -158,7 +154,12 @@ export function createEmptyState(): State {
     chromeCategories: undefined,
     nonSerializableState: createEmptyNonSerializableState(),
 
-    // The first two log priorities are ignored.
-    logFilteringCriteria: {minimumLevel: 2},
+    logFilteringCriteria: {
+      // The first two log priorities are ignored.
+      minimumLevel: 2,
+      tags: [],
+      textEntry: '',
+      hideNonMatching: true,
+    },
   };
 }
