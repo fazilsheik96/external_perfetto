@@ -219,6 +219,7 @@ FtraceParser::FtraceParser(TraceProcessorContext* context)
       rss_stat_tracker_(context),
       drm_tracker_(context),
       iostat_tracker_(context),
+      virtio_gpu_tracker_(context),
       sched_wakeup_name_id_(context->storage->InternString("sched_wakeup")),
       sched_waking_name_id_(context->storage->InternString("sched_waking")),
       cpu_id_(context->storage->InternString("cpu")),
@@ -288,7 +289,6 @@ FtraceParser::FtraceParser(TraceProcessorContext* context)
       shrink_priority_id_(context->storage->InternString("priority")),
       trusty_category_id_(context_->storage->InternString("tipc")),
       trusty_name_trusty_std_id_(context_->storage->InternString("trusty_std")),
-      trusty_name_tipc_tx_id_(context_->storage->InternString("tipc_tx")),
       trusty_name_tipc_rx_id_(context_->storage->InternString("tipc_rx")),
       cma_alloc_id_(context_->storage->InternString("mm_cma_alloc")),
       cma_name_id_(context_->storage->InternString("cma_name")),
@@ -302,6 +302,12 @@ FtraceParser::FtraceParser(TraceProcessorContext* context)
       cma_nr_migrate_fail_id_(
           context_->storage->InternString("cma_nr_migrate_fail")),
       cma_nr_test_fail_id_(context_->storage->InternString("cma_nr_test_fail")),
+      mali_KCPU_CQS_SET_id_(
+          context->storage->InternString("mali_KCPU_CQS_SET")),
+      mali_KCPU_CQS_WAIT_START_id_(
+          context->storage->InternString("mali_KCPU_CQS_WAIT_START")),
+      mali_KCPU_CQS_WAIT_END_id_(
+          context->storage->InternString("mali_KCPU_CQS_WAIT_END")),
       syscall_ret_id_(context->storage->InternString("ret")),
       syscall_args_id_(context->storage->InternString("args")) {
   // Build the lookup table for the strings inside ftrace events (e.g. the
@@ -784,6 +790,11 @@ util::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
         ParseMaliTracingMarkWrite(ts, pid, fld_bytes);
         break;
       }
+      case FtraceEvent::kVirtioGpuCmdQueueFieldNumber:
+      case FtraceEvent::kVirtioGpuCmdResponseFieldNumber: {
+        virtio_gpu_tracker_.ParseVirtioGpu(ts, fld.id(), pid, fld_bytes);
+        break;
+      }
       case FtraceEvent::kCpuhpPauseFieldNumber: {
         ParseCpuhpPause(ts, pid, fld_bytes);
         break;
@@ -971,20 +982,24 @@ util::Status FtraceParser::ParseFtraceEvent(uint32_t cpu,
         ParseTrustyIpcPoll(pid, ts, fld_bytes);
         break;
       }
-      case FtraceEvent::kTrustyIpcPollEndFieldNumber: {
-        ParseTrustyIpcPollEnd(pid, ts, fld_bytes);
-        break;
-      }
-      case FtraceEvent::kTrustyIpcTxFieldNumber: {
-        ParseTrustyIpcTx(pid, ts, fld_bytes);
-        break;
-      }
       case FtraceEvent::kTrustyIpcRxFieldNumber: {
         ParseTrustyIpcRx(pid, ts, fld_bytes);
         break;
       }
       case FtraceEvent::kTrustyEnqueueNopFieldNumber: {
         ParseTrustyEnqueueNop(pid, ts, fld_bytes);
+        break;
+      }
+      case FtraceEvent::kMaliMaliKCPUCQSSETFieldNumber: {
+        ParseMaliKcpuCqsSet(pid, ts);
+        break;
+      }
+      case FtraceEvent::kMaliMaliKCPUCQSWAITSTARTFieldNumber: {
+        ParseMaliKcpuCqsWaitStart(pid, ts);
+        break;
+      }
+      case FtraceEvent::kMaliMaliKCPUCQSWAITENDFieldNumber: {
+        ParseMaliKcpuCqsWaitEnd(pid, ts);
         break;
       }
       default:
@@ -2726,31 +2741,8 @@ void FtraceParser::ParseTrustyIpcPoll(uint32_t pid,
   base::StackString<256> name("tipc_poll: %s",
                               evt.srv_name().ToStdString().c_str());
   StringId name_generic = context_->storage->InternString(name.string_view());
-  context_->slice_tracker->Begin(timestamp, track, trusty_category_id_,
-                                 name_generic);
-}
-
-void FtraceParser::ParseTrustyIpcPollEnd(uint32_t pid,
-                                         int64_t timestamp,
-                                         protozero::ConstBytes blob) {
-  protos::pbzero::TrustyIpcPollEndFtraceEvent::Decoder evt(blob.data,
-                                                           blob.size);
-
-  UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
-  TrackId track = context_->track_tracker->InternThreadTrack(utid);
-  context_->slice_tracker->End(timestamp, track, trusty_category_id_);
-}
-
-void FtraceParser::ParseTrustyIpcTx(uint32_t pid,
-                                    int64_t ts,
-                                    protozero::ConstBytes blob) {
-  protos::pbzero::TrustyIpcTxFtraceEvent::Decoder evt(blob.data, blob.size);
-
-  UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
-  TrackId track = context_->track_tracker->InternThreadTrack(utid);
-
-  context_->slice_tracker->Scoped(ts, track, trusty_category_id_,
-                                  trusty_name_tipc_tx_id_, 0);
+  context_->slice_tracker->Scoped(timestamp, track, trusty_category_id_,
+                                  name_generic, 0);
 }
 
 void FtraceParser::ParseTrustyIpcRx(uint32_t pid,
@@ -2955,6 +2947,27 @@ StringId FtraceParser::InternedKernelSymbolOrFallback(
     name_id = context_->storage->InternString(slice_name.string_view());
   }
   return name_id;
+}
+
+void FtraceParser::ParseMaliKcpuCqsSet(uint32_t pid, int64_t timestamp) {
+  UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
+  TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
+  context_->slice_tracker->Scoped(timestamp, track_id, kNullStringId,
+                                  mali_KCPU_CQS_SET_id_, 0);
+}
+
+void FtraceParser::ParseMaliKcpuCqsWaitStart(uint32_t pid, int64_t timestamp) {
+  UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
+  TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
+  context_->slice_tracker->Begin(timestamp, track_id, kNullStringId,
+                                 mali_KCPU_CQS_SET_id_);
+}
+
+void FtraceParser::ParseMaliKcpuCqsWaitEnd(uint32_t pid, int64_t timestamp) {
+  UniqueTid utid = context_->process_tracker->GetOrCreateThread(pid);
+  TrackId track_id = context_->track_tracker->InternThreadTrack(utid);
+  context_->slice_tracker->End(timestamp, track_id, kNullStringId,
+                               mali_KCPU_CQS_SET_id_);
 }
 
 }  // namespace trace_processor
