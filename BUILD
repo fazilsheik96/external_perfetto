@@ -1175,6 +1175,8 @@ perfetto_filegroup(
         "src/trace_processor/importers/ftrace/thread_state_tracker.h",
         "src/trace_processor/importers/ftrace/v4l2_tracker.cc",
         "src/trace_processor/importers/ftrace/v4l2_tracker.h",
+        "src/trace_processor/importers/ftrace/virtio_gpu_tracker.cc",
+        "src/trace_processor/importers/ftrace/virtio_gpu_tracker.h",
         "src/trace_processor/importers/ftrace/virtio_video_tracker.cc",
         "src/trace_processor/importers/ftrace/virtio_video_tracker.h",
     ],
@@ -1623,6 +1625,7 @@ perfetto_filegroup(
         "src/trace_processor/metrics/sql/chrome/estimated_power_by_category.sql",
         "src/trace_processor/metrics/sql/chrome/estimated_power_by_rail_mode.sql",
         "src/trace_processor/metrics/sql/chrome/event_latency_scroll_jank.sql",
+        "src/trace_processor/metrics/sql/chrome/event_latency_scroll_jank_cause.sql",
         "src/trace_processor/metrics/sql/chrome/event_latency_to_breakdowns.sql",
         "src/trace_processor/metrics/sql/chrome/experimental_reliable_chrome_tasks_delaying_input_processing.sql",
         "src/trace_processor/metrics/sql/chrome/gesture_flow_event.sql",
@@ -1830,11 +1833,32 @@ perfetto_filegroup(
     ],
 )
 
+# GN target: //src/trace_processor/stdlib/android/startup:startup
+perfetto_filegroup(
+    name = "src_trace_processor_stdlib_android_startup_startup",
+    srcs = [
+        "src/trace_processor/stdlib/android/startup/internal_startups_maxsdk28.sql",
+        "src/trace_processor/stdlib/android/startup/internal_startups_minsdk29.sql",
+        "src/trace_processor/stdlib/android/startup/internal_startups_minsdk33.sql",
+        "src/trace_processor/stdlib/android/startup/startups.sql",
+    ],
+)
+
 # GN target: //src/trace_processor/stdlib/android:android
 perfetto_filegroup(
     name = "src_trace_processor_stdlib_android_android",
     srcs = [
+        "src/trace_processor/stdlib/android/battery.sql",
         "src/trace_processor/stdlib/android/binder.sql",
+        "src/trace_processor/stdlib/android/process_metadata.sql",
+    ],
+)
+
+# GN target: //src/trace_processor/stdlib/chrome:chrome_sql
+perfetto_filegroup(
+    name = "src_trace_processor_stdlib_chrome_chrome_sql",
+    srcs = [
+        "src/trace_processor/stdlib/chrome/cpu_powerups.sql",
     ],
 )
 
@@ -1843,6 +1867,8 @@ perfetto_filegroup(
     name = "src_trace_processor_stdlib_common_common",
     srcs = [
         "src/trace_processor/stdlib/common/metadata.sql",
+        "src/trace_processor/stdlib/common/slices.sql",
+        "src/trace_processor/stdlib/common/timestamps.sql",
     ],
 )
 
@@ -1859,6 +1885,8 @@ perfetto_cc_amalgamated_sql(
     name = "src_trace_processor_stdlib_gen_amalgamated_stdlib",
     deps = [
         ":src_trace_processor_stdlib_android_android",
+        ":src_trace_processor_stdlib_android_startup_startup",
+        ":src_trace_processor_stdlib_chrome_chrome_sql",
         ":src_trace_processor_stdlib_common_common",
         ":src_trace_processor_stdlib_experimental_experimental",
     ],
@@ -3690,6 +3718,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/ftrace/kmem.proto",
         "protos/perfetto/trace/ftrace/kvm.proto",
         "protos/perfetto/trace/ftrace/lowmemorykiller.proto",
+        "protos/perfetto/trace/ftrace/lwis.proto",
         "protos/perfetto/trace/ftrace/mali.proto",
         "protos/perfetto/trace/ftrace/mdss.proto",
         "protos/perfetto/trace/ftrace/mm_event.proto",
@@ -3716,6 +3745,7 @@ perfetto_proto_library(
         "protos/perfetto/trace/ftrace/trusty.proto",
         "protos/perfetto/trace/ftrace/ufs.proto",
         "protos/perfetto/trace/ftrace/v4l2.proto",
+        "protos/perfetto/trace/ftrace/virtio_gpu.proto",
         "protos/perfetto/trace/ftrace/virtio_video.proto",
         "protos/perfetto/trace/ftrace/vmscan.proto",
         "protos/perfetto/trace/ftrace/workqueue.proto",
