@@ -492,7 +492,6 @@ cc_library_shared {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
         ":perfetto_protos_perfetto_config_android_cpp_gen",
@@ -596,7 +595,6 @@ cc_library_shared {
         "include/perfetto/base/build_configs/android_tree",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -1090,7 +1088,6 @@ cc_library_static {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
         ":perfetto_protos_perfetto_config_android_cpp_gen",
@@ -1221,7 +1218,6 @@ cc_library_static {
         "perfetto_gtest_logcat_printer",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -1291,7 +1287,6 @@ cc_library_static {
         "perfetto_src_base_version_gen_h",
     ],
     export_generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -1383,7 +1378,6 @@ cc_library_static {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
         ":perfetto_protos_perfetto_config_android_cpp_gen",
@@ -1499,7 +1493,6 @@ cc_library_static {
         ":perfetto_test_test_helper",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -1569,7 +1562,6 @@ cc_library_static {
         "perfetto_src_base_version_gen_h",
     ],
     export_generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -1829,7 +1821,6 @@ cc_test {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_lite_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
@@ -2083,7 +2074,6 @@ cc_test {
         "perfetto_gtest_logcat_printer",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_lite_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
@@ -2211,42 +2201,6 @@ cc_test {
         "general-tests",
     ],
     test_config: "PerfettoIntegrationTests.xml",
-}
-
-// GN: //protos/perfetto/android_vendor:cpp
-genrule {
-    name: "perfetto_protos_perfetto_android_vendor_cpp_gen",
-    srcs: [
-        "protos/perfetto/android_vendor/atrace_categories.proto",
-    ],
-    tools: [
-        "aprotoc",
-        "perfetto_src_protozero_protoc_plugin_cppgen_plugin",
-    ],
-    cmd: "mkdir -p $(genDir)/external/perfetto/ && $(location aprotoc) --proto_path=external/perfetto --plugin=protoc-gen-plugin=$(location perfetto_src_protozero_protoc_plugin_cppgen_plugin) --plugin_out=wrapper_namespace=gen:$(genDir)/external/perfetto/ $(in)",
-    out: [
-        "external/perfetto/protos/perfetto/android_vendor/atrace_categories.gen.cc",
-    ],
-}
-
-// GN: //protos/perfetto/android_vendor:cpp
-genrule {
-    name: "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
-    srcs: [
-        "protos/perfetto/android_vendor/atrace_categories.proto",
-    ],
-    tools: [
-        "aprotoc",
-        "perfetto_src_protozero_protoc_plugin_cppgen_plugin",
-    ],
-    cmd: "mkdir -p $(genDir)/external/perfetto/ && $(location aprotoc) --proto_path=external/perfetto --plugin=protoc-gen-plugin=$(location perfetto_src_protozero_protoc_plugin_cppgen_plugin) --plugin_out=wrapper_namespace=gen:$(genDir)/external/perfetto/ $(in)",
-    out: [
-        "external/perfetto/protos/perfetto/android_vendor/atrace_categories.gen.h",
-    ],
-    export_include_dirs: [
-        ".",
-        "protos",
-    ],
 }
 
 // GN: //protos/perfetto/common:cpp
@@ -4293,7 +4247,6 @@ genrule {
         "protos/perfetto/metrics/android/simpleperf.proto",
         "protos/perfetto/metrics/android/startup_metric.proto",
         "protos/perfetto/metrics/android/surfaceflinger.proto",
-        "protos/perfetto/metrics/android/sysui_cuj_metrics.proto",
         "protos/perfetto/metrics/android/task_names.proto",
         "protos/perfetto/metrics/android/thread_time_in_state_metric.proto",
         "protos/perfetto/metrics/android/trace_quality.proto",
@@ -4365,7 +4318,6 @@ genrule {
         "protos/perfetto/metrics/android/simpleperf.proto",
         "protos/perfetto/metrics/android/startup_metric.proto",
         "protos/perfetto/metrics/android/surfaceflinger.proto",
-        "protos/perfetto/metrics/android/sysui_cuj_metrics.proto",
         "protos/perfetto/metrics/android/task_names.proto",
         "protos/perfetto/metrics/android/thread_time_in_state_metric.proto",
         "protos/perfetto/metrics/android/trace_quality.proto",
@@ -8169,6 +8121,7 @@ filegroup {
         "src/base/periodic_task_unittest.cc",
         "src/base/scoped_file_unittest.cc",
         "src/base/small_vector_unittest.cc",
+        "src/base/status_or_unittest.cc",
         "src/base/string_splitter_unittest.cc",
         "src/base/string_utils_unittest.cc",
         "src/base/string_view_unittest.cc",
@@ -9259,6 +9212,7 @@ filegroup {
         "src/trace_processor/importers/ftrace/ftrace_parser.cc",
         "src/trace_processor/importers/ftrace/ftrace_tokenizer.cc",
         "src/trace_processor/importers/ftrace/iostat_tracker.cc",
+        "src/trace_processor/importers/ftrace/mali_gpu_event_tracker.cc",
         "src/trace_processor/importers/ftrace/rss_stat_tracker.cc",
         "src/trace_processor/importers/ftrace/sched_event_tracker.cc",
         "src/trace_processor/importers/ftrace/thread_state_tracker.cc",
@@ -9678,9 +9632,6 @@ genrule {
         "src/trace_processor/metrics/sql/android/android_simpleperf.sql",
         "src/trace_processor/metrics/sql/android/android_startup.sql",
         "src/trace_processor/metrics/sql/android/android_surfaceflinger.sql",
-        "src/trace_processor/metrics/sql/android/android_sysui_cuj.sql",
-        "src/trace_processor/metrics/sql/android/android_sysui_cuj_jank_query.sql",
-        "src/trace_processor/metrics/sql/android/android_sysui_cuj_surfaceflinger.sql",
         "src/trace_processor/metrics/sql/android/android_task_names.sql",
         "src/trace_processor/metrics/sql/android/android_trace_quality.sql",
         "src/trace_processor/metrics/sql/android/android_trusty_workqueues.sql",
@@ -9753,6 +9704,8 @@ genrule {
         "src/trace_processor/metrics/sql/chrome/chrome_histogram_hashes.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_input_to_browser_intervals.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_input_to_browser_intervals_template.sql",
+        "src/trace_processor/metrics/sql/chrome/chrome_long_tasks.sql",
+        "src/trace_processor/metrics/sql/chrome/chrome_long_tasks_delaying_input_processing.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_performance_mark_hashes.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_processes.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_reliable_range.sql",
@@ -9762,6 +9715,7 @@ genrule {
         "src/trace_processor/metrics/sql/chrome/chrome_stack_samples_for_task.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_tasks.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_tasks_delaying_input_processing.sql",
+        "src/trace_processor/metrics/sql/chrome/chrome_tasks_delaying_input_processing_base.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_tasks_delaying_input_processing_template.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_tasks_template.sql",
         "src/trace_processor/metrics/sql/chrome/chrome_thread_slice.sql",
@@ -9805,7 +9759,7 @@ genrule {
         "src/trace_processor/metrics/sql/trace_stats.sql",
         "src/trace_processor/metrics/sql/webview/webview_power_usage.sql",
     ],
-    cmd: "$(location tools/gen_amalgamated_sql.py) --namespace=sql_metrics --root-dir=src/trace_processor/metrics/sql --cpp-out=$(out) $(in)",
+    cmd: "$(location tools/gen_amalgamated_sql.py) --namespace=sql_metrics --cpp-out=$(out) $(in)",
     out: [
         "src/trace_processor/metrics/sql/amalgamated_sql_metrics.h",
     ],
@@ -9951,7 +9905,7 @@ genrule {
         "src/trace_processor/stdlib/common/timestamps.sql",
         "src/trace_processor/stdlib/experimental/android_broadcast.sql",
     ],
-    cmd: "$(location tools/gen_amalgamated_sql.py) --namespace=stdlib --root-dir=src/trace_processor/stdlib --cpp-out=$(out) $(in)",
+    cmd: "$(location tools/gen_amalgamated_sql.py) --namespace=stdlib --cpp-out=$(out) $(in)",
     out: [
         "src/trace_processor/stdlib/amalgamated_stdlib.h",
     ],
@@ -9979,6 +9933,34 @@ filegroup {
     srcs: [
         "src/trace_processor/storage/trace_storage.cc",
     ],
+}
+
+// GN: //src/trace_processor/tables:py_tables_unittest
+genrule {
+    name: "perfetto_src_trace_processor_tables_py_tables_unittest",
+    srcs: [
+        "src/trace_processor/tables/py_tables_unittest.py",
+    ],
+    tools: [
+        "perfetto_src_trace_processor_tables_py_tables_unittest_binary",
+    ],
+    cmd: "$(location perfetto_src_trace_processor_tables_py_tables_unittest_binary) --gen-dir=$(genDir) --inputs $(in) --outputs $(out)",
+    out: [
+        "src/trace_processor/tables/py_tables_unittest_py.h",
+    ],
+}
+
+// GN: //src/trace_processor/tables:py_tables_unittest
+python_binary_host {
+    name: "perfetto_src_trace_processor_tables_py_tables_unittest_binary",
+    srcs: [
+        "python/generators/trace_processor_table/public.py",
+        "python/generators/trace_processor_table/serialize.py",
+        "python/generators/trace_processor_table/util.py",
+        "src/trace_processor/tables/py_tables_unittest.py",
+        "tools/gen_tp_table_headers.py",
+    ],
+    main: "tools/gen_tp_table_headers.py",
 }
 
 // GN: //src/trace_processor/tables:tables
@@ -10011,6 +9993,8 @@ python_binary_host {
     name: "perfetto_src_trace_processor_tables_tables_python_binary",
     srcs: [
         "python/generators/trace_processor_table/public.py",
+        "python/generators/trace_processor_table/serialize.py",
+        "python/generators/trace_processor_table/util.py",
         "src/trace_processor/tables/android_tables.py",
         "src/trace_processor/tables/metadata_tables.py",
         "tools/gen_tp_table_headers.py",
@@ -10023,6 +10007,7 @@ filegroup {
     name: "perfetto_src_trace_processor_tables_unittests",
     srcs: [
         "src/trace_processor/tables/macros_unittest.cc",
+        "src/trace_processor/tables/py_tables_unittest.cc",
     ],
 }
 
@@ -11293,7 +11278,6 @@ cc_test {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_lite_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
@@ -11614,7 +11598,6 @@ cc_test {
         "perfetto_gtest_logcat_printer",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_lite_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
@@ -11733,6 +11716,7 @@ cc_test {
         "perfetto_src_trace_processor_metrics_gen_cc_metrics_descriptor",
         "perfetto_src_trace_processor_metrics_sql_gen_amalgamated_sql_metrics",
         "perfetto_src_trace_processor_stdlib_gen_amalgamated_stdlib",
+        "perfetto_src_trace_processor_tables_py_tables_unittest",
         "perfetto_src_trace_processor_tables_tables_python",
         "perfetto_src_traced_probes_ftrace_test_messages_cpp_gen_headers",
         "perfetto_src_traced_probes_ftrace_test_messages_lite_gen_headers",
@@ -11777,7 +11761,6 @@ cc_library_static {
         ":perfetto_include_perfetto_tracing_core_core",
         ":perfetto_include_perfetto_tracing_core_forward_decls",
         ":perfetto_include_perfetto_tracing_tracing",
-        ":perfetto_protos_perfetto_android_vendor_cpp_gen",
         ":perfetto_protos_perfetto_common_cpp_gen",
         ":perfetto_protos_perfetto_common_zero_gen",
         ":perfetto_protos_perfetto_config_android_cpp_gen",
@@ -11900,7 +11883,6 @@ cc_library_static {
         "perfetto_gtest_logcat_printer",
     ],
     generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -11970,7 +11952,6 @@ cc_library_static {
         "perfetto_src_base_version_gen_h",
     ],
     export_generated_headers: [
-        "perfetto_protos_perfetto_android_vendor_cpp_gen_headers",
         "perfetto_protos_perfetto_common_cpp_gen_headers",
         "perfetto_protos_perfetto_common_zero_gen_headers",
         "perfetto_protos_perfetto_config_android_cpp_gen_headers",
@@ -12953,11 +12934,6 @@ filegroup {
     name: "perfetto-trace-processor-python-data",
     srcs: ["python/perfetto/trace_processor/*.descriptor*"],
     path: "python",
-}
-
-filegroup {
-    name: "perfetto-atrace-categories-proto",
-    srcs: ["protos/perfetto/android_vendor/atrace_categories.proto"],
 }
 
 // Added automatically by a large-scale-change that took the approach of
