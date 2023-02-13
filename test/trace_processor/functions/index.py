@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path
+from python.generators.diff_tests.testing import Path, Metric
+from python.generators.diff_tests.testing import Csv, Json, TextProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import DiffTestModule
 
@@ -23,17 +24,81 @@ class DiffTestModule_Functions(DiffTestModule):
   def test_first_non_null_frame(self):
     return DiffTestBlueprint(
         trace=Path('../common/empty.textproto'),
-        query=Path('first_non_null_frame_test.sql'),
-        out=Path('first_non_null_frame.out'))
+        query="""
+CREATE TABLE TEST(id INTEGER, val INTEGER);
+
+INSERT INTO TEST
+VALUES (1, 1), (2, NULL), (3, 3), (4, 4), (5, NULL), (6, NULL), (7, NULL);
+
+SELECT
+  id,
+  LAST_NON_NULL(val)
+  OVER (ORDER BY id ASC ROWS BETWEEN CURRENT ROW AND 2 FOLLOWING) AS val
+FROM TEST
+ORDER BY id ASC;
+""",
+        out=Csv("""
+"id","val"
+1,3
+2,4
+3,4
+4,4
+5,"[NULL]"
+6,"[NULL]"
+7,"[NULL]"
+"""))
 
   def test_first_non_null_partition(self):
     return DiffTestBlueprint(
         trace=Path('../common/empty.textproto'),
-        query=Path('first_non_null_partition_test.sql'),
-        out=Path('first_non_null_partition.out'))
+        query="""
+CREATE TABLE TEST(id INTEGER, part TEXT, val INTEGER);
+
+INSERT INTO TEST
+VALUES
+(1, 'A', 1),
+(2, 'A', NULL),
+(3, 'A', 3),
+(4, 'B', NULL),
+(5, 'B', 5),
+(6, 'B', NULL),
+(7, 'B', 7);
+
+SELECT id, LAST_NON_NULL(val) OVER (PARTITION BY part ORDER BY id ASC) AS val
+FROM TEST
+ORDER BY id ASC;
+""",
+        out=Csv("""
+"id","val"
+1,1
+2,1
+3,3
+4,"[NULL]"
+5,5
+6,5
+7,7
+"""))
 
   def test_first_non_null(self):
     return DiffTestBlueprint(
         trace=Path('../common/empty.textproto'),
-        query=Path('first_non_null_test.sql'),
-        out=Path('first_non_null.out'))
+        query="""
+CREATE TABLE TEST(id INTEGER, val INTEGER);
+
+INSERT INTO TEST
+VALUES (1, 1), (2, NULL), (3, 3), (4, 4), (5, NULL), (6, NULL), (7, NULL);
+
+SELECT id, LAST_NON_NULL(val) OVER (ORDER BY id ASC) AS val
+FROM TEST
+ORDER BY id ASC;
+""",
+        out=Csv("""
+"id","val"
+1,1
+2,1
+3,3
+4,4
+5,4
+6,4
+7,4
+"""))

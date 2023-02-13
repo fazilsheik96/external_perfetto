@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path
+from python.generators.diff_tests.testing import Path, Metric
+from python.generators.diff_tests.testing import Csv, Json, TextProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import DiffTestModule
 
@@ -23,11 +24,19 @@ class DiffTestModule_Camera(DiffTestModule):
   def test_camera_ion_mem_trace_android_camera(self):
     return DiffTestBlueprint(
         trace=Path('../../data/camera-ion-mem-trace'),
-        query=Path('android_camera'),
-        out=Path('camera-ion-mem-trace_android_camera.out'))
+        query=Metric('android_camera'),
+        out=TextProto(r"""
+android_camera {
+  gc_rss_and_dma {
+    min: 47779840.0
+    max: 2529583104.0
+    avg: 1459479416.3297353
+  }
+}
+"""))
 
   def test_camera_ion_mem_trace_android_camera_unagg(self):
     return DiffTestBlueprint(
         trace=Path('../../data/camera-ion-mem-trace'),
-        query=Path('android_camera_unagg'),
+        query=Metric('android_camera_unagg'),
         out=Path('camera-ion-mem-trace_android_camera_unagg.out'))
