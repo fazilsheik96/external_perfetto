@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path
+from python.generators.diff_tests.testing import Path, Metric
+from python.generators.diff_tests.testing import Csv, Json, TextProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import DiffTestModule
 
@@ -23,11 +24,39 @@ class DiffTestModule_Ufs(DiffTestModule):
   def test_ufshcd_command(self):
     return DiffTestBlueprint(
         trace=Path('ufshcd_command.textproto'),
-        query=Path('ufshcd_command_test.sql'),
-        out=Path('ufshcd_command.out'))
+        query="""
+SELECT
+  ts,
+  value
+FROM
+  counter AS c
+JOIN
+  counter_track AS ct
+  ON c.track_id = ct.id
+WHERE
+  ct.name = "io.ufs.command.count"
+ORDER BY ts;
+""",
+        out=Csv("""
+"ts","value"
+10000,1.000000
+10008,2.000000
+10010,3.000000
+10011,1.000000
+"""))
 
   def test_ufshcd_command_tag(self):
     return DiffTestBlueprint(
         trace=Path('ufshcd_command_tag.textproto'),
-        query=Path('ufshcd_command_tag_test.sql'),
-        out=Path('ufshcd_command_tag.out'))
+        query="""
+SELECT ts, dur, slice.name
+FROM slice
+JOIN track ON slice.track_id = track.id
+WHERE track.name GLOB 'io.ufs.command.tag*'
+ORDER BY ts;
+""",
+        out=Csv("""
+"ts","dur","name"
+10000,800,"READ (10)"
+10900,50,"WRITE (10) (GID=0x16)"
+"""))

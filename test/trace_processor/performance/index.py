@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from python.generators.diff_tests.testing import Path
+from python.generators.diff_tests.testing import Path, Metric
+from python.generators.diff_tests.testing import Csv, Json, TextProto
 from python.generators.diff_tests.testing import DiffTestBlueprint
 from python.generators.diff_tests.testing import DiffTestModule
 
@@ -23,17 +24,44 @@ class DiffTestModule_Performance(DiffTestModule):
   def test_irq_runtime_metric(self):
     return DiffTestBlueprint(
         trace=Path('irq_runtime_metric.textproto'),
-        query=Path('android_irq_runtime'),
+        query=Metric('android_irq_runtime'),
         out=Path('irq_runtime_metric.out'))
 
   def test_cpu_frequency_limits(self):
     return DiffTestBlueprint(
         trace=Path('cpu_frequency_limits.textproto'),
-        query=Path('cpu_frequency_limits_test.sql'),
-        out=Path('cpu_frequency_limits.out'))
+        query="""
+SELECT
+  ts,
+  value,
+  REPLACE(name, " Freq Limit", "") AS cpu
+FROM
+  counter AS c
+LEFT JOIN
+  counter_track AS t
+  ON c.track_id = t.id
+WHERE
+  name GLOB "* Freq Limit"
+ORDER BY ts;
+""",
+        out=Csv("""
+"ts","value","cpu"
+90000000,2800000.000000,"Cpu 6 Max"
+90000000,500000.000000,"Cpu 6 Min"
+100000000,1700000.000000,"Cpu 6 Max"
+100000000,500000.000000,"Cpu 6 Min"
+110000000,2800000.000000,"Cpu 6 Max"
+110000000,1400000.000000,"Cpu 6 Min"
+120000000,1500000.000000,"Cpu 6 Max"
+120000000,500000.000000,"Cpu 6 Min"
+120000000,1400000.000000,"Cpu 4 Max"
+120000000,600000.000000,"Cpu 4 Min"
+130000000,2200000.000000,"Cpu 4 Max"
+130000000,800000.000000,"Cpu 4 Min"
+"""))
 
   def test_frame_timeline_metric(self):
     return DiffTestBlueprint(
         trace=Path('frame_timeline_metric.py'),
-        query=Path('android_frame_timeline_metric'),
+        query=Metric('android_frame_timeline_metric'),
         out=Path('frame_timeline_metric.out'))
