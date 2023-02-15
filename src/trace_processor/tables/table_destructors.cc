@@ -49,6 +49,7 @@ CpuTable::~CpuTable() = default;
 CpuFreqTable::~CpuFreqTable() = default;
 ThreadTable::~ThreadTable() = default;
 ProcessTable::~ProcessTable() = default;
+FiledescriptorTable::~FiledescriptorTable() = default;
 ClockSnapshotTable::~ClockSnapshotTable() = default;
 
 // profiler_tables.h
@@ -75,7 +76,6 @@ FlowTable::~FlowTable() = default;
 SchedSliceTable::~SchedSliceTable() = default;
 GpuSliceTable::~GpuSliceTable() = default;
 GraphicsFrameSliceTable::~GraphicsFrameSliceTable() = default;
-DescribeSliceTable::~DescribeSliceTable() = default;
 ThreadStateTable::~ThreadStateTable() = default;
 ExpectedFrameTimelineSliceTable::~ExpectedFrameTimelineSliceTable() = default;
 ActualFrameTimelineSliceTable::~ActualFrameTimelineSliceTable() = default;

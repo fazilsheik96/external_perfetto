@@ -419,6 +419,21 @@ message AndroidSystemPropertyConfig {
 
 // End of protos/perfetto/config/android/android_system_property_config.proto
 
+// Begin of protos/perfetto/config/android/network_trace_config.proto
+
+// Network tracing data source that records details on all packets sent or
+// received by the network.
+message NetworkPacketTraceConfig {
+  // Polling frequency in milliseconds. Network tracing writes to a fixed size
+  // ring buffer. The polling interval should be such that the ring buffer is
+  // unlikely to fill in that interval (or that filling is an acceptable risk).
+  // The minimum polling rate is 100ms (values below this are ignored).
+  // Introduced in Android 14 (U).
+  optional uint32 poll_ms = 1;
+}
+
+// End of protos/perfetto/config/android/network_trace_config.proto
+
 // Begin of protos/perfetto/config/android/packages_list_config.proto
 
 // Data source that lists details (such as version code) about packages on an
@@ -778,6 +793,13 @@ message ProcessStatsConfig {
 
   // DEPRECATED thread_time_in_state_cache_size
   reserved 8;
+
+  // If true this will resolve filedescriptors for each process so these
+  // can be mapped to their actual device or file.
+  // Requires raw_syscalls/sys_exit ftrace events to be enabled or
+  // new fds opened after initially scanning a process will not be
+  // recognized.
+  optional bool resolve_process_fds = 9;
 }
 
 // End of protos/perfetto/config/process_stats/process_stats_config.proto
@@ -2339,7 +2361,7 @@ message TrackEventConfig {
 // Begin of protos/perfetto/config/data_source_config.proto
 
 // The configuration that is passed to each data source when starting tracing.
-// Next id: 120
+// Next id: 121
 message DataSourceConfig {
   enum SessionInitiator {
     SESSION_INITIATOR_UNSPECIFIED = 0;
@@ -2452,6 +2474,11 @@ message DataSourceConfig {
   // through the Perfetto SDK API. Data sources that don't use that API (e.g.,
   // traced_probes) may not support interception.
   optional InterceptorConfig interceptor_config = 115;
+
+  // Data source name: android.network_packets.
+  // Introduced in Android 14 (U).
+  optional NetworkPacketTraceConfig network_packet_trace_config = 120
+      [lazy = true];
 
   // This is a fallback mechanism to send a free-form text config to the
   // producer. In theory this should never be needed. All the code that
@@ -2869,10 +2896,14 @@ message TraceConfig {
 
   // DEPRECATED. Was trace_uuid, use trace_uuid_msb and trace_uuid_lsb instead.
   reserved 26;
+
   // An identifier clients can use to tie this trace to other logging.
-  // Alternative encoding of trace_uuid as two int64s.
-  optional int64 trace_uuid_msb = 27;
-  optional int64 trace_uuid_lsb = 28;
+  // DEPRECATED as per v32. See TracePacket.trace_uuid for the authoritative
+  // Trace UUID. If this field is set, the tracing service will respect the
+  // requested UUID (i.e. TracePacket.trace_uuid == this field) but only if
+  // gap-less snapshotting is not used.
+  optional int64 trace_uuid_msb = 27 [deprecated = true];
+  optional int64 trace_uuid_lsb = 28 [deprecated = true];
 
   // When set applies a post-filter to the trace contents using the filter
   // provided. The filter is applied at ReadBuffers() time and works both in the
@@ -3602,6 +3633,47 @@ message InitialDisplayState {
 }
 
 // End of protos/perfetto/trace/android/initial_display_state.proto
+
+// Begin of protos/perfetto/trace/android/network_trace.proto
+
+enum TrafficDirection {
+  DIR_UNSPECIFIED = 0;
+  DIR_INGRESS = 1;
+  DIR_EGRESS = 2;
+}
+
+// NetworkPacketEvent records the details of a single packet sent or received
+// on the network (in Linux kernel terminology, one sk_buff struct).
+message NetworkPacketEvent {
+  // The direction traffic is flowing for this event.
+  optional TrafficDirection direction = 1;
+
+  // The name of the interface if available (e.g. 'rmnet0').
+  optional string interface = 2;
+
+  // The length of the packet in bytes (wire_size - L2_header_size).
+  optional uint32 length = 3;
+
+  // The Linux user id associated with the packet's socket.
+  optional uint32 uid = 4;
+
+  // The Android network tag associated with the packet's socket.
+  optional uint32 tag = 5;
+
+  // The packet's IP protocol (TCP=6, UDP=17, etc).
+  optional uint32 ip_proto = 6;
+
+  // The packet's TCP flags as a bitmask (FIN=0x1, SYN=0x2, RST=0x4, etc).
+  optional uint32 tcp_flags = 7;
+
+  // The local udp/tcp port of the packet.
+  optional uint32 local_port = 8;
+
+  // The remote udp/tcp port of the packet.
+  optional uint32 remote_port = 9;
+}
+
+// End of protos/perfetto/trace/android/network_trace.proto
 
 // Begin of protos/perfetto/trace/android/packages_list.proto
 
@@ -4434,6 +4506,28 @@ message ClkSetRateFtraceEvent {
 }
 
 // End of protos/perfetto/trace/ftrace/clk.proto
+
+// Begin of protos/perfetto/trace/ftrace/cma.proto
+
+message CmaAllocStartFtraceEvent {
+  optional uint32 align = 1;
+  optional uint32 count = 2;
+  optional string name = 3;
+}
+message CmaAllocInfoFtraceEvent {
+  optional uint32 align = 1;
+  optional uint32 count = 2;
+  optional uint32 err_iso = 3;
+  optional uint32 err_mig = 4;
+  optional uint32 err_test = 5;
+  optional string name = 6;
+  optional uint64 nr_mapped = 7;
+  optional uint64 nr_migrated = 8;
+  optional uint64 nr_reclaimed = 9;
+  optional uint64 pfn = 10;
+}
+
+// End of protos/perfetto/trace/ftrace/cma.proto
 
 // Begin of protos/perfetto/trace/ftrace/compaction.proto
 
@@ -6614,6 +6708,7 @@ message ConsoleFtraceEvent {
 
 message SysEnterFtraceEvent {
   optional int64 id = 1;
+  repeated uint64 args = 2;
 }
 message SysExitFtraceEvent {
   optional int64 id = 1;
@@ -7784,6 +7879,8 @@ message FtraceEvent {
     TrustyIpcRxFtraceEvent trusty_ipc_rx = 462;
     TrustyIpcTxFtraceEvent trusty_ipc_tx = 463;
     TrustyEnqueueNopFtraceEvent trusty_enqueue_nop = 464;
+    CmaAllocStartFtraceEvent cma_alloc_start = 465;
+    CmaAllocInfoFtraceEvent cma_alloc_info = 466;
   }
 }
 
@@ -9162,6 +9259,12 @@ message ChromeMojoEventInfo {
 
   // Indicate whether this is a message or reply.
   optional bool is_reply = 5;
+
+  // The payload size of the message being sent through mojo messages.
+  optional uint64 payload_size = 6;
+
+  // Represents the size of the message. Includes all headers and user payload.
+  optional uint64 data_num_bytes = 7;
 }
 
 // End of protos/perfetto/trace/track_event/chrome_mojo_event_info.proto
@@ -10601,6 +10704,11 @@ message ProcessStats {
     reserved 4;
   }
 
+  message FDInfo {
+    optional uint64 fd = 1;
+    optional string path = 2;
+  }
+
   message Process {
     optional int32 pid = 1;
 
@@ -10630,6 +10738,8 @@ message ProcessStats {
     // https://docs.google.com/document/d/1_WmgE1F5WUrhwkPqJis3dWyOiUmQKvpXp5cd4w86TvA
     optional uint32 chrome_private_footprint_kb = 13;
     optional uint32 chrome_peak_resident_set_kb = 14;
+
+    repeated FDInfo fds = 15;
   }
   repeated Process processes = 1;
 
@@ -10956,6 +11066,22 @@ message TracePacketDefaults {
 }
 // End of protos/perfetto/trace/trace_packet_defaults.proto
 
+// Begin of protos/perfetto/trace/trace_uuid.proto
+
+// A random unique ID that identifies the trace.
+// This message has been introduced in v32. Prior to that, the UUID was
+// only (optionally) present in the TraceConfig.trace_uuid_msb/lsb fields.
+// This has been moved to a standalone packet to deal with new use-cases for
+// go/gapless-aot, where the same tracing session can be serialized several
+// times, in which case the UUID is changed on each snapshot and does not match
+// the one in the TraceConfig.
+message TraceUuid {
+  optional int64 msb = 1;
+  optional int64 lsb = 2;
+}
+
+// End of protos/perfetto/trace/trace_uuid.proto
+
 // Begin of protos/perfetto/trace/track_event/process_descriptor.proto
 
 // Describes a process's attributes. Emitted as part of a TrackDescriptor,
@@ -11001,6 +11127,16 @@ message ProcessDescriptor {
 }
 
 // End of protos/perfetto/trace/track_event/process_descriptor.proto
+
+// Begin of protos/perfetto/trace/track_event/range_of_interest.proto
+
+// This message specifies the "range of interest" for track events. With the
+// `drop_track_event_data_before` option set to `kTrackEventRangeOfInterest`,
+// Trace Processor drops track events outside of this range.
+message TrackEventRangeOfInterest {
+  optional int64 start_us = 1;
+}
+// End of protos/perfetto/trace/track_event/range_of_interest.proto
 
 // Begin of protos/perfetto/trace/track_event/thread_descriptor.proto
 
@@ -11470,7 +11606,7 @@ message UiState {
 // See the [Buffers and Dataflow](/docs/concepts/buffers.md) doc for details.
 //
 // Next reserved id: 14 (up to 15).
-// Next id: 88.
+// Next id: 91.
 message TracePacket {
   // The timestamp of the TracePacket.
   // By default this timestamps refers to the trace clock (CLOCK_BOOTTIME on
@@ -11499,6 +11635,7 @@ message TracePacket {
     // IDs up to 15 are reserved. They take only one byte to encode their
     // preamble so should be used for frequent events.
 
+    TraceUuid trace_uuid = 89;
     TraceConfig trace_config = 33;
     FtraceStats ftrace_stats = 34;
     TraceStats trace_stats = 35;
@@ -11573,6 +11710,13 @@ message TracePacket {
     // allows trace_processor to deserialize extended messages using reflection
     // even if the extension proto is not checked in the Perfetto repo.
     ExtensionDescriptor extension_descriptor = 72;
+
+    // Represents a single packet sent or received by the network.
+    NetworkPacketEvent network_packet = 88;
+
+    // The "range of interest" for track events. See the message definition
+    // comments for more details.
+    TrackEventRangeOfInterest track_event_range_of_interest = 90;
 
     // This field is only used for testing.
     // In previous versions of this proto this field had the id 268435455

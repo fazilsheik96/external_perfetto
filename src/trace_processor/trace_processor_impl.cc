@@ -19,18 +19,21 @@
 #include <algorithm>
 #include <cstdint>
 #include <memory>
+#include <string>
 #include <type_traits>
+#include <unordered_map>
 
 #include "perfetto/base/logging.h"
 #include "perfetto/base/status.h"
 #include "perfetto/base/time.h"
+#include "perfetto/ext/base/flat_hash_map.h"
 #include "perfetto/ext/base/scoped_file.h"
 #include "perfetto/ext/base/string_splitter.h"
 #include "perfetto/ext/base/string_utils.h"
+#include "perfetto/trace_processor/basic_types.h"
 #include "src/trace_processor/dynamic/ancestor_generator.h"
 #include "src/trace_processor/dynamic/connected_flow_generator.h"
 #include "src/trace_processor/dynamic/descendant_generator.h"
-#include "src/trace_processor/dynamic/describe_slice_generator.h"
 #include "src/trace_processor/dynamic/experimental_annotated_stack_generator.h"
 #include "src/trace_processor/dynamic/experimental_counter_dur_generator.h"
 #include "src/trace_processor/dynamic/experimental_flamegraph_generator.h"
@@ -38,7 +41,6 @@
 #include "src/trace_processor/dynamic/experimental_sched_upid_generator.h"
 #include "src/trace_processor/dynamic/experimental_slice_layout_generator.h"
 #include "src/trace_processor/dynamic/view_generator.h"
-#include "src/trace_processor/importers/additional_modules.h"
 #include "src/trace_processor/importers/android_bugreport/android_bugreport_parser.h"
 #include "src/trace_processor/importers/common/clock_tracker.h"
 #include "src/trace_processor/importers/ftrace/sched_event_tracker.h"
@@ -47,29 +49,32 @@
 #include "src/trace_processor/importers/gzip/gzip_trace_parser.h"
 #include "src/trace_processor/importers/json/json_trace_parser.h"
 #include "src/trace_processor/importers/json/json_trace_tokenizer.h"
+#include "src/trace_processor/importers/json/json_utils.h"
+#include "src/trace_processor/importers/ninja/ninja_log_parser.h"
+#include "src/trace_processor/importers/proto/additional_modules.h"
 #include "src/trace_processor/importers/proto/metadata_tracker.h"
 #include "src/trace_processor/importers/systrace/systrace_trace_parser.h"
 #include "src/trace_processor/iterator_impl.h"
-#include "src/trace_processor/sqlite/functions/create_function.h"
-#include "src/trace_processor/sqlite/functions/create_view_function.h"
-#include "src/trace_processor/sqlite/functions/import.h"
-#include "src/trace_processor/sqlite/functions/pprof_functions.h"
-#include "src/trace_processor/sqlite/functions/register_function.h"
-#include "src/trace_processor/sqlite/functions/sqlite3_str_split.h"
-#include "src/trace_processor/sqlite/functions/utils.h"
-#include "src/trace_processor/sqlite/functions/window_functions.h"
+#include "src/trace_processor/prelude/functions/create_function.h"
+#include "src/trace_processor/prelude/functions/create_view_function.h"
+#include "src/trace_processor/prelude/functions/import.h"
+#include "src/trace_processor/prelude/functions/pprof_functions.h"
+#include "src/trace_processor/prelude/functions/register_function.h"
+#include "src/trace_processor/prelude/functions/sqlite3_str_split.h"
+#include "src/trace_processor/prelude/functions/utils.h"
+#include "src/trace_processor/prelude/functions/window_functions.h"
+#include "src/trace_processor/prelude/operators/span_join_operator.h"
+#include "src/trace_processor/prelude/operators/window_operator.h"
 #include "src/trace_processor/sqlite/scoped_db.h"
-#include "src/trace_processor/sqlite/span_join_operator_table.h"
 #include "src/trace_processor/sqlite/sql_stats_table.h"
 #include "src/trace_processor/sqlite/sqlite_raw_table.h"
 #include "src/trace_processor/sqlite/sqlite_table.h"
 #include "src/trace_processor/sqlite/sqlite_utils.h"
 #include "src/trace_processor/sqlite/stats_table.h"
-#include "src/trace_processor/sqlite/window_operator_table.h"
-#include "src/trace_processor/stdlib/utils.h"
 #include "src/trace_processor/tp_metatrace.h"
 #include "src/trace_processor/types/variadic.h"
 #include "src/trace_processor/util/protozero_to_text.h"
+#include "src/trace_processor/util/sql_modules.h"
 #include "src/trace_processor/util/status_macros.h"
 
 #include "protos/perfetto/common/builtin_clock.pbzero.h"
@@ -82,6 +87,7 @@
 #include "src/trace_processor/metrics/metrics.descriptor.h"
 #include "src/trace_processor/metrics/metrics.h"
 #include "src/trace_processor/metrics/sql/amalgamated_sql_metrics.h"
+#include "src/trace_processor/stdlib/amalgamated_stdlib.h"
 
 // In Android and Chromium tree builds, we don't have the percentile module.
 // Just don't include it.
@@ -159,8 +165,7 @@ void CreateBuiltinTables(sqlite3* db) {
     PERFETTO_ELOG("Error initializing: %s", error);
     sqlite3_free(error);
   }
-  sqlite3_exec(db,
-               "CREATE TABLE trace_bounds(start_ts BIG INT, end_ts BIG INT)",
+  sqlite3_exec(db, "CREATE TABLE trace_bounds(start_ts BIGINT, end_ts BIGINT)",
                nullptr, nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -187,8 +192,8 @@ void CreateBuiltinTables(sqlite3* db) {
   // in the table is shown specially in the UI, and users can insert rows into
   // this table to draw more things.
   sqlite3_exec(db,
-               "CREATE TABLE debug_slices (id BIG INT, name STRING, ts BIG INT,"
-               "dur BIG INT, depth BIG INT)",
+               "CREATE TABLE debug_slices (id BIGINT, name STRING, ts BIGINT,"
+               "dur BIGINT, depth BIGINT)",
                nullptr, nullptr, &error);
   if (error) {
     PERFETTO_ELOG("Error initializing: %s", error);
@@ -308,6 +313,15 @@ void CreateBuiltinViews(sqlite3* db) {
                "  WHEN 'json' THEN string_value "
                "ELSE NULL END AS display_value "
                "FROM internal_args;",
+               nullptr, nullptr, &error);
+  MaybeRegisterError(error);
+
+  // TODO(lalitm): delete this any time after ~Feb 2023 when no version of the
+  // UI will be querying this anymore (describe_slice backing code was removed
+  // at end of November).
+  sqlite3_exec(db,
+               "CREATE TABLE describe_slice(id INT, type TEXT, "
+               "slice_id INT, description TEXT, doc_link TEXT);",
                nullptr, nullptr, &error);
   MaybeRegisterError(error);
 
@@ -647,6 +661,16 @@ void RegisterDevFunctions(sqlite3* db) {
   RegisterFunction<WriteFile>(db, "WRITE_FILE", 2);
 }
 
+sql_modules::NameToModule GetStdlibModules() {
+  sql_modules::NameToModule modules;
+  for (const auto& file_to_sql : stdlib::kFileToSql) {
+    std::string import_key = sql_modules::GetImportKey(file_to_sql.path);
+    std::string module = sql_modules::GetModuleName(import_key);
+    modules.Insert(module, {}).first->push_back({import_key, file_to_sql.sql});
+  }
+  return modules;
+}
+
 }  // namespace
 
 template <typename View>
@@ -659,6 +683,8 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
     : TraceProcessorStorageImpl(cfg) {
   context_.fuchsia_trace_tokenizer.reset(new FuchsiaTraceTokenizer(&context_));
   context_.fuchsia_trace_parser.reset(new FuchsiaTraceParser(&context_));
+
+  context_.ninja_log_parser.reset(new NinjaLogParser(&context_));
 
   context_.systrace_trace_parser.reset(new SystraceTraceParser(&context_));
 
@@ -709,7 +735,7 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
           new CreateViewFunction::Context{db_.get()}));
   RegisterFunction<Import>(db, "IMPORT", 1,
                            std::unique_ptr<Import::Context>(new Import::Context{
-                               db_.get(), this, stdlib::SetupStdLib()}));
+                               db_.get(), this, &sql_modules_}));
 
   // Old style function registration.
   // TODO(lalitm): migrate this over to using RegisterFunction once aggregate
@@ -718,9 +744,16 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterValueAtMaxTsFunction(db);
   {
     base::Status status = PprofFunctions::Register(db, &context_);
-    if (!status.ok()) {
+    if (!status.ok())
       PERFETTO_ELOG("%s", status.c_message());
-    }
+  }
+
+  auto stdlib_modules = GetStdlibModules();
+  for (auto module_it = stdlib_modules.GetIterator(); module_it; ++module_it) {
+    base::Status status =
+        RegisterSqlModule({module_it.key(), module_it.value(), false});
+    if (!status.ok())
+      PERFETTO_ELOG("%s", status.c_message());
   }
 
   SetupMetrics(this, *db_, &sql_metrics_, cfg.skip_builtin_metric_paths);
@@ -746,8 +779,6 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
       new ExperimentalFlamegraphGenerator(&context_)));
   RegisterDynamicTable(std::unique_ptr<ExperimentalCounterDurGenerator>(
       new ExperimentalCounterDurGenerator(storage->counter_table())));
-  RegisterDynamicTable(std::unique_ptr<DescribeSliceGenerator>(
-      new DescribeSliceGenerator(&context_)));
   RegisterDynamicTable(std::unique_ptr<ExperimentalSliceLayoutGenerator>(
       new ExperimentalSliceLayoutGenerator(
           context_.storage.get()->mutable_string_pool(),
@@ -791,6 +822,7 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDbTable(storage->arg_table());
   RegisterDbTable(storage->thread_table());
   RegisterDbTable(storage->process_table());
+  RegisterDbTable(storage->filedescriptor_table());
 
   RegisterDbTable(storage->slice_table());
   RegisterDbTable(storage->flow_table());
@@ -994,6 +1026,31 @@ bool TraceProcessorImpl::IsRootMetricField(const std::string& metric_name) {
     return false;
   auto field_idx = pool_.descriptors()[*desc_idx].FindFieldByName(metric_name);
   return field_idx != nullptr;
+}
+
+base::Status TraceProcessorImpl::RegisterSqlModule(SqlModule sql_module) {
+  sql_modules::RegisteredModule new_module;
+  std::string name = sql_module.name;
+  if (sql_modules_.Find(name) && !sql_module.allow_module_override) {
+    return base::ErrStatus(
+        "Module '%s' is already registered. Choose a different name.\n"
+        "If you want to replace the existing module using trace processor "
+        "shell, you need to pass the --dev flag and use --override-sql-module "
+        "to pass the module path.",
+        name.c_str());
+  }
+  for (auto const& name_and_sql : sql_module.files) {
+    if (sql_modules::GetModuleName(name_and_sql.first) != name) {
+      return base::ErrStatus(
+          "File import key doesn't match the module name. First part of import "
+          "key should be module name. Import key: %s, module name: %s.",
+          name_and_sql.first.c_str(), name.c_str());
+    }
+    new_module.import_key_to_file.Insert(name_and_sql.first,
+                                         {name_and_sql.second, false});
+  }
+  sql_modules_.Insert(name, std::move(new_module));
+  return base::OkStatus();
 }
 
 base::Status TraceProcessorImpl::RegisterMetric(const std::string& path,
