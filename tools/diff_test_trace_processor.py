@@ -30,7 +30,7 @@ sys.path.append(os.path.join(ROOT_DIR))
 
 from python.generators.diff_tests.testing import TestType
 from python.generators.diff_tests.utils import ctrl_c_handler
-from python.generators.diff_tests.runner import DiffTestSuiteRunner
+from python.generators.diff_tests.runner import DiffTestsRunner
 
 
 def main():
@@ -41,15 +41,10 @@ def main():
   parser.add_argument('--metrics-descriptor', type=str)
   parser.add_argument('--perf-file', type=str)
   parser.add_argument(
-      '--query-metric-filter',
+      '--name-filter',
       default='.*',
       type=str,
-      help='Filter the name of query files or metrics to test (regex syntax)')
-  parser.add_argument(
-      '--trace-filter',
-      default='.*',
-      type=str,
-      help='Filter the name of trace files to test (regex syntax)')
+      help='Filter the name of the tests to run (regex syntax)')
   parser.add_argument(
       '--keep-input',
       action='store_true',
@@ -64,9 +59,8 @@ def main():
       'trace_processor', type=str, help='location of trace processor binary')
   args = parser.parse_args()
 
-  test_runner = DiffTestSuiteRunner(args.query_metric_filter, args.trace_filter,
-                                    args.trace_processor, args.trace_descriptor,
-                                    args.no_colors)
+  test_runner = DiffTestsRunner(args.name_filter, args.trace_processor,
+                                args.trace_descriptor, args.no_colors)
   sys.stderr.write(f"[==========] Running {len(test_runner.tests)} tests.\n")
 
   results = test_runner.run_all_tests(args.metrics_descriptor, args.keep_input,
@@ -85,23 +79,15 @@ def main():
 
     metrics = []
     sorted_data = sorted(
-        results.perf_data,
-        key=lambda x: (x.test_type.name, x.trace_path, x.query_path_or_metric))
+        results.perf_data, key=lambda x: (x.test.type.name, x.test.name))
     for perf_args in sorted_data:
-      trace_short_path = os.path.relpath(perf_args.trace_path, test_dir)
-
-      query_short_path_or_metric = perf_args.query_path_or_metric
-      if perf_args.test_type == TestType.QUERY:
-        query_short_path_or_metric = os.path.relpath(
-            perf_args.query_path_or_metric, trace_processor_dir)
-
       metrics.append({
           'metric': 'tp_perf_test_ingest_time',
           'value': float(perf_args.ingest_time_ns) / 1.0e9,
           'unit': 's',
           'tags': {
-              'test_name': f"{trace_short_path}-{query_short_path_or_metric}",
-              'test_type': perf_args.test_type.name,
+              'test_name': perf_args.test.name,
+              'test_type': perf_args.test.type.name,
           },
           'labels': {},
       })
@@ -110,8 +96,8 @@ def main():
           'value': float(perf_args.real_time_ns) / 1.0e9,
           'unit': 's',
           'tags': {
-              'test_name': f"{trace_short_path}-{query_short_path_or_metric}",
-              'test_type': perf_args.test_type.name,
+              'test_name': perf_args.test.name,
+              'test_type': perf_args.test.type.name,
           },
           'labels': {},
       })
