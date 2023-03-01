@@ -489,6 +489,10 @@ message AndroidHwcomposerMetrics {
   // (non-weighted average)
   optional double composition_sf_cached_layers = 5;
 
+  // Counts the number of composition rounded corner decoration layers in the trace.
+  // (non-weighted average)
+  optional double composition_rcd_layers = 15;
+
   // Counts how many times validateDisplay is skipped.
   optional int32 skipped_validation_count = 6;
 
@@ -533,6 +537,58 @@ message AndroidHwcomposerMetrics {
 
   // DPU Vote Metrics for each thread track
   repeated DpuVoteMetrics dpu_vote_metrics = 14;
+
+  message MetricsPerDisplay {
+    // Display ID in HWC
+    optional string display_id = 1;
+
+    // Counts the number of composition total layers in the trace. (non-weighted average)
+    optional double composition_total_layers = 2;
+
+    // Counts the number of composition dpu layers in the trace. (non-weighted average)
+    optional double composition_dpu_layers = 3;
+
+    // Counts the number of composition gpu layers in the trace. (non-weighted average)
+    optional double composition_gpu_layers = 4;
+
+    // Counts the number of composition dpu cached layers in the trace. (non-weighted average)
+    optional double composition_dpu_cached_layers = 5;
+
+    // Counts the number of composition surfaceflinger cached layers in the trace.
+    // (non-weighted average)
+    optional double composition_sf_cached_layers = 6;
+
+    // Counts the number of composition rounded corner decoration layers in the trace.
+    // (non-weighted average)
+    optional double composition_rcd_layers = 7;
+
+    // Counts how many times validateDisplay is skipped.
+    optional int32 skipped_validation_count = 8;
+
+    // Counts how many times validateDisplay cannot be skipped.
+    optional int32 unskipped_validation_count = 9;
+
+    // Counts how many times validateDisplay is already separated from presentDisplay
+    // since the beginning.
+    optional int32 separated_validation_count = 10;
+
+    // Counts how many unhandled validation cases which might be caused by errors.
+    optional int32 unknown_validation_count = 11;
+
+    // the average of overall hwcomposer execution time.
+    optional double avg_all_execution_time_ms = 12;
+
+    // the average of hwcomposer execution time for skipped validation cases.
+    optional double avg_skipped_execution_time_ms = 13;
+
+    // the average of hwcomposer execution time for unskipped validation cases.
+    optional double avg_unskipped_execution_time_ms = 14;
+
+    // the average of hwcomposer execution time for separated validation cases.
+    optional double avg_separated_execution_time_ms = 15;
+  }
+
+  repeated MetricsPerDisplay metrics_per_display = 16;
 }
 
 // End of protos/perfetto/metrics/android/hwcomposer.proto
@@ -1637,36 +1693,6 @@ message AndroidSurfaceflingerMetric {
 
 // End of protos/perfetto/metrics/android/surfaceflinger.proto
 
-// Begin of protos/perfetto/metrics/android/sysui_cuj_metrics.proto
-
-// Metric that stores frame information and potential jank root causes
-// for a single Android system UI interaction/user journey.
-message AndroidSysUiCujMetrics {
-  // A list of all frames within the SysUi user journey.
-  repeated Frame frames = 1;
-
-  optional string cuj_name = 2;
-  optional int64 cuj_start = 3;
-  optional int64 cuj_dur = 4;
-
-  // Details about the process (uid, version, etc)
-  optional AndroidProcessMetadata process = 5;
-
-  message Frame {
-    // Index of the frame within the single user journey.
-    optional int64 number = 1;
-    optional int64 vsync = 5;
-    optional int64 ts = 2;
-    optional int64 dur = 3;
-
-    // A list of identified potential causes for jank.
-    // Optional.
-    repeated string jank_cause = 4;
-  }
-}
-
-// End of protos/perfetto/metrics/android/sysui_cuj_metrics.proto
-
 // Begin of protos/perfetto/metrics/android/task_names.proto
 
 message AndroidTaskNames {
@@ -1844,8 +1870,8 @@ message TraceMetrics {
   // GPU metrics on Android.
   optional AndroidGpuMetric android_gpu = 26;
 
-  // Frame timing and jank root causes for system UI interactions.
-  optional AndroidSysUiCujMetrics android_sysui_cuj = 27;
+  // Deprecated AndroidSysUiCujMetrics.
+  reserved 27;
 
   // Interaction and frame timings for CUJs (important UI transitions).
   optional AndroidJankCujMetric android_jank_cuj = 48;

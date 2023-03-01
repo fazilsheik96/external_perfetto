@@ -20,7 +20,6 @@
 -- @column pid           PID of the process that started the binder transaction.
 -- @column slice_name    Name of the slice with binder transaction.
 -- @column event_count   Number of binder transactions in process in slice.
---
 CREATE VIEW android_binder_metrics_by_process AS
 SELECT
   process.name AS process_name,
@@ -28,9 +27,9 @@ SELECT
   slice.name AS slice_name,
   COUNT(*) AS event_count
 FROM slice
-INNER JOIN thread_track ON slice.track_id = thread_track.id
-INNER JOIN thread ON thread.utid = thread_track.utid
-INNER JOIN process ON thread.upid = process.upid
+JOIN thread_track ON slice.track_id = thread_track.id
+JOIN thread ON thread.utid = thread_track.utid
+JOIN process ON thread.upid = process.upid
 WHERE
   slice.name GLOB 'binder*'
 GROUP BY

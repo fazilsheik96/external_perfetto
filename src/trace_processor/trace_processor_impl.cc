@@ -783,27 +783,29 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
       new ExperimentalSliceLayoutGenerator(
           context_.storage.get()->mutable_string_pool(),
           &storage->slice_table())));
+  RegisterDynamicTable(std::unique_ptr<AncestorGenerator>(new AncestorGenerator(
+      AncestorGenerator::Ancestor::kSlice, context_.storage.get())));
   RegisterDynamicTable(std::unique_ptr<AncestorGenerator>(
-      new AncestorGenerator(AncestorGenerator::Ancestor::kSlice, &context_)));
+      new AncestorGenerator(AncestorGenerator::Ancestor::kStackProfileCallsite,
+                            context_.storage.get())));
   RegisterDynamicTable(std::unique_ptr<AncestorGenerator>(new AncestorGenerator(
-      AncestorGenerator::Ancestor::kStackProfileCallsite, &context_)));
-  RegisterDynamicTable(std::unique_ptr<AncestorGenerator>(new AncestorGenerator(
-      AncestorGenerator::Ancestor::kSliceByStack, &context_)));
+      AncestorGenerator::Ancestor::kSliceByStack, context_.storage.get())));
   RegisterDynamicTable(
       std::unique_ptr<DescendantGenerator>(new DescendantGenerator(
-          DescendantGenerator::Descendant::kSlice, &context_)));
-  RegisterDynamicTable(
-      std::unique_ptr<DescendantGenerator>(new DescendantGenerator(
-          DescendantGenerator::Descendant::kSliceByStack, &context_)));
-  RegisterDynamicTable(
-      std::unique_ptr<ConnectedFlowGenerator>(new ConnectedFlowGenerator(
-          ConnectedFlowGenerator::Mode::kDirectlyConnectedFlow, &context_)));
+          DescendantGenerator::Descendant::kSlice, context_.storage.get())));
+  RegisterDynamicTable(std::unique_ptr<DescendantGenerator>(
+      new DescendantGenerator(DescendantGenerator::Descendant::kSliceByStack,
+                              context_.storage.get())));
   RegisterDynamicTable(
       std::unique_ptr<ConnectedFlowGenerator>(new ConnectedFlowGenerator(
-          ConnectedFlowGenerator::Mode::kPrecedingFlow, &context_)));
-  RegisterDynamicTable(
-      std::unique_ptr<ConnectedFlowGenerator>(new ConnectedFlowGenerator(
-          ConnectedFlowGenerator::Mode::kFollowingFlow, &context_)));
+          ConnectedFlowGenerator::Mode::kDirectlyConnectedFlow,
+          context_.storage.get())));
+  RegisterDynamicTable(std::unique_ptr<ConnectedFlowGenerator>(
+      new ConnectedFlowGenerator(ConnectedFlowGenerator::Mode::kPrecedingFlow,
+                                 context_.storage.get())));
+  RegisterDynamicTable(std::unique_ptr<ConnectedFlowGenerator>(
+      new ConnectedFlowGenerator(ConnectedFlowGenerator::Mode::kFollowingFlow,
+                                 context_.storage.get())));
   RegisterDynamicTable(std::unique_ptr<ExperimentalSchedUpidGenerator>(
       new ExperimentalSchedUpidGenerator(storage->sched_slice_table(),
                                          storage->thread_table())));
@@ -886,6 +888,7 @@ TraceProcessorImpl::TraceProcessorImpl(const Config& cfg)
   RegisterDbTable(storage->memory_snapshot_node_table());
   RegisterDbTable(storage->memory_snapshot_edge_table());
 
+  RegisterDbTable(storage->experimental_proto_path_table());
   RegisterDbTable(storage->experimental_proto_content_table());
 
   RegisterDbTable(storage->experimental_missing_chrome_processes_table());
