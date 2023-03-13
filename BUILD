@@ -49,6 +49,21 @@ exports_files(["NOTICE"])
 # Internal targets
 # ##############################################################################
 
+# GN target: //src/base:perfetto_base_default_platform
+perfetto_cc_library(
+    name = "perfetto_base_default_platform",
+    srcs = [
+        "src/base/default_platform.cc",
+    ],
+    hdrs = [
+        ":include_perfetto_base_base",
+        ":include_perfetto_ext_base_base",
+        ":include_perfetto_public_abi_base",
+        ":include_perfetto_public_base",
+    ],
+    linkstatic = True,
+)
+
 # GN target: //src/ipc/protoc_plugin:ipc_plugin
 perfetto_cc_binary(
     name = "ipc_plugin",
@@ -111,6 +126,7 @@ perfetto_cc_library(
     name = "protozero",
     srcs = [
         "src/protozero/field.cc",
+        "src/protozero/gen_field_helpers.cc",
         "src/protozero/message.cc",
         "src/protozero/message_arena.cc",
         "src/protozero/message_handle.cc",
@@ -392,6 +408,7 @@ perfetto_filegroup(
         "include/perfetto/ext/base/paged_memory.h",
         "include/perfetto/ext/base/periodic_task.h",
         "include/perfetto/ext/base/pipe.h",
+        "include/perfetto/ext/base/platform.h",
         "include/perfetto/ext/base/scoped_file.h",
         "include/perfetto/ext/base/small_set.h",
         "include/perfetto/ext/base/small_vector.h",
@@ -538,6 +555,7 @@ perfetto_filegroup(
         "include/perfetto/protozero/cpp_message_obj.h",
         "include/perfetto/protozero/field.h",
         "include/perfetto/protozero/field_writer.h",
+        "include/perfetto/protozero/gen_field_helpers.h",
         "include/perfetto/protozero/message.h",
         "include/perfetto/protozero/message_arena.h",
         "include/perfetto/protozero/message_handle.h",
@@ -635,6 +653,7 @@ perfetto_filegroup(
         "include/perfetto/tracing/internal/checked_scope.h",
         "include/perfetto/tracing/internal/compile_time_hash.h",
         "include/perfetto/tracing/internal/data_source_internal.h",
+        "include/perfetto/tracing/internal/data_source_type.h",
         "include/perfetto/tracing/internal/in_process_tracing_backend.h",
         "include/perfetto/tracing/internal/interceptor_trace_writer.h",
         "include/perfetto/tracing/internal/system_tracing_backend.h",
@@ -768,6 +787,8 @@ perfetto_cc_library(
         ":include_perfetto_public_abi_base",
         ":include_perfetto_public_base",
     ],
+    deps = [
+    ] + PERFETTO_CONFIG.deps.base_platform,
     linkstatic = True,
 )
 
@@ -1403,6 +1424,8 @@ perfetto_filegroup(
         "src/trace_processor/importers/proto/metadata_minimal_module.h",
         "src/trace_processor/importers/proto/metadata_tracker.cc",
         "src/trace_processor/importers/proto/metadata_tracker.h",
+        "src/trace_processor/importers/proto/packet_analyzer.cc",
+        "src/trace_processor/importers/proto/packet_analyzer.h",
         "src/trace_processor/importers/proto/packet_sequence_state.h",
         "src/trace_processor/importers/proto/packet_sequence_state_generation.cc",
         "src/trace_processor/importers/proto/perf_sample_tracker.cc",
@@ -1868,7 +1891,9 @@ perfetto_filegroup(
 perfetto_filegroup(
     name = "src_trace_processor_stdlib_common_common",
     srcs = [
+        "src/trace_processor/stdlib/common/counters.sql",
         "src/trace_processor/stdlib/common/metadata.sql",
+        "src/trace_processor/stdlib/common/percentiles.sql",
         "src/trace_processor/stdlib/common/slices.sql",
         "src/trace_processor/stdlib/common/timestamps.sql",
     ],
@@ -4011,6 +4036,7 @@ perfetto_cc_protozero_library(
 perfetto_proto_library(
     name = "protos_perfetto_trace_processor_protos",
     srcs = [
+        "protos/perfetto/trace_processor/cloud_trace_processor.proto",
         "protos/perfetto/trace_processor/metatrace_categories.proto",
         "protos/perfetto/trace_processor/trace_processor.proto",
     ],
