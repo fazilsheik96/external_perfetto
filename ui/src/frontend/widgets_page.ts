@@ -15,15 +15,37 @@
 import * as m from 'mithril';
 
 import {Anchor} from './anchor';
+import {classNames} from './classnames';
 import {globals} from './globals';
+import {LIBRARY_ADD_CHECK} from './icons';
 import {createPage} from './pages';
 import {TableShowcase} from './tables/table_showcase';
 import {Button} from './widgets/button';
 import {Checkbox} from './widgets/checkbox';
 import {EmptyState} from './widgets/empty_state';
+import {Icon} from './widgets/icon';
+import {MultiSelect, MultiSelectDiff} from './widgets/multiselect';
 import {Popup, PopupPosition} from './widgets/popup';
 import {Portal} from './widgets/portal';
+import {Select} from './widgets/select';
 import {TextInput} from './widgets/text_input';
+
+const options: {[key: string]: boolean} = {
+  foobar: false,
+  foo: false,
+  bar: false,
+  baz: false,
+  qux: false,
+  quux: false,
+  corge: false,
+  grault: false,
+  garply: false,
+  waldo: false,
+  fred: false,
+  plugh: false,
+  xyzzy: false,
+  thud: false,
+};
 
 function PortalButton() {
   let portalOpen = false;
@@ -105,6 +127,7 @@ type Options = {
 interface WidgetShowcaseAttrs {
   initialOpts?: Options;
   renderWidget: (options: any) => any;
+  wide?: boolean;
 }
 
 class EnumOption {
@@ -144,7 +167,7 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
     }
   }
 
-  view({attrs: {renderWidget}}: m.CVnode<WidgetShowcaseAttrs>) {
+  view({attrs: {renderWidget, wide}}: m.CVnode<WidgetShowcaseAttrs>) {
     const listItems = [];
 
     if (this.opts) {
@@ -159,7 +182,13 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
       m(
           '.widget-block',
           m(
-              '.widget-container',
+              'div',
+              {
+                class: classNames(
+                    'widget-container',
+                    wide && 'widget-container-wide',
+                    ),
+              },
               renderWidget(this.optValues),
               ),
           this.renderOptions(listItems),
@@ -195,7 +224,7 @@ class WidgetShowcase implements m.ClassComponent<WidgetShowcaseAttrs> {
       return m('option', {value: option}, option);
     });
     return m(
-        'select',
+        Select,
         {
           value: this.optValues[key],
           onchange: (e: Event) => {
@@ -248,6 +277,20 @@ export const WidgetsPage = createPage({
             disabled: false,
           },
         }),
+        m('h2', 'Select'),
+        m(WidgetShowcase, {
+          renderWidget: (opts) =>
+              m(Select,
+                opts,
+                [
+                  m('option', {value: 'foo', label: 'Foo'}),
+                  m('option', {value: 'bar', label: 'Bar'}),
+                  m('option', {value: 'baz', label: 'Baz'}),
+                ]),
+          initialOpts: {
+            disabled: false,
+          },
+        }),
         m('h2', 'Empty State'),
         m(WidgetShowcase, {
           renderWidget: ({header, content}) =>
@@ -278,7 +321,7 @@ export const WidgetsPage = createPage({
         }),
         m('h2', 'Table'),
         m(WidgetShowcase,
-          {renderWidget: () => m(TableShowcase), initialOpts: {}}),
+          {renderWidget: () => m(TableShowcase), initialOpts: {}, wide: true}),
         m('h2', 'Portal'),
         m('p', `A portal is a div rendered out of normal flow of the
         hierarchy.`),
@@ -324,6 +367,38 @@ export const WidgetsPage = createPage({
         m(WidgetShowcase, {
           renderWidget: (opts) => m(ControlledPopup, opts),
           initialOpts: {},
+        }),
+        m('h2', 'Icon'),
+        m(WidgetShowcase, {
+          renderWidget: (opts) => m(Icon, {icon: 'star', ...opts}),
+          initialOpts: {filled: false},
+        }),
+        m('h2', 'MultiSelect'),
+        m(WidgetShowcase, {
+          renderWidget: ({icon, ...rest}) => m(MultiSelect, {
+            options: Object.entries(options).map(([key, value]) => {
+              return {
+                id: key,
+                name: key,
+                checked: value,
+              };
+            }),
+            popupPosition: PopupPosition.Top,
+            label: 'Multi Select',
+            icon: icon ? LIBRARY_ADD_CHECK : undefined,
+            onChange: (diffs: MultiSelectDiff[]) => {
+              diffs.forEach(({id, checked}) => {
+                options[id] = checked;
+              });
+              globals.rafScheduler.scheduleFullRedraw();
+            },
+            ...rest,
+          }),
+          initialOpts: {
+            icon: true,
+            showNumSelected: true,
+            repeatCheckedItemsAtTop: true,
+          },
         }),
     );
   },
