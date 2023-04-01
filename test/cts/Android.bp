@@ -17,9 +17,11 @@ cc_test {
     "reporter_test_cts.cc",
     "traced_perf_test_cts.cc",
     ":perfetto_protos_perfetto_config_cpp_gen",
+    ":perfetto_protos_perfetto_common_cpp_gen"
   ],
   generated_headers: [
     "perfetto_protos_perfetto_config_cpp_gen_headers",
+    "perfetto_protos_perfetto_common_cpp_gen_headers",
   ],
   static_libs: [
     "libgmock",
@@ -37,6 +39,7 @@ cc_test {
   ],
   test_suites: [
     "cts",
+    "mts",
     "vts10",
     "general-tests",
   ],
@@ -59,6 +62,7 @@ cc_test {
         ":CtsPerfettoReporterApp"
   ],
   stl: "libc++_static",
+  min_sdk_version: "31",
   defaults: [
     "perfetto_defaults",
   ],
