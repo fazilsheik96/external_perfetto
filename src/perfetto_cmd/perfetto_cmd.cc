@@ -26,8 +26,9 @@
 #include <sys/types.h>
 #include <time.h>
 
-// For dup().
+// For dup() (and _setmode() on windows).
 #if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+#include <fcntl.h>
 #include <io.h>
 #else
 #include <unistd.h>
@@ -344,6 +345,10 @@ base::Optional<int> PerfettoCmd::ParseCmdlineAndMaybeDaemonize(int argc,
     if (option == 'c') {
       config_file_name = std::string(optarg);
       if (strcmp(optarg, "-") == 0) {
+#if PERFETTO_BUILDFLAG(PERFETTO_OS_WIN)
+        // We don't want the runtime to replace "\n" with "\r\n" on `std::cin`.
+        _setmode(_fileno(stdin), _O_BINARY);
+#endif
         std::istreambuf_iterator<char> begin(std::cin), end;
         trace_config_raw.assign(begin, end);
       } else if (strcmp(optarg, ":test") == 0) {
@@ -1023,8 +1028,9 @@ void PerfettoCmd::OnConnect() {
   }
 
   PERFETTO_DCHECK(trace_config_);
-  trace_config_->set_enable_extra_guardrails(save_to_incidentd_ &&
-                                             !ignore_guardrails_);
+  trace_config_->set_enable_extra_guardrails(
+      (save_to_incidentd_ || report_to_android_framework_) &&
+      !ignore_guardrails_);
 
   // Set the statsd logging flag if we're uploading
 
