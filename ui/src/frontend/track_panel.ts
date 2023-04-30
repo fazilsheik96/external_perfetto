@@ -13,7 +13,7 @@
 // limitations under the License.
 
 import {hex} from 'color-convert';
-import * as m from 'mithril';
+import m from 'mithril';
 
 import {Actions} from '../common/actions';
 import {TrackState} from '../common/state';
@@ -391,27 +391,16 @@ export class TrackPanel extends Panel<TrackPanelAttrs> {
           size.height,
           `#aaa`);
     }
-    if (globals.state.hoveredLogsTimestamp !== -1) {
+    if (globals.state.hoverCursorTimestamp !== -1) {
       drawVerticalLineAtTime(
           ctx,
           localState.timeScale,
-          globals.state.hoveredLogsTimestamp,
+          globals.state.hoverCursorTimestamp,
           size.height,
           `#344596`);
     }
-    if (globals.state.currentSelection !== null) {
-      if (globals.state.currentSelection.kind === 'NOTE') {
-        const note = globals.state.notes[globals.state.currentSelection.id];
-        if (note.noteType === 'DEFAULT') {
-          drawVerticalLineAtTime(
-              ctx,
-              localState.timeScale,
-              note.timestamp,
-              size.height,
-              note.color);
-        }
-      }
 
+    if (globals.state.currentSelection !== null) {
       if (globals.state.currentSelection.kind === 'SLICE' &&
           globals.sliceDetails.wakeupTs !== undefined) {
         drawVerticalLineAtTime(
@@ -442,6 +431,9 @@ export class TrackPanel extends Panel<TrackPanelAttrs> {
             size.height,
             transparentNoteColor,
             1);
+      } else if (note.noteType === 'DEFAULT') {
+        drawVerticalLineAtTime(
+            ctx, localState.timeScale, note.timestamp, size.height, note.color);
       }
     }
   }
